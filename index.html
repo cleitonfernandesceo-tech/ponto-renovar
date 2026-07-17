@@ -28,7 +28,6 @@ const { useState, useEffect, useRef, useMemo } = React;
    ============================================================ */
  
 const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade: "Belo Horizonte/MG" };
-const SENHA_GESTOR = "310817";
 const JORNADA_MIN = 8 * 60; // 8h/dia
  
 /* Configuração fiscal (Portaria 671/2021)
@@ -69,6 +68,19 @@ const sbSelect = (t, tab, q = "select=*") => sbFetch(t, `/rest/v1/${tab}?${q}`);
 const sbInsert = (t, tab, rows) => sbFetch(t, `/rest/v1/${tab}`, { method: "POST", body: rows, headers: { Prefer: "return=representation" } });
 const sbUpsert = (t, tab, rows, conflict, ignoreDup = false) => sbFetch(t, `/rest/v1/${tab}?on_conflict=${conflict}`, { method: "POST", body: rows, headers: { Prefer: `resolution=${ignoreDup ? "ignore" : "merge"}-duplicates,return=representation` } });
 const sbUpdate = (t, tab, filtro, patch) => sbFetch(t, `/rest/v1/${tab}?${filtro}`, { method: "PATCH", body: patch, headers: { Prefer: "return=representation" } });
+// Upload pro bucket privado "anexos" com path {uid}/{timestamp}_{nome} (padrão das policies via storage.foldername).
+// POST cria objeto novo (o path é sempre único pelo timestamp); PUT é pra sobrescrever path existente.
+async function sbUpload(token, uid, file) {
+  const nomeLimpo = file.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `${uid}/${Date.now()}_${nomeLimpo}`;
+  const r = await fetch(`${SUPA.url}/storage/v1/object/anexos/${path}`, {
+    method: "POST",
+    headers: { apikey: SUPA.anonKey, Authorization: `Bearer ${token}`, "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!r.ok) throw new Error(`Upload falhou (${r.status}): ${await r.text()}`);
+  return path; // gravado em anexo_url; leitura via URL assinada (gestor/dono, conforme policies)
+}
 async function sbLogin(email, password) {
   const r = await fetch(`${SUPA.url}/auth/v1/token?grant_type=password`, {
     method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
@@ -82,8 +94,8 @@ async function sbLogin(email, password) {
 const hojeStr = () => new Date().toISOString().slice(0, 10);
 const mapMarc = (r) => ({ nsr: r.nsr, userId: r.usuario_id, tipo: r.tipo, ts: r.ts, lat: r.lat, lng: r.lng, foto: null, facialOk: !!r.facial_ok });
 const mapFalta = (r) => ({ id: r.id, userId: r.usuario_id, data: r.data, justificada: !!r.justificada, motivo: r.motivo });
-const mapJust = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, texto: r.descricao, anexo: r.anexo_url ? { nome: r.anexo_url } : null, status: r.status });
-const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome: r.anexo_url || "atestado", preview: null, obs: r.cid, status: r.status });
+const mapJust = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, texto: r.descricao, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, status: r.status });
+const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome: r.anexo_url ? r.anexo_url.split("/").pop().replace(/^\d+_/, "") : "atestado", path: r.anexo_url, preview: null, obs: r.cid, status: r.status });
 const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
 const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
 const mapUser = (r, consentiu) => ({
@@ -535,7 +547,6 @@ function App() {
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
-  const [gestorLiberado, setGestorLiberado] = useState(false);
   const [relogio, setRelogio] = useState(new Date());
   const [salvando, setSalvando] = useState(false);
   const [erroDados, setErroDados] = useState(null);
@@ -561,7 +572,6 @@ function App() {
     setUser(perfil);
     await carregarDados(token, perfil);
     setTela("ponto");
-    setGestorLiberado(false);
   };
  
   const carregarDados = async (token, perfil) => {
@@ -598,13 +608,13 @@ function App() {
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
-    setUser(u); setTela("ponto"); setGestorLiberado(false);
+    setUser(u); setTela("ponto");
   };
  
   const sair = () => {
     setUser(null); setSessao(null); setDemo(false);
     setUsuarios([]); setRegistros([]); setFaltas([]); setJustificativas([]); setAtestados([]); setFerias([]); setLogs([]);
-    setFluxoPonto(null); setComprovante(null); setGestorLiberado(false);
+    setFluxoPonto(null); setComprovante(null);
   };
  
   /* ---------- sincronização pós-batida: gamificação + prêmio ---------- */
@@ -676,24 +686,26 @@ function App() {
   };
  
   /* ---------- justificativas / atestados / férias ---------- */
-  const enviarJustificativa = async (texto, anexoNome) => {
+  const enviarJustificativa = async (texto, arquivo) => {
     if (demo) {
-      setJustificativas(j => [{ id: Date.now(), userId: user.id, data: iso(new Date()), texto, anexo: anexoNome ? { nome: anexoNome } : null, status: "pendente" }, ...j]);
+      setJustificativas(j => [{ id: Date.now(), userId: user.id, data: iso(new Date()), texto, anexo: arquivo ? { nome: arquivo.name } : null, status: "pendente" }, ...j]);
     } else {
-      const [row] = await sbInsert(sessao.token, "justificativas", [{ usuario_id: user.id, data: hojeStr(), tipo: "atraso", descricao: texto, anexo_url: anexoNome }]);
+      const path = arquivo ? await sbUpload(sessao.token, user.id, arquivo) : null; // upload real no bucket "anexos"
+      const [row] = await sbInsert(sessao.token, "justificativas", [{ usuario_id: user.id, data: hojeStr(), tipo: "atraso", descricao: texto, anexo_url: path }]);
       setJustificativas(j => [mapJust(row), ...j]);
     }
-    log("justificativa", "Nova justificativa de atraso enviada");
+    log("justificativa", "Nova justificativa de atraso enviada" + (arquivo ? " (com anexo no Storage)" : ""));
   };
  
-  const enviarAtestado = async (nomeArquivo, obs, preview) => {
+  const enviarAtestado = async (arquivo, obs, preview) => {
     if (demo) {
-      setAtestados(a => [{ id: Date.now(), userId: user.id, data: iso(new Date()), nome: nomeArquivo, preview, obs, status: "pendente" }, ...a]);
+      setAtestados(a => [{ id: Date.now(), userId: user.id, data: iso(new Date()), nome: arquivo.name, preview, obs, status: "pendente" }, ...a]);
     } else {
-      const [row] = await sbInsert(sessao.token, "atestados", [{ usuario_id: user.id, data_inicio: hojeStr(), data_fim: hojeStr(), cid: obs || null, anexo_url: nomeArquivo }]);
-      setAtestados(a => [{ ...mapAte(row), preview }, ...a]); // preview local; em produção o arquivo sobe pro Storage
+      const path = await sbUpload(sessao.token, user.id, arquivo); // upload real no bucket "anexos"
+      const [row] = await sbInsert(sessao.token, "atestados", [{ usuario_id: user.id, data_inicio: hojeStr(), data_fim: hojeStr(), cid: obs || null, anexo_url: path }]);
+      setAtestados(a => [{ ...mapAte(row), preview }, ...a]);
     }
-    log("atestado", `Atestado enviado: ${nomeArquivo}`);
+    log("atestado", `Atestado enviado: ${arquivo.name}`);
   };
  
   const agendarFerias = (inicio, dias) => {
@@ -825,9 +837,8 @@ function App() {
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
-            gestorLiberado
-              ? <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }} />
-              : <GateGestor onOk={() => { setGestorLiberado(true); log("acesso", "Painel do gestor desbloqueado"); }} />
+            /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }} />
           )}
         </main>
       </div>
@@ -1011,7 +1022,7 @@ function TelaJustificar({ user, justificativas, onEnviar }) {
   const enviar = async () => {
     if (!texto.trim() || enviando) return;
     setEnviando(true);
-    try { await onEnviar(texto, anexo?.nome || null); setTexto(""); setAnexo(null); }
+    try { await onEnviar(texto, anexo?.file || null); setTexto(""); setAnexo(null); }
     catch (e) { alert(`Falha ao enviar: ${e.message}`); }
     finally { setEnviando(false); }
   };
@@ -1022,7 +1033,7 @@ function TelaJustificar({ user, justificativas, onEnviar }) {
         <textarea style={{ ...S.input, minHeight: 90 }} placeholder="Descreva o motivo do atraso…" value={texto} onChange={e => setTexto(e.target.value)} />
         <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
           <label style={{ ...S.btnGhost, cursor: "pointer" }}>📎 {anexo ? anexo.nome : "Anexar evidência"}
-            <input type="file" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) setAnexo({ nome: f.name, tamanho: f.size }); }} />
+            <input type="file" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) setAnexo({ nome: f.name, tamanho: f.size, file: f }); }} />
           </label>
           <button style={{ ...S.btn, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={enviar}>{enviando ? "Enviando…" : "Enviar pra aprovação"}</button>
         </div>
@@ -1049,7 +1060,7 @@ function TelaAtestados({ user, atestados, onEnviar }) {
     const r = new FileReader();
     r.onload = async () => {
       setEnviando(true);
-      try { await onEnviar(f.name, obs, f.type.startsWith("image") ? r.result : null); setObs(""); }
+      try { await onEnviar(f, obs, f.type.startsWith("image") ? r.result : null); setObs(""); }
       catch (e) { alert(`Falha ao enviar: ${e.message}`); }
       finally { setEnviando(false); }
     };
@@ -1063,7 +1074,7 @@ function TelaAtestados({ user, atestados, onEnviar }) {
         <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>{enviando ? "⏳ Enviando…" : "📤 Enviar atestado (foto ou PDF)"}
           <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={e => anexar(e.target.files[0])} />
         </label>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). No protótipo apenas o nome do arquivo e a observação vão pro banco — em produção o arquivo sobe pro Supabase Storage (bucket privado, URL assinada) e grava-se o anexo_url.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). O arquivo sobe pro bucket privado "anexos" do Supabase Storage — leitura restrita ao dono e ao gestor pelas policies; o caminho fica gravado no registro.</p>
       </div>
       {meus.map(a => (
         <div key={a.id} style={{ ...S.card, marginTop: 12, display: "flex", gap: 14, alignItems: "center" }}>
@@ -1282,22 +1293,6 @@ function TelaLGPD({ user, onConsentir }) {
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
         </label>
       </div>
-    </div>
-  );
-}
- 
-function GateGestor({ onOk }) {
-  const [senha, setSenha] = useState("");
-  const [erro, setErro] = useState(false);
-  return (
-    <div style={{ ...S.card, maxWidth: 380, margin: "60px auto", textAlign: "center" }}>
-      <div style={{ fontSize: 40 }}>👑</div>
-      <div style={{ ...S.display, fontSize: 20 }}>Painel do gestor</div>
-      <input type="password" style={{ ...S.input, marginTop: 14, textAlign: "center", letterSpacing: 6 }} placeholder="Senha" value={senha}
-        onChange={e => { setSenha(e.target.value); setErro(false); }}
-        onKeyDown={e => e.key === "Enter" && (senha === SENHA_GESTOR ? onOk() : setErro(true))} />
-      {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 8 }}>Senha incorreta.</p>}
-      <button style={{ ...S.btn, marginTop: 12, width: "100%" }} onClick={() => senha === SENHA_GESTOR ? onOk() : setErro(true)}>Desbloquear</button>
     </div>
   );
 }
