@@ -13,7 +13,7 @@
   <div id="root"></div>
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useRef, useMemo } = React;
-
+    
 /* ============================================================
    PONTO RENOVAR — Sistema de Ponto Eletrônico (Protótipo)
    Renovar Tech Ltda · arquivo único JSX · sem build pipeline
@@ -26,17 +26,30 @@ const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade:
 const SENHA_GESTOR = "310817";
 const JORNADA_MIN = 8 * 60; // 8h/dia
 
+/* Configuração fiscal (Portaria 671/2021)
+   ⚠ nrInpi é PLACEHOLDER: o nº real sai do registro do programa no INPI.
+   ⚠ A assinatura digital real (.p7s, certificado ICP-Brasil) é etapa externa ao protótipo. */
+const CONFIG_FISCAL = {
+  tpIdtEmpregador: "1", idtEmpregador: "12345678000190", cnoCaepf: "", caepf: "", cno: "",
+  razaoSocial: "Renovar Tech Ltda",
+  nrInpi: "00000000000000000", // PLACEHOLDER — substituir pelo nº de registro no INPI
+  tpIdtDesenv: "1", idtDesenv: "12345678000190",
+  ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "12345678000190", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
+};
+const HORARIO_CONTRATUAL = { cod: "H0800", durMin: 480, pares: [["0800", "1200"], ["1300", "1700"]] };
+
 const hoje = new Date();
 const d = (offsetDias, h = 8, m = 0) => {
   const x = new Date(hoje); x.setDate(x.getDate() + offsetDias); x.setHours(h, m, 0, 0); return x;
 };
 const iso = (dt) => dt.toISOString();
 
+// CPFs FICTÍCIOS de teste (dígitos verificadores válidos, não associados a pessoas reais — em produção a empresa cadastra os CPFs reais)
 const USUARIOS_SEED = [
-  { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true },
-  { id: "u2", nome: "Marina Souza", email: "marina@renovartech.com.br", papel: "colaborador", admissao: "2023-05-10", avatar: "MS", consentimentoLGPD: true },
-  { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true },
-  { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
+  { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", cpf: "52784193691", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true },
+  { id: "u2", nome: "Marina Souza", email: "marina@renovartech.com.br", cpf: "31865924709", papel: "colaborador", admissao: "2023-05-10", avatar: "MS", consentimentoLGPD: true },
+  { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", cpf: "74219563873", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true },
+  { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", cpf: "61938475291", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
 ];
 
 // Histórico seed: Marina pontual, Rafael com atrasos recorrentes
@@ -176,6 +189,105 @@ function elegibilidadePremio(userId, registros, faltas) {
 
 const corMedidor = (pct) => (pct >= 1 ? C.vermelho : pct >= 0.7 ? C.amarelo : C.verde);
 
+/* ============================================================
+   GERADOR FISCAL — AFD (leiaute 003) e AEJ (leiaute 001)
+   Portaria MTP 671/2021 · transcrito do módulo afd-aej-generator.js
+   ============================================================ */
+const CRLF = "\r\n";
+const padA = (v, len) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").slice(0, len).padEnd(len, " ");
+const padN = (v, len) => String(v ?? "").replace(/\D/g, "").slice(-len).padStart(len, "0");
+const soDigitos = (v) => String(v ?? "").replace(/\D/g, "");
+const fmtDfis = (dt) => {
+  if (typeof dt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dt)) return dt;
+  const x = new Date(dt);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+};
+const fmtDH = (dt) => {
+  const x = new Date(dt);
+  const off = -x.getTimezoneOffset();
+  const zz = `${off >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(off) / 60)).padStart(2, "0")}${String(Math.abs(off) % 60).padStart(2, "0")}`;
+  return `${fmtDfis(x)}T${String(x.getHours()).padStart(2, "0")}:${String(x.getMinutes()).padStart(2, "0")}:00${zz}`;
+};
+const fmtHfis = (hhmm) => soDigitos(hhmm).padStart(4, "0").slice(0, 4);
+
+// CRC-16/KERMIT (CCITT-TRUE) — registros tipos 1 a 5 do AFD. Vetor oficial: "123456789" → "2189"
+function crc16Kermit(str) {
+  let crc = 0x0000;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i) & 0xff;
+    for (let j = 0; j < 8; j++) crc = crc & 1 ? (crc >>> 1) ^ 0x8408 : crc >>> 1;
+  }
+  return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+}
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function gerarAFDReal(config, marcacoes, eventos = []) {
+  const linhas = [];
+  const datas = marcacoes.map((m) => new Date(m.tsMarcacao));
+  const dataIni = datas.length ? new Date(Math.min(...datas)) : new Date();
+  const dataFim = datas.length ? new Date(Math.max(...datas)) : new Date();
+  // Tipo 1 · Cabeçalho (302 posições)
+  let cab = padN("0", 9) + "1" + padN(config.tpIdtEmpregador, 1) + padN(config.idtEmpregador, 14) +
+    padN(config.cnoCaepf || "0", 14) + padA(config.razaoSocial, 150) + padN(config.nrInpi, 17) +
+    fmtDfis(dataIni) + fmtDfis(dataFim) + fmtDH(new Date()) + "003" +
+    padN(config.tpIdtDesenv, 1) + padN(config.idtDesenv, 14) + padA("", 30);
+  cab += crc16Kermit(cab);
+  linhas.push(cab);
+  // Tipo 6 · Eventos sensíveis
+  for (const e of eventos) linhas.push(padN(e.nsr, 9) + "6" + fmtDH(e.ts) + padN(e.tipo, 2));
+  // Tipo 7 · Marcações REP-P com cadeia SHA-256
+  let hashAnterior = "";
+  for (const m of [...marcacoes].sort((a, b) => a.nsr - b.nsr)) {
+    const campos1a7 = padN(m.nsr, 9) + "7" + fmtDH(m.tsMarcacao) + padN(soDigitos(m.cpf), 12) +
+      fmtDH(m.tsGravacao || m.tsMarcacao) + padN(m.coletor || "02", 2) + (m.offline ? "1" : "0");
+    const hash = await sha256Hex(campos1a7 + hashAnterior);
+    linhas.push(campos1a7 + hash);
+    hashAnterior = hash;
+  }
+  // Tipo 9 · Trailer + assinatura
+  const qtd = (t) => padN(linhas.filter((l) => l[9] === t).length, 9);
+  linhas.push(padN("999999999", 9) + qtd("2") + qtd("3") + qtd("4") + qtd("5") + qtd("6") + qtd("7") + "9");
+  linhas.push(padA("ASSINATURA_DIGITAL_EM_ARQUIVO_P7S", 100));
+  return { conteudo: linhas.join(CRLF) + CRLF, nomeArquivo: `AFD${soDigitos(config.nrInpi)}${soDigitos(config.idtEmpregador)}REP_P.txt` };
+}
+
+function gerarAEJReal(config, vinculos, horarios, marcacoes, ausencias, periodo) {
+  const L = [];
+  const j = (...campos) => campos.join("|");
+  L.push(j("01", config.tpIdtEmpregador, soDigitos(config.idtEmpregador), soDigitos(config.caepf || ""), soDigitos(config.cno || ""), config.razaoSocial, fmtDfis(periodo.ini), fmtDfis(periodo.fim), fmtDH(new Date()), "001"));
+  L.push(j("02", "1", "3", padN(config.nrInpi, 17)));
+  for (const v of vinculos) L.push(j("03", v.id, padN(soDigitos(v.cpf), 11), v.nome));
+  for (const h of horarios) L.push(j("04", h.cod, h.durMin, ...h.pares.flat().map(fmtHfis)));
+  for (const m of marcacoes) {
+    L.push(j("05", m.vinculoId, fmtDH(m.ts), "1", m.tpMarc, padN(m.seq, 3), m.fonte || "O",
+      m.tpMarc === "E" && m.seq === 1 ? (m.codHor || horarios[0]?.cod || "") : "",
+      m.tpMarc === "D" || m.fonte === "I" ? (m.motivo || "ajuste") : ""));
+  }
+  for (const v of vinculos.filter((v) => v.matEsocial)) L.push(j("06", v.id, v.matEsocial));
+  for (const a of ausencias) L.push(j("07", a.vinculoId, a.tipo, fmtDfis(a.data), a.tipo === "3" ? String(a.qtMinutos ?? 0) : "", a.tipo === "3" ? String(a.tipoMovBH ?? "1") : ""));
+  const p = config.ptrp;
+  L.push(j("08", p.nome, p.versao, p.tpIdtDesenv, soDigitos(p.idtDesenv), p.razaoNome, p.email));
+  const q = (t) => String(L.filter((l) => l.startsWith(t + "|")).length);
+  L.push(j("99", q("01"), q("02"), q("03"), q("04"), q("05"), q("06"), q("07"), q("08")));
+  L.push(padA("ASSINATURA_DIGITAL_EM_ARQUIVO_P7S", 100));
+  return { conteudo: L.join(CRLF) + CRLF, nomeArquivo: `AEJ_${soDigitos(config.idtEmpregador)}_${fmtDfis(periodo.ini)}_${fmtDfis(periodo.fim)}.txt` };
+}
+
+// Download em ISO 8859-1, conforme o leiaute (não UTF-8)
+function baixarArquivo(conteudo, nome) {
+  const bytes = new Uint8Array([...conteudo].map((c) => Math.min(c.charCodeAt(0), 255)));
+  const blob = new Blob([bytes], { type: "text/plain;charset=ISO-8859-1" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+
 function MedidorPremio({ m }) {
   const pct = Math.min(1, m.limite ? m.valor / m.limite : 0);
   const cor = m.estourou ? C.vermelho : corMedidor(pct);
@@ -262,7 +374,7 @@ function RecCard({ rec }) {
 }
 
 /* ================= App ================= */
-function App() {
+export default function App() {
   const [usuarios] = useState(USUARIOS_SEED);
   const [user, setUser] = useState(null);
   const [tela, setTela] = useState("ponto");
@@ -307,12 +419,36 @@ function App() {
     setFluxoPonto("comprovante");
   };
 
-  const exportarAFD = () => {
-    // Layout simplificado inspirado no AFD da Portaria 671 (tipo 3 = marcação)
-    const linhas = registros.map(r => `${String(r.nsr).padStart(9, "0")}3${new Date(r.ts).toISOString().replace(/[-:TZ.]/g, "").slice(0, 12)}${r.userId.padEnd(12, "0")}`);
-    const blob = new Blob([`AFD SIMULADO - ${EMPRESA.nome} - ${EMPRESA.cnpj}\n` + linhas.join("\n")], { type: "text/plain" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "AFD_simulado.txt"; a.click();
-    log("export", "AFD simulado exportado");
+  const cpfDe = (userId) => usuarios.find(u => u.id === userId)?.cpf || "";
+
+  const exportarAFD = async () => {
+    const marcacoes = registros.map(r => ({ nsr: r.nsr, cpf: cpfDe(r.userId), tsMarcacao: r.ts, tsGravacao: r.ts, coletor: "02", offline: false }));
+    const { conteudo, nomeArquivo } = await gerarAFDReal(CONFIG_FISCAL, marcacoes);
+    baixarArquivo(conteudo, nomeArquivo);
+    log("export", `AFD gerado (leiaute 003): ${nomeArquivo} · ${marcacoes.length} marcações tipo 7 com cadeia SHA-256`);
+  };
+
+  const exportarAEJ = () => {
+    const vinculos = usuarios.map((u, i) => ({ id: i + 1, cpf: u.cpf, nome: u.nome }));
+    const vincDe = (userId) => vinculos[usuarios.findIndex(u => u.id === userId)]?.id;
+    // marcações E/S com sequencial do par por dia
+    const marcacoesAej = [];
+    usuarios.forEach(u => {
+      const dias = agruparPorDia(registros, u.id);
+      Object.values(dias).forEach(regs => {
+        let seqE = 0, seqS = 0;
+        [...regs].sort((a, b) => new Date(a.ts) - new Date(b.ts)).forEach(r => {
+          const seq = r.tipo === "entrada" ? ++seqE : ++seqS;
+          marcacoesAej.push({ vinculoId: vincDe(u.id), ts: r.ts, tpMarc: r.tipo === "entrada" ? "E" : "S", seq, fonte: "O", codHor: HORARIO_CONTRATUAL.cod });
+        });
+      });
+    });
+    const ausencias = faltas.map(f => ({ vinculoId: vincDe(f.userId), tipo: "2", data: f.data }));
+    const ts = registros.map(r => new Date(r.ts));
+    const periodo = { ini: ts.length ? new Date(Math.min(...ts)) : new Date(), fim: ts.length ? new Date(Math.max(...ts)) : new Date() };
+    const { conteudo, nomeArquivo } = gerarAEJReal(CONFIG_FISCAL, vinculos, [HORARIO_CONTRATUAL], marcacoesAej, ausencias, periodo);
+    baixarArquivo(conteudo, nomeArquivo);
+    log("export", `AEJ gerado (leiaute 001): ${nomeArquivo} · ${vinculos.length} vínculos · ${marcacoesAej.length} marcações`);
   };
 
   /* ---------- férias ---------- */
@@ -367,7 +503,7 @@ function App() {
         </aside>
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
           {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }} />}
-          {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} />}
+          {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, setJustificativas, log }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, setAtestados, log }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
@@ -477,16 +613,20 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   );
 }
 
-function TelaEspelho({ user, registros, exportarAFD }) {
+function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
   const dias = agruparPorDia(registros, user.id);
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Espelho de ponto</h1>
-        <div style={{ display: "flex", gap: 10 }} className="no-print">
-          <button style={S.btnGhost} onClick={exportarAFD}>⬇ AFD (simulado)</button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }} className="no-print">
+          <button style={S.btnGhost} onClick={exportarAFD}>⬇ Exportar AFD (leiaute 003)</button>
+          <button style={S.btnGhost} onClick={exportarAEJ}>⬇ Exportar AEJ (leiaute 001)</button>
           <button style={S.btn} onClick={() => window.print()}>🖨 Exportar PDF</button>
         </div>
+      </div>
+      <div className="no-print" style={{ ...S.card, marginTop: 14, padding: 12, fontSize: 12, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
+        ⚠️ <b style={{ color: C.branco }}>Arquivos fiscais no formato oficial da Portaria 671/2021</b> — AFD com marcações tipo 7 (cadeia de hash SHA-256) e AEJ delimitado por pipe, ambos em ISO 8859-1 com CR+LF. Dois itens são <b style={{ color: C.branco }}>placeholders pendentes de etapas externas ao protótipo</b>: (1) o nº de registro no INPI (campo 7 do cabeçalho do AFD e nrRep do AEJ) está zerado até o registro do programa ser feito; (2) a linha "ASSINATURA_DIGITAL_EM_ARQUIVO_P7S" é o texto literal previsto no leiaute — a assinatura real exige arquivo .p7s gerado com certificado ICP-Brasil do desenvolvedor. Sem esses dois itens, os arquivos ainda não têm valor fiscal.
       </div>
       <div style={{ ...S.card, marginTop: 16 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
@@ -767,9 +907,8 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
     </div>
   );
 }
-
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 
 </script>
 </body>
