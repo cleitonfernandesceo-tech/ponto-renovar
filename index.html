@@ -10,7 +10,7 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
-<style>html,body,#root{margin:0;padding:0;background:#0D0D0D}</style>
+<style>html,body,#root{margin:0;padding:0;background:#0D1B2A}</style>
 </head>
 <body>
 <div id="root"></div>
@@ -27,20 +27,33 @@ const { useState, useEffect, useRef, useMemo } = React;
    regras de férias, banco de horas, feedback engine, auditoria, AFD
    ============================================================ */
  
-const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade: "Belo Horizonte/MG" };
-const JORNADA_MIN = 8 * 60; // 8h/dia
+const EMPRESA = {
+  nome: "Renovar Tech Ltda",
+  cnpj: "41.206.506/0001-39",
+  endereco: "Rua Antônio de Albuquerque, 145 - Funcionários, Belo Horizonte - MG",
+  cep: "30112-010",
+  cidade: "Belo Horizonte/MG",
+  ramo: "Assistência técnica e comércio de peças e acessórios pra fones e caixas de som bluetooth (JBL, Bose, Harman Kardon)",
+};
+/* Expediente oficial: 8:00 → 18:00 (10h de permanência = 8h produtivas + 2h de intervalo intrajornada).
+   Nota CLT (art. 71): intervalo acima de 2h exige previsão em contrato/acordo — 2h é o teto padrão, ok. */
+const EXPEDIENTE = { entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: 120, toleranciaMin: 10 };
+const JORNADA_MIN = 8 * 60; // 8h produtivas/dia
+// Minutos após o horário de entrada (negativo = chegou antes)
+const minutosAposEntrada = (dt) => dt.getHours() * 60 + dt.getMinutes() - EXPEDIENTE.entradaMin;
+const entradaPontual = (dt) => minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
  
 /* Configuração fiscal (Portaria 671/2021)
    ⚠ nrInpi é PLACEHOLDER: o nº real sai do registro do programa no INPI.
    ⚠ A assinatura digital real (.p7s, certificado ICP-Brasil) é etapa externa ao protótipo. */
 const CONFIG_FISCAL = {
-  tpIdtEmpregador: "1", idtEmpregador: "12345678000190", cnoCaepf: "", caepf: "", cno: "",
+  tpIdtEmpregador: "1", idtEmpregador: "41206506000139", cnoCaepf: "", caepf: "", cno: "",
   razaoSocial: "Renovar Tech Ltda",
   nrInpi: "00000000000000000", // PLACEHOLDER — substituir pelo nº de registro no INPI
-  tpIdtDesenv: "1", idtDesenv: "12345678000190",
-  ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "12345678000190", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
+  tpIdtDesenv: "1", idtDesenv: "41206506000139",
+  ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "41206506000139", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
 };
-const HORARIO_CONTRATUAL = { cod: "H0800", durMin: 480, pares: [["0800", "1200"], ["1300", "1700"]] };
+const HORARIO_CONTRATUAL = { cod: "H0818", durMin: 480, pares: [["0800", "1200"], ["1400", "1800"]] }; // 8h produtivas, intervalo 12-14
  
 /* ============================================================
    SUPABASE — backend real
@@ -81,6 +94,15 @@ async function sbUpload(token, uid, file) {
   if (!r.ok) throw new Error(`Upload falhou (${r.status}): ${await r.text()}`);
   return path; // gravado em anexo_url; leitura via URL assinada (gestor/dono, conforme policies)
 }
+const sbRpc = (t, fn, args) => sbFetch(t, `/rest/v1/rpc/${fn}`, { method: "POST", body: args });
+async function sbSignUp(email, password) {
+  const r = await fetch(`${SUPA.url}/auth/v1/signup`, {
+    method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error_description || j.msg || "Falha no cadastro");
+  return j; // com confirmação de e-mail desativada: { access_token, user }; ativada: só { user }
+}
 async function sbLogin(email, password) {
   const r = await fetch(`${SUPA.url}/auth/v1/token?grant_type=password`, {
     method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
@@ -99,6 +121,14 @@ const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome
 const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
 const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
 const mapLocal = (r) => ({ id: r.id, nome: r.nome, latitude: r.latitude, longitude: r.longitude, raio: r.raio_metros, ativo: r.ativo });
+const mapConvite = (r) => ({ id: r.id, token: r.token, nome: r.nome, email: r.email, cargo: r.cargo, tipo: r.tipo, usado: r.usado, expiraEm: r.expira_em });
+const mapFolga = (r) => ({ id: r.id, userId: r.usuario_id, horas: +r.horas_solicitadas, dataFolga: r.data_folga_pretendida, status: r.status, decididoEm: r.decidido_em });
+/* Saldo do banco de horas: apurado nas marcações − debitado em folgas aprovadas */
+function saldoBanco(userId, registros, faltas, folgas) {
+  const apurado = analisarAssiduidade(userId, registros, faltas).saldoMin;
+  const debitado = folgas.filter(f => f.userId === userId && f.status === "aprovada").reduce((s, f) => s + Math.round(f.horas * 60), 0);
+  return { apurado, debitado, disponivel: apurado - debitado };
+}
 // Distância em metros entre dois pontos (fórmula de Haversine)
 function haversineM(lat1, lon1, lat2, lon2) {
   const R = 6371000, rad = (x) => (x * Math.PI) / 180;
@@ -138,8 +168,8 @@ const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) =>
   );
 };
 for (let i = 10; i >= 1; i--) {
-  pushDia("u2", -i, 7, 58, 17, 5);                       // Marina: sempre pontual, ~9h c/ almoço
-  pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 17, 0, i === 4); // Rafael: atrasos e 1 falta
+  pushDia("u2", -i, 7, 58, 18, 6);                       // Marina: sempre pontual, expediente cheio 8-18
+  pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 18, 0, i === 4); // Rafael: atrasos e 1 falta
 }
  
 const FALTAS_SEED = [{ userId: "u3", data: iso(d(-4)), motivo: "sem justificativa" }];
@@ -187,11 +217,12 @@ function analisarAssiduidade(userId, registros, faltas) {
   Object.values(dias).forEach(regs => {
     diasTrab++;
     const ent = regs.find(r => r.tipo === "entrada");
-    if (ent) {
-      const dt = new Date(ent.ts);
-      if (dt.getHours() > 8 || (dt.getHours() === 8 && dt.getMinutes() > 10)) atrasos++; // tolerância 10min (CLT art. 58 §1º)
-    }
-    saldoMin += minutosDia(regs) - JORNADA_MIN - 60; // desconta 1h almoço
+    if (ent && !entradaPontual(new Date(ent.ts))) atrasos++; // tolerância de 10min sobre as 8:00 (CLT art. 58 §1º)
+    // Desconto do intervalo: se o dia tem um único par E/S (batida cobre o intervalo), desconta as 2h;
+    // com múltiplos pares (bateu na saída/volta do almoço), o intervalo já ficou fora da soma — não desconta de novo.
+    const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
+    const descontoIntervalo = pares <= 1 ? EXPEDIENTE.intervaloMin : 0;
+    saldoMin += minutosDia(regs) - descontoIntervalo - JORNADA_MIN;
   });
   const nFaltas = faltas.filter(f => f.userId === userId && !f.justificada).length;
   return { atrasos, faltas: nFaltas, diasTrab, saldoMin };
@@ -250,7 +281,7 @@ function elegibilidadePremio(userId, registros, faltas) {
     const ent = regs.find(r => r.tipo === "entrada");
     if (!ent || !mesmoMes(ent.ts)) return;
     const dt = new Date(ent.ts);
-    const min = (dt.getHours() - 8) * 60 + dt.getMinutes(); // jornada padrão 08:00
+    const min = minutosAposEntrada(dt); // entrada oficial 08:00
     if (min > PREMIO.toleranciaMin) atrasoMin += min;
   });
   const faltasInj = faltas.filter(f => f.userId === userId && !f.justificada && mesmoMes(f.data)).length;
@@ -298,7 +329,7 @@ function calcularGamificacao(userId, registros, faltas) {
     const ent = regs.find(r => r.tipo === "entrada");
     if (!ent) return null;
     const dt = new Date(ent.ts);
-    return { data: dt, pontual: (dt.getHours() - 8) * 60 + dt.getMinutes() <= PREMIO.toleranciaMin };
+    return { data: dt, pontual: entradaPontual(dt) };
   }).filter(Boolean);
   faltas.filter(f => f.userId === userId && !f.justificada).forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
   eventos.sort((a, b) => a.data - b.data);
@@ -463,7 +494,7 @@ function MedidorPremio({ m }) {
         <span>{m.label}</span>
         <b style={{ color: cor }}>{m.valor}{m.unidade} / {m.limite}{m.unidade}</b>
       </div>
-      <div style={{ background: "#2b2b2b", borderRadius: 999, height: 10, marginTop: 6, overflow: "hidden" }}>
+      <div style={{ background: "#1E3450", borderRadius: 999, height: 10, marginTop: 6, overflow: "hidden" }}>
         <div style={{ width: `${pct * 100}%`, background: cor, height: "100%", transition: "width .4s" }} />
       </div>
       <div style={{ fontSize: 11, color: m.estourou ? C.vermelho : C.cinza, marginTop: 4 }}>
@@ -474,14 +505,18 @@ function MedidorPremio({ m }) {
 }
  
 /* ================= UI base ================= */
-const C = { preto: "#0D0D0D", carvao: "#171717", grafite: "#232323", amarelo: "#FFD600", vermelho: "#E53935", verde: "#2E9E5B", cinza: "#9E9E9E", branco: "#F5F5F2" };
+/* Paleta "alta performance" v2 — azul-marinho (base), laranja neon (ações/destaque),
+   marrom escuro (superfícies secundárias: inputs/painéis internos), branco (texto).
+   As chaves mantêm os nomes antigos pra não tocar o arquivo inteiro:
+   preto=fundo navy · carvao=card navy · grafite=marrom secundário · amarelo=LARANJA de destaque */
+const C = { preto: "#0D1B2A", carvao: "#10233B", grafite: "#2E1D12", amarelo: "#FF7A1A", vermelho: "#E5484D", verde: "#35C26E", cinza: "#8FA3BF", branco: "#F5F7FA" };
 const S = {
   app: { minHeight: "100vh", background: C.preto, color: C.branco, fontFamily: "'Inter','Segoe UI',system-ui,sans-serif" },
   display: { fontFamily: "'Oswald','Arial Narrow',sans-serif", textTransform: "uppercase", letterSpacing: "0.04em" },
-  card: { background: C.carvao, border: "1px solid #2b2b2b", borderRadius: 14, padding: 20 },
+  card: { background: C.carvao, border: "1px solid #1E3450", borderRadius: 14, padding: 20 },
   btn: { background: C.amarelo, color: "#111", fontWeight: 700, border: "none", borderRadius: 10, padding: "12px 20px", cursor: "pointer", fontSize: 15 },
-  btnGhost: { background: "transparent", color: C.branco, border: "1px solid #3a3a3a", borderRadius: 10, padding: "10px 16px", cursor: "pointer" },
-  input: { background: C.grafite, border: "1px solid #3a3a3a", borderRadius: 10, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
+  btnGhost: { background: "transparent", color: C.branco, border: "1px solid #2A4568", borderRadius: 10, padding: "10px 16px", cursor: "pointer" },
+  input: { background: C.grafite, border: "1px solid #2A4568", borderRadius: 10, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
   tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, display: "inline-block" }),
 };
  
@@ -529,11 +564,11 @@ function RecCard({ rec }) {
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
       <div>
         <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>📚 Livros</div>
-        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>• {l}</div>)}
+        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#C7D2E4", marginTop: 4 }}>• {l}</div>)}
       </div>
       <div>
         <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>🎬 Filmes</div>
-        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>• {f}</div>)}
+        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#C7D2E4", marginTop: 4 }}>• {f}</div>)}
       </div>
     </div>
   );
@@ -553,6 +588,9 @@ function App() {
   const [logs, setLogs] = useState([]);
   const [locais, setLocais] = useState([]);
   const [bloqueioGeo, setBloqueioGeo] = useState(null);
+  const [convites, setConvites] = useState([]);
+  const [folgas, setFolgas] = useState([]);
+  const [conviteToken] = useState(() => { try { return new URLSearchParams(window.location.search).get("convite"); } catch { return null; } });
   const [tela, setTela] = useState("ponto");
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
@@ -587,7 +625,7 @@ function App() {
   const carregarDados = async (token, perfil) => {
     setErroDados(null);
     try {
-      const [us, marcs, flts, justs, ates, fers, auds, cons, locs] = await Promise.all([
+      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs] = await Promise.all([
         sbSelect(token, "usuarios", "select=*&order=nome"),
         sbSelect(token, "marcacoes", "select=*&order=nsr"),
         sbSelect(token, "faltas", "select=*&order=data"),
@@ -597,6 +635,8 @@ function App() {
         sbSelect(token, "auditoria", "select=*&order=ts.desc&limit=300"),
         sbSelect(token, "consentimentos_lgpd", "select=*"),
         sbSelect(token, "locais_trabalho", "select=*&order=criado_em"),
+        perfil.papel === "gestor" ? sbSelect(token, "convites", "select=*&order=criado_em.desc") : Promise.resolve([]),
+        sbSelect(token, "solicitacoes_folga", "select=*&order=criado_em.desc"),
       ]);
       const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
       setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
@@ -607,9 +647,61 @@ function App() {
       setFerias(fers.map(mapFer));
       setLogs(auds.map(mapLog));
       setLocais(locs.map(mapLocal));
+      setConvites(convs.map(mapConvite));
+      setFolgas(flgs.map(mapFolga));
     } catch (e) {
       setErroDados(`Falha ao carregar dados: ${e.message}`);
     }
+  };
+ 
+  const concluirConvite = async (conv, senha) => {
+    // 1) cria a conta (ou reaproveita se já existir e a senha bater)
+    let token, uid;
+    try {
+      const cad = await sbSignUp(conv.email, senha);
+      token = cad.access_token; uid = cad.user?.id;
+    } catch (e) {
+      if (!/already|registered|exists/i.test(e.message)) throw e; // conta já existe → tenta logar com a senha informada
+    }
+    if (!token) {
+      try { const lg = await sbLogin(conv.email, senha); token = lg.access_token; uid = lg.user.id; }
+      catch (e) {
+        if (/confirm/i.test(e.message)) throw new Error("Conta criada, mas o projeto exige confirmação de e-mail. Confirme pelo link enviado ao seu e-mail e abra este convite de novo pra concluir.");
+        throw e;
+      }
+    }
+    // 2) resgata o convite (function SECURITY DEFINER valida, aplica nome/cargo/tipo e marca usado=true, tudo atômico)
+    await sbRpc(token, "resgatar_convite", { p_token: conv.token });
+    // 3) entra no app como um login normal
+    const [perfis, consents] = await Promise.all([
+      sbSelect(token, "usuarios", `select=*&id=eq.${uid}`),
+      sbSelect(token, "consentimentos_lgpd", `select=*&usuario_id=eq.${uid}`),
+    ]);
+    const perfil = mapUser(perfis[0], consents[0]?.aceito);
+    setSessao({ token, uid });
+    setUser(perfil);
+    await carregarDados(token, perfil);
+    try { window.history.replaceState({}, "", window.location.pathname); } catch {}
+    setTela("ponto");
+  };
+ 
+  /* ---------- CRUD de colaboradores e convites (gestor) ---------- */
+  const criarConvite = async (dados) => {
+    if (demo) {
+      const c = { id: Date.now(), token: crypto.randomUUID(), ...dados, usado: false, expiraEm: iso(d(7)) };
+      setConvites(cs => [c, ...cs]); return c;
+    }
+    const [row] = await sbInsert(sessao.token, "convites", [{ nome: dados.nome, email: dados.email.toLowerCase().trim(), cargo: dados.cargo || null, tipo: dados.tipo || "colaborador", criado_por: user.id }]);
+    const c = mapConvite(row);
+    setConvites(cs => [c, ...cs]);
+    log("convite", `Convite criado pra ${c.email} (${c.tipo})`);
+    return c;
+  };
+ 
+  const salvarUsuario = async (id, patch) => {
+    if (!demo) await sbUpdate(sessao.token, "usuarios", `id=eq.${id}`, patch);
+    setUsuarios(us => us.map(u => u.id === id ? { ...u, nome: patch.nome ?? u.nome, cargo: patch.cargo ?? u.cargo, papel: patch.tipo ?? u.papel, ativo: patch.ativo ?? u.ativo } : u));
+    log("equipe", `Usuário ${id} atualizado: ${Object.keys(patch).join(", ")}`);
   };
  
   const entrarDemo = (u) => {
@@ -618,7 +710,7 @@ function App() {
     setRegistros(REGISTROS_SEED);
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
-    setAtestados([]); setFerias([]); setLocais([]);
+    setAtestados([]); setFerias([]); setLocais([]); setFolgas([]);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
     setUser(u); setTela("ponto");
   };
@@ -730,8 +822,7 @@ function App() {
       setRegistros(novos);
       log("batida", `NSR ${reg.nsr} · ${tipo} · geo ${geo?.lat ?? "—"},${geo?.lng ?? "—"} · facial ${foto ? "validado (simulado)" : "sem foto"}`);
       if (!demo && tipo === "entrada") {
-        const dt = new Date(reg.ts);
-        const pontual = (dt.getHours() - 8) * 60 + dt.getMinutes() <= PREMIO.toleranciaMin;
+        const pontual = entradaPontual(new Date(reg.ts));
         if (pontual) {
           const g = calcularGamificacao(user.id, novos, faltas);
           const pts = GAME.ptsDiaPontual + (g.streak >= 3 ? GAME.ptsBonusStreak : 0) + (GAME.marcosStreak[g.streak] || 0);
@@ -791,6 +882,38 @@ function App() {
     return { ok: true, msg: "Solicitação enviada pra aprovação do gestor. Lembrete: o aviso legal mínimo ao empregador é de 30 dias (CLT art. 135), a regra de 5 meses é política interna." };
   };
  
+  /* ---------- banco de horas → folga ---------- */
+  const solicitarFolga = async (horas, dataFolga) => {
+    const h = +horas;
+    if (!h || h <= 0) throw new Error("Informe uma quantidade de horas válida.");
+    const sb = saldoBanco(user.id, registros, faltas, folgas);
+    const pendentesMin = folgas.filter(f => f.userId === user.id && f.status === "pendente").reduce((s, f) => s + f.horas * 60, 0);
+    if (h * 60 > sb.disponivel - pendentesMin) throw new Error(`Saldo insuficiente: você tem ${hmm(sb.disponivel)} disponíveis${pendentesMin ? ` (com ${hmm(pendentesMin)} já em solicitações pendentes)` : ""}.`);
+    if (!dataFolga || new Date(dataFolga + "T00:00:00") <= new Date()) throw new Error("Escolha uma data futura pra folga.");
+    if (demo) {
+      setFolgas(fs => [{ id: Date.now(), userId: user.id, horas: h, dataFolga, status: "pendente" }, ...fs]);
+    } else {
+      const [row] = await sbInsert(sessao.token, "solicitacoes_folga", [{ usuario_id: user.id, horas_solicitadas: h, data_folga_pretendida: dataFolga, criado_por: user.id }]);
+      setFolgas(fs => [mapFolga(row), ...fs]);
+    }
+    log("folga", `Solicitou converter ${h}h do banco em folga em ${fmtData(dataFolga + "T00:00:00")}`);
+  };
+ 
+  const decidirFolga = async (id, aprovar) => {
+    const f = folgas.find(x => x.id === id);
+    if (!f) return;
+    if (aprovar) {
+      const sb = saldoBanco(f.userId, registros, faltas, folgas);
+      if (f.horas * 60 > sb.disponivel) { alert(`Saldo insuficiente do colaborador: disponível ${hmm(sb.disponivel)}, solicitado ${hmm(f.horas * 60)}. Rejeite ou aguarde mais saldo.`); return; }
+    }
+    const patch = { status: aprovar ? "aprovada" : "rejeitada", decidido_por: user.id, decidido_em: iso(new Date()) };
+    try {
+      if (!demo) await sbUpdate(sessao.token, "solicitacoes_folga", `id=eq.${id}`, patch);
+      setFolgas(fs => fs.map(x => x.id === id ? { ...x, status: patch.status, decididoEm: patch.decidido_em } : x));
+      log("folga", `Folga #${id} → ${patch.status}${aprovar ? ` (débito de ${hmm(f.horas * 60)} no banco)` : ""}`);
+    } catch (e) { alert(`Falha ao decidir: ${e.message}`); }
+  };
+ 
   /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
     const mapa = {
@@ -841,7 +964,10 @@ function App() {
         });
       });
     });
-    const ausencias = faltas.filter(f => !f.justificada).map(f => ({ vinculoId: vincDe(f.userId), tipo: "2", data: f.data }));
+    const ausencias = [
+      ...faltas.filter(f => !f.justificada).map(f => ({ vinculoId: vincDe(f.userId), tipo: "2", data: f.data })),
+      ...folgas.filter(f => f.status === "aprovada").map(f => ({ vinculoId: vincDe(f.userId), tipo: "3", data: f.dataFolga, qtMinutos: Math.round(f.horas * 60), tipoMovBH: 2 })), // compensação do BH
+    ];
     const ts = registros.map(r => new Date(r.ts));
     const periodo = { ini: ts.length ? new Date(Math.min(...ts)) : new Date(), fim: ts.length ? new Date(Math.max(...ts)) : new Date() };
     const { conteudo, nomeArquivo } = gerarAEJReal(CONFIG_FISCAL, vinculos, [HORARIO_CONTRATUAL], marcacoesAej, ausencias, periodo);
@@ -849,11 +975,12 @@ function App() {
     log("export", `AEJ gerado (leiaute 001): ${nomeArquivo} · ${vinculos.length} vínculos · ${marcacoesAej.length} marcações`);
   };
  
+  if (!user && conviteToken) return <TelaConvite token={conviteToken} onConcluir={concluirConvite} onVoltar={() => { try { window.history.replaceState({}, "", window.location.pathname); } catch {} window.location.reload(); }} />;
   if (!user) return <Login onSupabase={entrarSupabase} onDemo={entrarDemo} />;
  
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
  
@@ -862,7 +989,7 @@ function App() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
         @media print { .no-print { display:none!important } body { background:#fff } }`}</style>
       <div style={{ display: "flex", minHeight: "100vh" }}>
-        <aside className="no-print" style={{ width: 230, background: C.carvao, borderRight: "1px solid #2b2b2b", padding: 18, flexShrink: 0 }}>
+        <aside className="no-print" style={{ width: 230, background: C.carvao, borderRight: "1px solid #1E3450", padding: 18, flexShrink: 0 }}>
           <div style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
           <div style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
           <div style={{ marginTop: 8 }}>
@@ -872,10 +999,10 @@ function App() {
           </div>
           <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
             {menu.map(([k, label]) => (
-              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#3a3a3a" }}>{label}</button>
+              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#2A4568" }}>{label}</button>
             ))}
           </div>
-          <div style={{ marginTop: 26, borderTop: "1px solid #2b2b2b", paddingTop: 14 }}>
+          <div style={{ marginTop: 26, borderTop: "1px solid #1E3450", paddingTop: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: "50%", background: C.amarelo, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{user.avatar}</div>
               <div>
@@ -884,6 +1011,12 @@ function App() {
               </div>
             </div>
             <button style={{ ...S.btnGhost, marginTop: 12, width: "100%", fontSize: 13 }} onClick={sair}>Sair</button>
+            <div style={{ marginTop: 14, fontSize: 10, color: C.cinza, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+              <b style={{ color: C.branco }}>{EMPRESA.nome}</b><br />
+              CNPJ {EMPRESA.cnpj}<br />
+              {EMPRESA.endereco}<br />
+              CEP {EMPRESA.cep}
+            </div>
           </div>
         </aside>
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
@@ -894,13 +1027,14 @@ function App() {
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
+          {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga }} />
           )}
         </main>
       </div>
@@ -909,6 +1043,60 @@ function App() {
 }
  
 /* ================= Telas ================= */
+function TelaConvite({ token, onConcluir, onVoltar }) {
+  const [conv, setConv] = useState(null);
+  const [carregando, setCarregando] = useState(true);
+  const [senha, setSenha] = useState("");
+  const [senha2, setSenha2] = useState("");
+  const [erro, setErro] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sbSelect(null, "convite_publico", `select=*&token=eq.${token}`); // view pública: só convites válidos
+        if (!rows.length) setErro("Convite não encontrado, já utilizado ou expirado. Peça um novo link ao gestor.");
+        else setConv(mapConvite(rows[0]));
+      } catch (e) { setErro(`Não foi possível verificar o convite: ${e.message}`); }
+      finally { setCarregando(false); }
+    })();
+  }, [token]);
+  const concluir = async () => {
+    if (enviando) return;
+    if (senha.length < 8) { setErro("A senha precisa ter no mínimo 8 caracteres."); return; }
+    if (senha !== senha2) { setErro("As senhas não conferem."); return; }
+    setEnviando(true); setErro(null);
+    try { await onConcluir(conv, senha); }
+    catch (e) { setErro(e.message); }
+    finally { setEnviando(false); }
+  };
+  return (
+    <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ ...S.card, width: 440, padding: 36 }}>
+        <div style={{ ...S.display, fontSize: 30, color: C.amarelo, lineHeight: 1, textAlign: "center" }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
+        <div style={{ fontSize: 13, color: C.cinza, marginTop: 8, textAlign: "center" }}>Convite pra criar sua conta</div>
+        {carregando && <p style={{ textAlign: "center", color: C.cinza, marginTop: 24 }}>Verificando convite…</p>}
+        {!carregando && conv && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ background: C.grafite, borderRadius: 10, padding: 14, fontSize: 14, lineHeight: 1.8 }}>
+              👤 <b>{conv.nome}</b><br />
+              ✉️ {conv.email}<br />
+              {conv.cargo && <>💼 {conv.cargo}<br /></>}
+              🏷 {conv.tipo === "gestor" ? "Gestor" : "Colaborador"} · expira em {fmtData(conv.expiraEm)}
+            </div>
+            <input type="password" style={{ ...S.input, marginTop: 12 }} placeholder="Crie uma senha (mínimo 8 caracteres)" value={senha} onChange={e => { setSenha(e.target.value); setErro(null); }} />
+            <input type="password" style={{ ...S.input, marginTop: 10 }} placeholder="Repita a senha" value={senha2} onChange={e => { setSenha2(e.target.value); setErro(null); }} onKeyDown={e => e.key === "Enter" && concluir()} />
+            <button style={{ ...S.btn, marginTop: 12, width: "100%", opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={concluir}>
+              {enviando ? "Criando conta…" : "Criar minha conta e entrar"}
+            </button>
+          </div>
+        )}
+        {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
+        <button style={{ ...S.btnGhost, fontSize: 12, width: "100%", marginTop: 16 }} onClick={onVoltar}>← Ir pro login normal</button>
+      </div>
+    </div>
+  );
+}
+ 
 function Login({ onSupabase, onDemo }) {
   const CONTAS = [
     { nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", avatar: "CF", gestor: true },
@@ -917,14 +1105,16 @@ function Login({ onSupabase, onDemo }) {
     { nome: "Juliana Prates", email: "juliana@renovartech.com.br", avatar: "JP" },
   ];
   const [sel, setSel] = useState(null);
+  const [emailLivre, setEmailLivre] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState(null);
   const [carregando, setCarregando] = useState(false);
+  const emailFinal = () => (sel ? sel.email : emailLivre.trim().toLowerCase());
   const entrar = async () => {
-    if (!sel || !senha) return;
+    if (!emailFinal() || !senha) return;
     setCarregando(true); setErro(null);
     try {
-      await onSupabase(sel.email, senha);
+      await onSupabase(emailFinal(), senha);
     } catch (e) {
       const rede = e instanceof TypeError || /fetch|network/i.test(e.message);
       setErro(rede
@@ -939,7 +1129,7 @@ function Login({ onSupabase, onDemo }) {
         <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Entre com sua conta corporativa</div>
         <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
           {CONTAS.map(u => (
-            <button key={u.email} onClick={() => { setSel(u); setErro(null); }} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderColor: sel?.email === u.email ? C.amarelo : "#3a3a3a", background: sel?.email === u.email ? C.grafite : "transparent" }}>
+            <button key={u.email} onClick={() => { setSel(u); setErro(null); }} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderColor: sel?.email === u.email ? C.amarelo : "#2A4568", background: sel?.email === u.email ? C.grafite : "transparent" }}>
               <span style={{ width: 34, height: 34, borderRadius: "50%", background: u.gestor ? C.vermelho : C.amarelo, color: u.gestor ? "#fff" : "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{u.avatar}</span>
               <span style={{ textAlign: "left" }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{u.nome}</div>
@@ -948,9 +1138,13 @@ function Login({ onSupabase, onDemo }) {
             </button>
           ))}
         </div>
-        {sel && (
-          <div style={{ marginTop: 16 }}>
-            <input type="password" style={{ ...S.input, textAlign: "center" }} placeholder={`Senha de ${sel.nome.split(" ")[0]}`} value={senha}
+        <div style={{ marginTop: 12 }}>
+          <input style={{ ...S.input, fontSize: 13 }} placeholder="…ou entre com outro e-mail" value={emailLivre}
+            onChange={e => { setEmailLivre(e.target.value); setSel(null); setErro(null); }} />
+        </div>
+        {(sel || emailLivre.trim()) && (
+          <div style={{ marginTop: 12 }}>
+            <input type="password" style={{ ...S.input, textAlign: "center" }} placeholder={sel ? `Senha de ${sel.nome.split(" ")[0]}` : "Senha"} value={senha}
               onChange={e => { setSenha(e.target.value); setErro(null); }}
               onKeyDown={e => e.key === "Enter" && entrar()} autoFocus />
             <button style={{ ...S.btn, marginTop: 10, width: "100%", opacity: carregando ? 0.6 : 1 }} disabled={carregando} onClick={entrar}>
@@ -959,12 +1153,17 @@ function Login({ onSupabase, onDemo }) {
           </div>
         )}
         {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
-        <div style={{ marginTop: 18, borderTop: "1px solid #2b2b2b", paddingTop: 12 }}>
+        <div style={{ marginTop: 18, borderTop: "1px solid #1E3450", paddingTop: 12 }}>
           <button style={{ ...S.btnGhost, fontSize: 12, width: "100%" }} onClick={() => onDemo(USUARIOS_SEED.find(u => u.id === (sel ? { "cleiton@renovartech.com.br": "u1", "marina@renovartech.com.br": "u2", "rafael@renovartech.com.br": "u3", "juliana@renovartech.com.br": "u4" }[sel.email] : "u1")))}>
             ⚡ Entrar em modo demonstração (dados locais, sem backend)
           </button>
         </div>
         <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Autenticação real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable é pública por design — a segurança vem das políticas de acesso.</p>
+        <div style={{ fontSize: 10, color: C.cinza, marginTop: 12, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          <b style={{ color: C.branco }}>{EMPRESA.nome}</b> · CNPJ {EMPRESA.cnpj}<br />
+          {EMPRESA.endereco} · CEP {EMPRESA.cep}<br />
+          {EMPRESA.ramo}
+        </div>
       </div>
     </div>
   );
@@ -1037,6 +1236,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Hoje</div>
+            <div style={{ fontSize: 11, color: C.cinza, marginBottom: 4 }}>expediente 8:00–18:00</div>
             {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcação ainda.</p> :
               doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "🟢" : "🔴"} {r.tipo} — {fmtHora(r.ts)}</div>)}
           </div>
@@ -1071,9 +1271,11 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
           <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
           <tbody>
             {Object.entries(dias).map(([dia, regs]) => {
-              const min = minutosDia(regs), saldo = min - JORNADA_MIN - 60;
+              const min = minutosDia(regs);
+              const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
+              const saldo = min - (pares <= 1 ? EXPEDIENTE.intervaloMin : 0) - JORNADA_MIN;
               return (
-                <tr key={dia} style={{ borderTop: "1px solid #2b2b2b" }}>
+                <tr key={dia} style={{ borderTop: "1px solid #1E3450" }}>
                   <td style={{ padding: 8, fontWeight: 700 }}>{dia}</td>
                   <td>{regs.map(r => fmtHora(r.ts)).join(" · ")}</td>
                   <td>{hmm(min)}</td>
@@ -1083,7 +1285,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
             })}
           </tbody>
         </table>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Jornada de referência: 8h + 1h de intervalo. Horas além da jornada entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Expediente oficial: 8:00 às 18:00 (8h produtivas + 2h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, as 2h de intervalo são descontadas da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 8h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
       </div>
     </div>
   );
@@ -1118,7 +1320,7 @@ function TelaJustificar({ user, justificativas, onEnviar }) {
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <b style={{ fontSize: 14 }}>{fmtDataHora(j.data)}</b><Badge st={j.status} />
           </div>
-          <p style={{ fontSize: 14, color: "#ccc", margin: "8px 0 0" }}>{j.texto}</p>
+          <p style={{ fontSize: 14, color: "#C7D2E4", margin: "8px 0 0" }}>{j.texto}</p>
           {j.anexo && <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>📎 {j.anexo.nome}</div>}
         </div>
       ))}
@@ -1212,7 +1414,7 @@ function TelaGame({ user, registros, faltas }) {
           <div style={{ fontSize: 46 }}>{nv.atual.icone}</div>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ ...S.display, fontSize: 20 }}>Nível <span style={{ color: nv.atual.cor }}>{nv.atual.nome}</span></div>
-            <div style={{ background: "#2b2b2b", borderRadius: 999, height: 12, marginTop: 8, overflow: "hidden" }}>
+            <div style={{ background: "#1E3450", borderRadius: 999, height: 12, marginTop: 8, overflow: "hidden" }}>
               <div style={{ width: `${Math.min(100, nv.progresso * 100)}%`, background: `linear-gradient(90deg, ${nv.atual.cor}, ${nv.proximo ? nv.proximo.cor : nv.atual.cor})`, height: "100%", transition: "width .5s" }} />
             </div>
             <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>
@@ -1246,8 +1448,8 @@ function TelaGame({ user, registros, faltas }) {
       <div style={{ ...S.card, marginTop: 14 }}>
         <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Extrato de pontos</div>
         {g.linhas.map((l, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #2b2b2b", padding: "9px 0", fontSize: 14 }}>
-            <span style={{ color: "#ccc" }}>{l.label}</span>
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #1E3450", padding: "9px 0", fontSize: 14 }}>
+            <span style={{ color: "#C7D2E4" }}>{l.label}</span>
             <b style={{ color: l.pts > 0 ? (l.projetado ? C.amarelo : C.verde) : C.cinza }}>{l.pts > 0 ? `+${l.pts}` : "—"}</b>
           </div>
         ))}
@@ -1270,7 +1472,7 @@ function TelaGame({ user, registros, faltas }) {
         {badges.some(b => !b.conquistada) && <>
           <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 16 }}>Próximas conquistas</div>
           {badges.filter(b => !b.conquistada).sort((a, b) => b.pct - a.pct).map(b => (
-            <div key={b.id} style={{ display: "flex", gap: 12, alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "10px 0" }}>
+            <div key={b.id} style={{ display: "flex", gap: 12, alignItems: "center", borderTop: "1px solid #1E3450", padding: "10px 0" }}>
               <div style={{ fontSize: 26, filter: "grayscale(1)", opacity: 0.6 }}>{b.icone}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
@@ -1278,7 +1480,7 @@ function TelaGame({ user, registros, faltas }) {
                   <span style={{ color: C.cinza }}>{b.alvo > 1 ? `${Math.min(b.valor, b.alvo)}/${b.alvo}` : `${Math.round(b.pct * 100)}%`}</span>
                 </div>
                 <div style={{ fontSize: 11, color: C.cinza }}>{b.desc}</div>
-                <div style={{ background: "#2b2b2b", borderRadius: 999, height: 6, marginTop: 5, overflow: "hidden" }}>
+                <div style={{ background: "#1E3450", borderRadius: 999, height: 6, marginTop: 5, overflow: "hidden" }}>
                   <div style={{ width: `${b.pct * 100}%`, background: b.pct >= 0.7 ? C.amarelo : "#555", height: "100%" }} />
                 </div>
               </div>
@@ -1288,10 +1490,58 @@ function TelaGame({ user, registros, faltas }) {
       </div>
       <div style={{ ...S.card, marginTop: 14, fontSize: 12, color: C.cinza, lineHeight: 1.7 }}>
         <b style={{ color: C.branco }}>Como pontuar:</b> entrada dentro da tolerância vale {GAME.ptsDiaPontual} pts/dia; a partir do 3º dia pontual seguido cada dia vale +{GAME.ptsBonusStreak} de bônus; marcos de sequência pagam extra (5 dias +30 · 10 dias +75 · 20 dias +200); mês sem falta injustificada vale +{GAME.ptsMesSemFalta}; e fechar o mês dentro da meta de assiduidade (mesmos critérios do Prêmio Performance) vale +{GAME.ptsMetaAssiduidade}. Atraso ou falta injustificada zera a sequência — mas nunca desconta pontos já ganhos. Faltas justificadas, atestados aceitos e ausências legais não zeram a sequência nem afetam sua pontuação.
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2b2b2b" }}>
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E3450" }}>
           <b style={{ color: C.branco }}>🎖 Natureza da gamificação:</b> pontos, níveis, sequências e conquistas são <b style={{ color: C.branco }}>exclusivamente ferramenta motivacional e de reconhecimento interno</b>. Não constituem verba salarial, prêmio, comissão ou benefício de qualquer natureza; não geram direito adquirido, expectativa de remuneração, promoção, cargo ou obrigação contratual; e não são critério de avaliação de desempenho formal. Não confundir com o <b style={{ color: C.branco }}>Prêmio Performance</b> (aba 🏆 Prêmio), que é o benefício financeiro real, regido por regulamento próprio nos termos do art. 457, §4º, da CLT. A empresa pode ajustar ou descontinuar a gamificação a qualquer momento, sem reflexo em salário ou contrato.
         </div>
       </div>
+    </div>
+  );
+}
+ 
+function TelaBanco({ user, registros, faltas, folgas, onSolicitar }) {
+  const sb = useMemo(() => saldoBanco(user.id, registros, faltas, folgas), [user, registros, faltas, folgas]);
+  const minhas = folgas.filter(f => f.userId === user.id);
+  const pendentesMin = minhas.filter(f => f.status === "pendente").reduce((s, f) => s + f.horas * 60, 0);
+  const [horas, setHoras] = useState(8);
+  const [dataFolga, setDataFolga] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+  const solicitar = async () => {
+    if (enviando) return;
+    setEnviando(true); setMsg(null);
+    try { await onSolicitar(horas, dataFolga); setMsg({ ok: true, txt: "Solicitação enviada pra aprovação do gestor." }); setDataFolga(""); }
+    catch (e) { setMsg({ ok: false, txt: e.message }); }
+    finally { setEnviando(false); }
+  };
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Banco de horas</h1>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginTop: 16 }}>
+        {[["Apurado nas marcações", sb.apurado, C.branco], ["Debitado em folgas", -sb.debitado, C.cinza], ["Disponível", sb.disponivel, sb.disponivel >= 0 ? C.verde : C.vermelho]].map(([l, v, cor]) => (
+          <div key={l} style={{ ...S.card, textAlign: "center", padding: 20 }}>
+            <div style={{ ...S.display, fontSize: 30, color: cor }}>{hmm(v)}</div>
+            <div style={{ fontSize: 12, color: C.cinza, marginTop: 4 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Converter horas extras em folga</div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input type="number" min="1" step="0.5" style={{ ...S.input, width: 110 }} value={horas} onChange={e => setHoras(e.target.value)} />
+          <span style={{ fontSize: 12, color: C.cinza }}>horas na folga de</span>
+          <input type="date" style={{ ...S.input, width: 180 }} value={dataFolga} onChange={e => setDataFolga(e.target.value)} />
+          <button style={{ ...S.btn, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={solicitar}>{enviando ? "Enviando…" : "Solicitar folga"}</button>
+        </div>
+        {pendentesMin > 0 && <p style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Você já tem {hmm(pendentesMin)} em solicitações pendentes — elas contam contra o disponível pra novas solicitações.</p>}
+        {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>A conversão só é efetivada com a aprovação do gestor — aí as horas são debitadas do seu banco. Dica: um dia inteiro de folga = 8 horas (a jornada produtiva). Base legal: compensação do banco de horas por acordo individual escrito, CLT art. 59 §§ 5º-6º.</p>
+      </div>
+      {minhas.map(f => (
+        <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ fontSize: 14 }}><b>{hmm(f.horas * 60)}</b> · folga em <b>{fmtData(f.dataFolga + "T00:00:00")}</b>{f.decididoEm ? ` · decidido em ${fmtData(f.decididoEm)}` : ""}</div>
+          <Badge st={f.status} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -1317,9 +1567,9 @@ function TelaPremio({ user, registros, faltas }) {
       <div style={{ ...S.card, marginTop: 14 }}>
         <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Regras de elegibilidade — resumo</div>
         {REGRAS_PREMIO.map(r => (
-          <div key={r.id} style={{ borderTop: "1px solid #2b2b2b", padding: "10px 0" }}>
+          <div key={r.id} style={{ borderTop: "1px solid #1E3450", padding: "10px 0" }}>
             <b style={{ fontSize: 14 }}>{r.corte ? "🎯" : "➕"} {r.titulo}</b>
-            <p style={{ fontSize: 13, color: "#ccc", margin: "4px 0 0" }}>{r.desc}</p>
+            <p style={{ fontSize: 13, color: "#C7D2E4", margin: "4px 0 0" }}>{r.desc}</p>
           </div>
         ))}
       </div>
@@ -1346,7 +1596,7 @@ function TelaFeedback({ user, registros, faltas }) {
       {feedbacks.map((f, i) => (
         <div key={i} style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${f.tipo === "elogio" ? C.verde : f.tipo === "alerta" ? C.vermelho : C.amarelo}` }}>
           <div style={{ ...S.display, fontSize: 16 }}>{f.titulo}</div>
-          <p style={{ fontSize: 14, color: "#ccc", marginTop: 6 }}>{f.msg}</p>
+          <p style={{ fontSize: 14, color: "#C7D2E4", marginTop: 6 }}>{f.msg}</p>
           <RecCard rec={f.rec} />
         </div>
       ))}
@@ -1360,7 +1610,7 @@ function TelaLGPD({ user, onConsentir }) {
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Privacidade e LGPD</h1>
-      <div style={{ ...S.card, marginTop: 16, fontSize: 14, lineHeight: 1.8, color: "#ccc" }}>
+      <div style={{ ...S.card, marginTop: 16, fontSize: 14, lineHeight: 1.8, color: "#C7D2E4" }}>
         <b style={{ color: C.branco }}>Termo de consentimento — tratamento de dados pessoais</b>
         <p>O PONTO RENOVAR coleta, com a finalidade específica de controle de jornada (Portaria MTP 671/2021): <b>imagem facial</b> (dado biométrico sensível, LGPD art. 11) no momento de cada marcação; <b>geolocalização</b> da marcação; e registros de horários. Os dados são usados exclusivamente pra validação de identidade, apuração de jornada e obrigações legais trabalhistas. Retenção: registros de ponto por no mínimo 5 anos; fotos de validação por 90 dias, depois excluídas. Você pode solicitar acesso, correção ou exclusão (quando não houver obrigação legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
         <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
@@ -1368,6 +1618,130 @@ function TelaLGPD({ user, onConsentir }) {
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
         </label>
       </div>
+    </div>
+  );
+}
+ 
+function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gestorId }) {
+  const [form, setForm] = useState({ nome: "", email: "", cargo: "", tipo: "colaborador" });
+  const [linkGerado, setLinkGerado] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [criando, setCriando] = useState(false);
+  const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
+  const linkDe = (tk) => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
+  const copiar = async (txt) => { try { await navigator.clipboard.writeText(txt); setMsg({ ok: true, txt: "Link copiado! Compartilhe com o colaborador." }); } catch { setMsg({ ok: false, txt: "Não deu pra copiar automático — selecione o link e copie manual." }); } };
+  const criar = async () => {
+    if (!form.nome.trim() || !/.+@.+\..+/.test(form.email) || criando) { setMsg({ ok: false, txt: "Preencha nome e um e-mail válido." }); return; }
+    setCriando(true); setMsg(null);
+    try { const c = await onCriarConvite(form); setLinkGerado(linkDe(c.token)); setForm({ nome: "", email: "", cargo: "", tipo: "colaborador" }); }
+    catch (e) { setMsg({ ok: false, txt: e.message }); }
+    finally { setCriando(false); }
+  };
+  const salvarEdicao = async () => {
+    try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo }); setEditando(null); }
+    catch (e) { setMsg({ ok: false, txt: e.message }); }
+  };
+  const statusConvite = (c) => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, "#fff"] : ["PENDENTE", C.amarelo, "#111"];
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>👥 Equipe — colaboradores e convites</div>
+ 
+      {usuarios.map(u => (
+        <div key={u.id} style={{ borderTop: "1px solid #1E3450", padding: "9px 0" }}>
+          {editando?.id === u.id ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input style={{ ...S.input, width: 180 }} value={editando.nome} onChange={e => setEditando({ ...editando, nome: e.target.value })} />
+              <input style={{ ...S.input, width: 150 }} placeholder="Cargo" value={editando.cargo || ""} onChange={e => setEditando({ ...editando, cargo: e.target.value })} />
+              <select style={{ ...S.input, width: 140 }} value={editando.tipo} onChange={e => setEditando({ ...editando, tipo: e.target.value })} disabled={u.id === gestorId}>
+                <option value="colaborador">Colaborador</option><option value="gestor">Gestor</option>
+              </select>
+              <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }} onClick={salvarEdicao}>Salvar</button>
+              <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setEditando(null)}>Cancelar</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ fontSize: 14, opacity: u.ativo === false ? 0.45 : 1 }}>
+                <b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {u.email}{u.cargo ? ` · ${u.cargo}` : ""} · {u.papel === "gestor" ? "Gestor" : "Colaborador"}</span>
+              </div>
+              <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, "#fff")}>ATIVO</span>}
+                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel })}>Editar</button>
+                {u.id !== gestorId && (u.ativo === false
+                  ? <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: true })}>Reativar</button>
+                  : <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: false })}>Desativar</button>)}
+              </span>
+            </div>
+          )}
+        </div>
+      ))}
+ 
+      <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 16 }}>➕ Convidar novo colaborador</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <input style={{ ...S.input, width: 170 }} placeholder="Nome completo" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} />
+        <input style={{ ...S.input, width: 210 }} placeholder="email@renovartech.com.br" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+        <input style={{ ...S.input, width: 140 }} placeholder="Cargo" value={form.cargo} onChange={e => setForm({ ...form, cargo: e.target.value })} />
+        <select style={{ ...S.input, width: 140 }} value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })}>
+          <option value="colaborador">Colaborador</option><option value="gestor">Gestor</option>
+        </select>
+        <button style={{ ...S.btn, opacity: criando ? 0.6 : 1 }} disabled={criando} onClick={criar}>{criando ? "Gerando…" : "Gerar convite"}</button>
+      </div>
+      {linkGerado && (
+        <div style={{ background: C.grafite, borderRadius: 10, padding: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <code style={{ fontSize: 12, color: C.amarelo, wordBreak: "break-all", flex: 1 }}>{linkGerado}</code>
+          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(linkGerado)}>📋 Copiar link</button>
+        </div>
+      )}
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      {convites.length > 0 && <>
+        <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 14 }}>Convites emitidos</div>
+        {convites.map(c => {
+          const [tx, bg, fg] = statusConvite(c);
+          return (
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "7px 0", gap: 10 }}>
+              <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo} · expira {fmtData(c.expiraEm)}</span></div>
+              <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                <span style={S.tag(bg, fg)}>{tx}</span>
+                {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}
+              </span>
+            </div>
+          );
+        })}
+      </>}
+      <p style={{ fontSize: 11, color: C.cinza, marginTop: 10 }}>Desativar bloqueia o login (o app checa ativo=false), mas a conta de autenticação permanece — exclusão definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e são de uso único (resgate atômico via function no banco).</p>
+    </div>
+  );
+}
+ 
+function SecaoFolgas({ folgas, usuarios, registros, faltas, onDecidir }) {
+  const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
+  const pendentes = folgas.filter(f => f.status === "pendente");
+  const decididas = folgas.filter(f => f.status !== "pendente").slice(0, 8);
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>⏳ Banco de horas — solicitações de folga</div>
+      {pendentes.length === 0 && <p style={{ fontSize: 13, color: C.cinza }}>Nenhuma solicitação pendente.</p>}
+      {pendentes.map(f => {
+        const sb = saldoBanco(f.userId, registros, faltas, folgas);
+        const cabe = f.horas * 60 <= sb.disponivel;
+        return (
+          <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "8px 0", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 14 }}>
+              <b>{nome(f.userId)}</b> — {hmm(f.horas * 60)} em {fmtData(f.dataFolga + "T00:00:00")}
+              <span style={{ fontSize: 12, color: cabe ? C.verde : C.vermelho }}> · saldo disponível: {hmm(sb.disponivel)}{cabe ? "" : " ⚠ insuficiente"}</span>
+            </div>
+            <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12, opacity: cabe ? 1 : 0.5 }} onClick={() => onDecidir(f.id, true)}>Aprovar e debitar</button>
+              <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onDecidir(f.id, false)}>Rejeitar</button>
+            </span>
+          </div>
+        );
+      })}
+      {decididas.length > 0 && decididas.map(f => (
+        <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "6px 0", gap: 10, opacity: 0.6 }}>
+          <div style={{ fontSize: 13 }}>{nome(f.userId)} — {hmm(f.horas * 60)} em {fmtData(f.dataFolga + "T00:00:00")}</div>
+          <Badge st={f.status} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -1401,12 +1775,12 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
       {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
       <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>Sem nenhum local ativo, as batidas ficam liberadas sem verificação. Dica: cadastre estando dentro do local e considere a precisão do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos).</p>
       {locais.length > 0 && locais.map(l => (
-        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "8px 0", gap: 10 }}>
+        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "8px 0", gap: 10 }}>
           <div style={{ fontSize: 14, opacity: l.ativo ? 1 : 0.45 }}>
             <b>{l.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {(+l.latitude).toFixed(5)}, {(+l.longitude).toFixed(5)} · raio {l.raio} m</span>
           </div>
           <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-            {l.ativo ? <span style={S.tag(C.verde, "#fff")}>ATIVO</span> : <span style={S.tag("#3a3a3a", "#ccc")}>INATIVO</span>}
+            {l.ativo ? <span style={S.tag(C.verde, "#fff")}>ATIVO</span> : <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span>}
             {l.ativo && <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onDesativar(l.id)}>Desativar</button>}
           </span>
         </div>
@@ -1415,13 +1789,13 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
  
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
     .map(x => ({ ...x, nv: nivelDe(x.g.total) }))
     .sort((a, b) => b.g.total - a.g.total);
-  const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length;
+  const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length + folgas.filter(f => f.status === "pendente").length;
   const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
   return (
     <div>
@@ -1432,13 +1806,13 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
           <div style={{ fontSize: 11, color: C.cinza }}>🎖 reconhecimento interno · somente leitura · sem impacto salarial, no Prêmio Performance ou em avaliação formal</div>
         </div>
         {ranking.map((r, i) => (
-          <div key={r.u.id} style={{ display: "flex", alignItems: "center", gap: 12, borderTop: "1px solid #2b2b2b", padding: "9px 0" }}>
+          <div key={r.u.id} style={{ display: "flex", alignItems: "center", gap: 12, borderTop: "1px solid #1E3450", padding: "9px 0" }}>
             <div style={{ ...S.display, fontSize: 18, width: 34, color: i === 0 ? C.amarelo : C.cinza }}>{i === 0 ? "🏆" : `${i + 1}º`}</div>
             <div style={{ fontSize: 22 }}>{r.nv.atual.icone}</div>
             <div style={{ flex: 1 }}>
               <b style={{ fontSize: 14 }}>{r.u.nome}</b>
               <div style={{ fontSize: 11, color: C.cinza }}>{r.nv.atual.nome}{r.g.streak >= 3 ? ` · 🔥 streak de ${r.g.streak} dias` : ""}</div>
-              <div style={{ background: "#2b2b2b", borderRadius: 999, height: 5, marginTop: 4, maxWidth: 260, overflow: "hidden" }}>
+              <div style={{ background: "#1E3450", borderRadius: 999, height: 5, marginTop: 4, maxWidth: 260, overflow: "hidden" }}>
                 <div style={{ width: `${Math.min(100, r.nv.progresso * 100)}%`, background: r.nv.atual.cor, height: "100%" }} />
               </div>
             </div>
@@ -1454,19 +1828,21 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
             {equipe.map(({ u, a }) => {
               const e = elegibilidadePremio(u.id, registros, faltas);
               return (
-              <tr key={u.id} style={{ borderTop: "1px solid #2b2b2b" }}>
+              <tr key={u.id} style={{ borderTop: "1px solid #1E3450" }}>
                 <td style={{ padding: 6, fontWeight: 700 }}>{u.nome}</td>
                 <td>{a.diasTrab}</td>
                 <td style={{ color: a.atrasos >= 3 ? C.vermelho : C.branco }}>{a.atrasos}</td>
                 <td style={{ color: a.faltas > 0 ? C.vermelho : C.branco }}>{a.faltas}</td>
                 <td style={{ color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</td>
                 <td>{e.elegivel ? <span style={S.tag(C.verde, "#fff")}>ELEGÍVEL{e.bonusPontualidade ? " +10%" : ""}</span> : <span style={S.tag(C.vermelho, "#fff")}>NÃO ELEGÍVEL</span>}</td>
-                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENÇÃO</span> : a.diasTrab === 0 ? <span style={S.tag("#3a3a3a", "#ccc")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
+                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENÇÃO</span> : a.diasTrab === 0 ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
               </tr>
             );})}
           </tbody>
         </table>
       </div>
+      <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} />
+      <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
@@ -1476,7 +1852,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         <div key={titulo} style={{ ...S.card, marginTop: 14 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>{titulo}</div>
           {lista.length === 0 ? <p style={{ fontSize: 13, color: C.cinza }}>Nada por aqui.</p> : lista.map(item => (
-            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "8px 0", gap: 10 }}>
+            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "8px 0", gap: 10 }}>
               <span style={{ fontSize: 14 }}>{render(item)}</span>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <Badge st={item.status} />
@@ -1493,7 +1869,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Trilha de auditoria</div>
         <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 8 }}>
           {logs.map((l, i) => (
-            <div key={i} style={{ fontSize: 12, color: "#bbb", borderTop: "1px solid #262626", padding: "5px 0", fontFamily: "monospace" }}>
+            <div key={i} style={{ fontSize: 12, color: "#B3C2DA", borderTop: "1px solid #1A2F4A", padding: "5px 0", fontFamily: "monospace" }}>
               {fmtDataHora(l.ts)} · <span style={{ color: C.amarelo }}>{l.acao}</span> · {nome(l.userId)} · {l.detalhe}
             </div>
           ))}
