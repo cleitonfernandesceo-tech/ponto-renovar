@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ponto Renovar</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>html,body{margin:0;padding:0;background:#0D0D0D;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+/* PONTO RENOVAR - Sistema de Ponto Eletronico (Prototipo) */
+const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade: "Belo Horizonte/MG" };
+const SENHA_GESTOR = "310817";
+const JORNADA_MIN = 8 * 60;
+
+const hoje = new Date();
+const d = (offsetDias, h = 8, m = 0) => {
+  const x = new Date(hoje); x.setDate(x.getDate() + offsetDias); x.setHours(h, m, 0, 0); return x;
+};
+const iso = (dt) => dt.toISOString();
+
+const USUARIOS_SEED = [
+  { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true },
+  { id: "u2", nome: "Marina Souza", email: "marina@renovartech.com.br", papel: "colaborador", admissao: "2023-05-10", avatar: "MS", consentimentoLGPD: true },
+  { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true },
+  { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
+];
+
+const REGISTROS_SEED = [];
+let NSR = 1;
+const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) => {
+  if (falta) return;
+  REGISTROS_SEED.push(
+    { nsr: NSR++, userId: uid, tipo: "entrada", ts: iso(d(off, entradaH, entradaM)), lat: -19.9245, lng: -43.9352, foto: null, facialOk: true },
+    { nsr: NSR++, userId: uid, tipo: "saida", ts: iso(d(off, saidaH, saidaM)), lat: -19.9245, lng: -43.9352, foto: null, facialOk: true },
+  );
+};
+for (let i = 10; i >= 1; i--) {
+  pushDia("u2", -i, 7, 58, 17, 5);
+  pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 17, 0, i === 4);
+}
+
+const FALTAS_SEED = [{ userId: "u3", data: iso(d(-4)), motivo: "sem justificativa" }];
+
+const RECOMENDACOES = {
+  pontualidade: {
+    livros: ["Os 7 Habitos das Pessoas Altamente Eficazes - Stephen Covey", "Habitos Atomicos - James Clear", "A Triade do Tempo - Christian Barbosa"],
+    filmes: ["Whiplash (2014) - disciplina e excelencia", "A Procura da Felicidade (2006) - constancia sob pressao"],
+  },
+  produtividade: {
+    livros: ["Trabalho Focado (Deep Work) - Cal Newport", "Essencialismo - Greg McKeown", "A Unica Coisa - Gary Keller"],
+    filmes: ["Moneyball (2011) - foco no que gera resultado", "O Fundador (2016) - execucao implacavel"],
+  },
+  lideranca: {
+    livros: ["Lideres se Servem por Ultimo - Simon Sinek", "Pipeline de Lideranca - Ram Charan", "Extreme Ownership - Jocko Willink"],
+    filmes: ["Invictus (2009) - lideranca que une", "Fome de Poder (2016) - visao e ambicao"],
+  },
+};
+
+const fmtData = (s) => new Date(s).toLocaleDateString("pt-BR");
+const fmtHora = (s) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const fmtDataHora = (s) => fmtData(s) + " " + fmtHora(s);
+const mesesEntre = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+const minutosDia = (regs) => {
+  let total = 0;
+  const ent = regs.filter(r => r.tipo === "entrada").map(r => new Date(r.ts));
+  const sai = regs.filter(r => r.tipo === "saida").map(r => new Date(r.ts));
+  for (let i = 0; i < Math.min(ent.length, sai.length); i++) total += Math.max(0, (sai[i] - ent[i]) / 60000);
+  return Math.round(total);
+};
+const hmm = (min) => (min < 0 ? "-" : "") + Math.floor(Math.abs(min) / 60) + "h" + String(Math.abs(min) % 60).padStart(2, "0");
+
+function agruparPorDia(registros, userId) {
+  const dias = {};
+  registros.filter(r => r.userId === userId).forEach(r => {
+    const k = new Date(r.ts).toLocaleDateString("pt-BR");
+    (dias[k] = dias[k] || []).push(r);
+  });
+  return dias;
+}
+
+function analisarAssiduidade(userId, registros, faltas) {
+  const dias = agruparPorDia(registros, userId);
+  let atrasos = 0, diasTrab = 0, saldoMin = 0;
+  Object.values(dias).forEach(regs => {
+    diasTrab++;
+    const ent = regs.find(r => r.tipo === "entrada");
+    if (ent) {
+      const dt = new Date(ent.ts);
+      if (dt.getHours() > 8 || (dt.getHours() === 8 && dt.getMinutes() > 10)) atrasos++;
+    }
+    saldoMin += minutosDia(regs) - JORNADA_MIN - 60;
+  });
+  const nFaltas = faltas.filter(f => f.userId === userId).length;
+  return { atrasos, faltas: nFaltas, diasTrab, saldoMin };
+}
+
+function gerarFeedback(user, registros, faltas) {
+  const a = analisarAssiduidade(user.id, registros, faltas);
+  const fb = [];
+  const primeiroNome = user.nome.split(" ")[0];
+  if (a.atrasos >= 3) fb.push({
+    tipo: "alerta", tema: "pontualidade",
+    titulo: a.atrasos + " atrasos nos ultimos " + a.diasTrab + " dias trabalhados",
+    msg: primeiroNome + ", notamos atrasos recorrentes. Pequenos ajustes na rotina da manha tem impacto direto no seu banco de horas e na operacao da equipe. Que tal definir um horario-ancora 30min antes da entrada?",
+    rec: RECOMENDACOES.pontualidade,
+  });
+  if (a.faltas >= 1) fb.push({
+    tipo: "alerta", tema: "produtividade",
+    titulo: a.faltas + " falta(s) sem justificativa no periodo",
+    msg: "Faltas sem justificativa impactam banco de horas e podem gerar desconto (CLT art. 473 lista as ausencias legais). Se houve imprevisto, registre a justificativa ou envie atestado - o fluxo leva 2 minutos.",
+    rec: RECOMENDACOES.produtividade,
+  });
+  if (a.atrasos === 0 && a.faltas === 0 && a.diasTrab >= 5) fb.push({
+    tipo: "elogio", tema: "lideranca", titulo: "Assiduidade exemplar",
+    msg: primeiroNome + ", " + a.diasTrab + " dias sem nenhum atraso ou falta e saldo positivo de " + hmm(a.saldoMin) + " no banco de horas. Consistencia e o que separa profissionais fora da curva - continue assim. Preparamos recomendacoes pra sua proxima etapa: lideranca.",
+    rec: RECOMENDACOES.lideranca,
+  });
+  if (fb.length === 0) fb.push({
+    tipo: "neutro", tema: "produtividade", titulo: "Tudo em dia",
+    msg: "Sem pendencias relevantes no periodo. Recomendacoes pra manter o ritmo:",
+    rec: RECOMENDACOES.produtividade,
+  });
+  return { analise: a, feedbacks: fb };
+}
+
+const C = { preto: "#0D0D0D", carvao: "#171717", grafite: "#232323", amarelo: "#FFD600", vermelho: "#E53935", verde: "#2E9E5B", cinza: "#9E9E9E", branco: "#F5F5F2" };
+const S = {
+  app: { minHeight: "100vh", background: C.preto, color: C.branco, fontFamily: "'Inter','Segoe UI',system-ui,sans-serif" },
+  display: { fontFamily: "'Oswald','Arial Narrow',sans-serif", textTransform: "uppercase", letterSpacing: "0.04em" },
+  card: { background: C.carvao, border: "1px solid #2b2b2b", borderRadius: 14, padding: 20 },
+  btn: { background: C.amarelo, color: "#111", fontWeight: 700, border: "none", borderRadius: 10, padding: "12px 20px", cursor: "pointer", fontSize: 15 },
+  btnGhost: { background: "transparent", color: C.branco, border: "1px solid #3a3a3a", borderRadius: 10, padding: "10px 16px", cursor: "pointer" },
+  input: { background: C.grafite, border: "1px solid #3a3a3a", borderRadius: 10, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
+  tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, display: "inline-block" }),
+};
+
+const Badge = ({ st }) => {
+  const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, "#fff", "APROVADO"], recusado: [C.vermelho, "#fff", "RECUSADO"] };
+  const bg = (map[st] || map.pendente)[0], fg = (map[st] || map.pendente)[1], tx = (map[st] || map.pendente)[2];
+  return <span style={S.tag(bg, fg)}>{tx}</span>;
+};
+
+function CameraCapture({ onCapture, onSkip }) {
+  const videoRef = useRef(null);
+  const [erro, setErro] = useState(null);
+  const [stream, setStream] = useState(null);
+  useEffect(() => {
+    let st;
+    navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" } })
+      .then(s => { st = s; setStream(s); if (videoRef.current) videoRef.current.srcObject = s; })
+      .catch(() => setErro("Camera indisponivel ou permissao negada. Voce pode registrar sem foto (sera marcado no log)."));
+    return () => st?.getTracks().forEach(t => t.stop());
+  }, []);
+  const capturar = () => {
+    const v = videoRef.current;
+    const cv = document.createElement("canvas");
+    cv.width = v.videoWidth || 480; cv.height = v.videoHeight || 360;
+    cv.getContext("2d").drawImage(v, 0, 0);
+    stream?.getTracks().forEach(t => t.stop());
+    onCapture(cv.toDataURL("image/jpeg", 0.7));
+  };
+  return (
+    <div style={{ textAlign: "center" }}>
+      {erro ? <p style={{ color: C.vermelho, fontSize: 14 }}>{erro}</p> : (
+        <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", maxWidth: 380, borderRadius: 12, border: "2px solid " + C.amarelo }} />
+      )}
+      <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 14 }}>
+        {!erro && <button style={S.btn} onClick={capturar}>Capturar e validar</button>}
+        <button style={S.btnGhost} onClick={onSkip}>Registrar sem foto</button>
+      </div>
+      <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Reconhecimento facial: neste prototipo a validacao e simulada - a foto fica vinculada ao registro. Em producao: AWS Rekognition / FaceIO.</p>
+    </div>
+  );
+}
+
+function RecCard({ rec }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+      <div>
+        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>Livros</div>
+        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>- {l}</div>)}
+      </div>
+      <div>
+        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>Filmes</div>
+        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>- {f}</div>)}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [usuarios] = useState(USUARIOS_SEED);
+  const [user, setUser] = useState(null);
+  const [tela, setTela] = useState("ponto");
+  const [registros, setRegistros] = useState(REGISTROS_SEED);
+  const [faltas] = useState(FALTAS_SEED);
+  const [justificativas, setJustificativas] = useState([
+    { id: 1, userId: "u3", data: iso(d(-2)), texto: "Transito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" },
+  ]);
+  const [atestados, setAtestados] = useState([]);
+  const [ferias, setFerias] = useState([]);
+  const [logs, setLogs] = useState([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Sistema iniciado (prototipo, dados em memoria)" }]);
+  const [nsr, setNsr] = useState(NSR);
+  const [fluxoPonto, setFluxoPonto] = useState(null);
+  const [geo, setGeo] = useState(null);
+  const [comprovante, setComprovante] = useState(null);
+  const [gestorLiberado, setGestorLiberado] = useState(false);
+  const [relogio, setRelogio] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setRelogio(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  const log = (acao, detalhe) => setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
+
+  const iniciarBatida = () => {
+    if (!user.consentimentoLGPD) { alert("Antes da primeira batida e necessario aceitar o Termo de Consentimento LGPD (biometria + geolocalizacao). Acesse a aba LGPD."); setTela("lgpd"); return; }
+    setFluxoPonto("geo");
+    navigator.geolocation?.getCurrentPosition(
+      p => { setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), precisao: Math.round(p.coords.accuracy) }); setFluxoPonto("camera"); },
+      () => { setGeo({ lat: null, lng: null, erro: "Geolocalizacao negada/indisponivel" }); setFluxoPonto("camera"); },
+      { timeout: 8000 }
+    );
+    if (!navigator.geolocation) { setGeo({ lat: null, lng: null, erro: "Sem suporte a geolocalizacao" }); setFluxoPonto("camera"); }
+  };
+
+  const concluirBatida = (foto) => {
+    const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
+    const tipo = doDia.length % 2 === 0 ? "entrada" : "saida";
+    const reg = { nsr, userId: user.id, tipo, ts: iso(new Date()), lat: geo?.lat, lng: geo?.lng, foto, facialOk: !!foto };
+    setRegistros(r => [...r, reg]);
+    setNsr(n => n + 1);
+    log("batida", "NSR " + nsr + " - " + tipo + " - geo " + (geo?.lat ?? "-") + "," + (geo?.lng ?? "-") + " - facial " + (foto ? "validado (simulado)" : "sem foto"));
+    setComprovante(reg);
+    setFluxoPonto("comprovante");
+  };
+
+  const exportarAFD = () => {
+    const linhas = registros.map(r => String(r.nsr).padStart(9, "0") + "3" + new Date(r.ts).toISOString().replace(/[-:TZ.]/g, "").slice(0, 12) + r.userId.padEnd(12, "0"));
+    const blob = new Blob(["AFD SIMULADO - " + EMPRESA.nome + " - " + EMPRESA.cnpj + "\n" + linhas.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "AFD_simulado.txt"; a.click();
+    log("export", "AFD simulado exportado");
+  };
+
+  const agendarFerias = (inicio, dias) => {
+    const adm = new Date(user.admissao);
+    const agora = new Date();
+    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: "Voce completa 12 meses de empresa em " + fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate())) + ". Agendamento liberado a partir dessa data (CLT art. 130: periodo aquisitivo)." };
+    const ini = new Date(inicio + "T00:00:00");
+    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: ferias devem ser agendadas com no minimo 5 meses de antecedencia. Escolha uma data mais distante." };
+    const f = { id: Date.now(), userId: user.id, inicio, dias: +dias, status: "pendente" };
+    setFerias(x => [...x, f]);
+    log("ferias", "Solicitacao: " + dias + " dias a partir de " + fmtData(ini));
+    return { ok: true, msg: "Solicitacao enviada pra aprovacao do gestor. Lembrete: o aviso legal minimo ao empregador e de 30 dias (CLT art. 135), a regra de 5 meses e politica interna." };
+  };
+
+  const decidir = (lista, setLista, id, status, tipoLog) => {
+    setLista(l => l.map(i => i.id === id ? { ...i, status } : i));
+    log("aprovacao", tipoLog + " #" + id + " -> " + status);
+  };
+
+  if (!user) return <Login usuarios={usuarios} onEntrar={(u) => { setUser(u); setTela("ponto"); setGestorLiberado(false); }} />;
+
+  const menu = [
+    ["ponto", "Bater ponto"], ["espelho", "Espelho de ponto"], ["justificar", "Justificativas"],
+    ["atestados", "Atestados"], ["ferias", "Ferias"], ["feedback", "Meu feedback"], ["lgpd", "LGPD"],
+    ...(user.papel === "gestor" ? [["gestor", "Painel do gestor"]] : []),
+  ];
+
+  return (
+    <div style={S.app}>
+      <style>{"@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap'); @media print { .no-print { display:none!important } body { background:#fff } }"}</style>
+      <div style={{ display: "flex", minHeight: "100vh" }}>
+        <aside className="no-print" style={{ width: 230, background: C.carvao, borderRight: "1px solid #2b2b2b", padding: 18, flexShrink: 0 }}>
+          <div style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
+          <div style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
+          <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 6 }}>
+            {menu.map(([k, label]) => (
+              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#3a3a3a" }}>{label}</button>
+            ))}
+          </div>
+          <div style={{ marginTop: 26, borderTop: "1px solid #2b2b2b", paddingTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: C.amarelo, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{user.avatar}</div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{user.nome}</div>
+                <div style={{ fontSize: 11, color: C.cinza }}>{user.papel === "gestor" ? "Gestor" : "Colaborador"}</div>
+              </div>
+            </div>
+            <button style={{ ...S.btnGhost, marginTop: 12, width: "100%", fontSize: 13 }} onClick={() => setUser(null)}>Sair</button>
+          </div>
+        </aside>
+        <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
+          {tela === "ponto" && <TelaPonto user={user} relogio={relogio} registros={registros} faltas={faltas} fluxoPonto={fluxoPonto} setFluxoPonto={setFluxoPonto} geo={geo} comprovante={comprovante} iniciarBatida={iniciarBatida} concluirBatida={concluirBatida} />}
+          {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} />}
+          {tela === "justificar" && <TelaJustificar user={user} justificativas={justificativas} setJustificativas={setJustificativas} log={log} />}
+          {tela === "atestados" && <TelaAtestados user={user} atestados={atestados} setAtestados={setAtestados} log={log} />}
+          {tela === "ferias" && <TelaFerias user={user} ferias={ferias} agendarFerias={agendarFerias} />}
+          {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
+          {tela === "lgpd" && <TelaLGPD user={user} log={log} />}
+          {tela === "gestor" && user.papel === "gestor" && (
+            gestorLiberado
+              ? <TelaGestor usuarios={usuarios} registros={registros} faltas={faltas} justificativas={justificativas} setJustificativas={setJustificativas} atestados={atestados} setAtestados={setAtestados} ferias={ferias} setFerias={setFerias} logs={logs} decidir={decidir} />
+              : <GateGestor onOk={() => { setGestorLiberado(true); log("acesso", "Painel do gestor desbloqueado"); }} />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function Login({ usuarios, onEntrar }) {
+  return (
+    <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ ...S.card, width: 420, textAlign: "center", padding: 36 }}>
+        <div style={{ ...S.display, fontSize: 34, color: C.amarelo, lineHeight: 1 }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
+        <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Acesso exclusivo com conta Google corporativa</div>
+        <div style={{ marginTop: 26, display: "flex", flexDirection: "column", gap: 10 }}>
+          {usuarios.map(u => (
+            <button key={u.id} onClick={() => onEntrar(u)} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+              <span style={{ width: 34, height: 34, borderRadius: "50%", background: u.papel === "gestor" ? C.vermelho : C.amarelo, color: u.papel === "gestor" ? "#fff" : "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{u.avatar}</span>
+              <span style={{ textAlign: "left" }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{u.nome}</div>
+                <div style={{ fontSize: 12, color: C.cinza }}>{u.email}</div>
+              </span>
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 20 }}>OAuth Google simulado no prototipo. Em producao: Google Identity Services + verificacao de dominio @renovartech.com.br no backend.</p>
+      </div>
+    </div>
+  );
+}
+
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }) {
+  const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
+  const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAIDA";
+  const a = analisarAssiduidade(user.id, registros, faltas);
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginTop: 18 }}>
+        <div style={{ ...S.card, textAlign: "center", padding: 34 }}>
+          <div style={{ ...S.display, fontSize: 64, color: C.amarelo, lineHeight: 1 }}>{relogio.toLocaleTimeString("pt-BR")}</div>
+          <div style={{ color: C.cinza, marginTop: 6 }}>{relogio.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+          {!fluxoPonto && <button style={{ ...S.btn, marginTop: 24, fontSize: 18, padding: "16px 34px" }} onClick={iniciarBatida}>Registrar {proxTipo}</button>}
+          {fluxoPonto === "geo" && <p style={{ marginTop: 20, color: C.cinza }}>Obtendo geolocalizacao...</p>}
+          {fluxoPonto === "camera" && (
+            <div style={{ marginTop: 20 }}>
+              <p style={{ fontSize: 13, color: geo?.erro ? C.vermelho : C.verde }}>
+                {geo?.erro ? geo.erro : "Localizacao capturada: " + geo.lat + ", " + geo.lng + " (+-" + geo.precisao + "m)"}
+              </p>
+              <CameraCapture onCapture={concluirBatida} onSkip={() => concluirBatida(null)} />
+            </div>
+          )}
+          {fluxoPonto === "comprovante" && comprovante && (
+            <div style={{ marginTop: 20, background: C.grafite, borderRadius: 12, padding: 18, textAlign: "left" }}>
+              <div style={{ ...S.display, color: C.amarelo, fontSize: 15 }}>Comprovante de registro (Portaria 671/2021)</div>
+              <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.7 }}>
+                NSR: <b>{String(comprovante.nsr).padStart(9, "0")}</b><br />
+                {EMPRESA.nome} - CNPJ {EMPRESA.cnpj}<br />
+                Colaborador: {user.nome}<br />
+                Marcacao: <b>{comprovante.tipo.toUpperCase()}</b> em {fmtDataHora(comprovante.ts)}<br />
+                Geo: {comprovante.lat ?? "-"}, {comprovante.lng ?? "-"} - Facial: {comprovante.facialOk ? "validado (simulado)" : "sem foto"}
+              </div>
+              {comprovante.foto && <img src={comprovante.foto} alt="selfie da batida" style={{ width: 110, borderRadius: 10, marginTop: 10, border: "2px solid " + C.verde }} />}
+              <div style={{ display: "flex", gap: 10, marginTop: 12 }} className="no-print">
+                <button style={S.btnGhost} onClick={() => window.print()}>Imprimir comprovante</button>
+                <button style={S.btn} onClick={() => setFluxoPonto(null)}>OK</button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={S.card}>
+            <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Hoje</div>
+            {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcacao ainda.</p> :
+              doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "Entrada" : "Saida"} - {fmtHora(r.ts)}</div>)}
+          </div>
+          <div style={S.card}>
+            <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Banco de horas (10 dias)</div>
+            <div style={{ ...S.display, fontSize: 30, color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</div>
+            <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) - {a.faltas} falta(s)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TelaEspelho({ user, registros, exportarAFD }) {
+  const dias = agruparPorDia(registros, user.id);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Espelho de ponto</h1>
+        <div style={{ display: "flex", gap: 10 }} className="no-print">
+          <button style={S.btnGhost} onClick={exportarAFD}>Exportar AFD (simulado)</button>
+          <button style={S.btn} onClick={() => window.print()}>Exportar PDF</button>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcacoes</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
+          <tbody>
+            {Object.entries(dias).map(([dia, regs]) => {
+              const min = minutosDia(regs), saldo = min - JORNADA_MIN - 60;
+              return (
+                <tr key={dia} style={{ borderTop: "1px solid #2b2b2b" }}>
+                  <td style={{ padding: 8, fontWeight: 700 }}>{dia}</td>
+                  <td>{regs.map(r => fmtHora(r.ts)).join(" - ")}</td>
+                  <td>{hmm(min)}</td>
+                  <td style={{ color: saldo >= 0 ? C.verde : C.vermelho, fontWeight: 700 }}>{hmm(saldo)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Jornada de referencia: 8h + 1h de intervalo. Horas alem da jornada entram no banco de horas (acordo individual escrito, CLT art. 59 par. 5) ou sao pagas como extra com adicional minimo de 50%.</p>
+      </div>
+    </div>
+  );
+}
+
+function TelaJustificar({ user, justificativas, setJustificativas, log }) {
+  const [texto, setTexto] = useState("");
+  const [anexo, setAnexo] = useState(null);
+  const minhas = justificativas.filter(j => j.userId === user.id);
+  const enviar = () => {
+    if (!texto.trim()) return;
+    setJustificativas(j => [...j, { id: Date.now(), userId: user.id, data: iso(new Date()), texto, anexo, status: "pendente" }]);
+    log("justificativa", "Nova justificativa de atraso enviada");
+    setTexto(""); setAnexo(null);
+  };
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Justificativas de atraso</h1>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <textarea style={{ ...S.input, minHeight: 90 }} placeholder="Descreva o motivo do atraso..." value={texto} onChange={e => setTexto(e.target.value)} />
+        <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
+          <label style={{ ...S.btnGhost, cursor: "pointer" }}>{anexo ? anexo.nome : "Anexar evidencia"}
+            <input type="file" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) setAnexo({ nome: f.name, tamanho: f.size }); }} />
+          </label>
+          <button style={S.btn} onClick={enviar}>Enviar pra aprovacao</button>
+        </div>
+      </div>
+      {minhas.map(j => (
+        <div key={j.id} style={{ ...S.card, marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <b style={{ fontSize: 14 }}>{fmtDataHora(j.data)}</b><Badge st={j.status} />
+          </div>
+          <p style={{ fontSize: 14, color: "#ccc", margin: "8px 0 0" }}>{j.texto}</p>
+          {j.anexo && <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>{j.anexo.nome}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TelaAtestados({ user, atestados, setAtestados, log }) {
+  const meus = atestados.filter(a => a.userId === user.id);
+  const [obs, setObs] = useState("");
+  const anexar = (f) => {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      setAtestados(a => [...a, { id: Date.now(), userId: user.id, data: iso(new Date()), nome: f.name, preview: f.type.startsWith("image") ? r.result : null, obs, status: "pendente" }]);
+      log("atestado", "Atestado enviado: " + f.name);
+      setObs("");
+    };
+    r.readAsDataURL(f);
+  };
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Atestados medicos</h1>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <input style={S.input} placeholder="Observacao (opcional): CID, dias de afastamento..." value={obs} onChange={e => setObs(e.target.value)} />
+        <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer" }}>Enviar atestado (foto ou PDF)
+          <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={e => anexar(e.target.files[0])} />
+        </label>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saude = dado sensivel (LGPD art. 5, II). Em producao: armazenamento criptografado, acesso restrito a RH/gestor, retencao conforme prazo legal trabalhista.</p>
+      </div>
+      {meus.map(a => (
+        <div key={a.id} style={{ ...S.card, marginTop: 12, display: "flex", gap: 14, alignItems: "center" }}>
+          {a.preview ? <img src={a.preview} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8 }} /> : <div style={{ fontSize: 34 }}>Doc</div>}
+          <div style={{ flex: 1 }}>
+            <b style={{ fontSize: 14 }}>{a.nome}</b>
+            <div style={{ fontSize: 12, color: C.cinza }}>{fmtDataHora(a.data)} {a.obs && ("- " + a.obs)}</div>
+          </div>
+          <Badge st={a.status} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TelaFerias({ user, ferias, agendarFerias }) {
+  const [inicio, setInicio] = useState("");
+  const [dias, setDias] = useState(30);
+  const [msg, setMsg] = useState(null);
+  const minhas = ferias.filter(f => f.userId === user.id);
+  const adm = new Date(user.admissao);
+  const elegivel = mesesEntre(adm, new Date()) >= 12;
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Agendamento de ferias</h1>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <div style={{ fontSize: 14, color: C.cinza }}>Admissao: <b style={{ color: C.branco }}>{fmtData(user.admissao)}</b> - {elegivel ? <span style={{ color: C.verde }}>periodo aquisitivo completo</span> : <span style={{ color: C.vermelho }}>ainda no periodo aquisitivo (12 meses)</span>}</div>
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          <input type="date" style={{ ...S.input, width: 190 }} value={inicio} onChange={e => setInicio(e.target.value)} />
+          <select style={{ ...S.input, width: 150 }} value={dias} onChange={e => setDias(e.target.value)}>
+            <option value={30}>30 dias</option><option value={20}>20 dias</option><option value={15}>15 dias</option><option value={10}>10 dias</option>
+          </select>
+          <button style={S.btn} onClick={() => { if (!inicio) return; setMsg(agendarFerias(inicio, dias)); }}>Solicitar</button>
+        </div>
+        {msg && <p style={{ marginTop: 12, fontSize: 14, color: msg.ok ? C.verde : C.vermelho }}>{msg.msg}</p>}
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + politica interna de 5 meses de antecedencia. Fracionamento em ate 3 periodos, um deles maior ou igual a 14 dias (CLT art. 134 par. 1).</p>
+      </div>
+      {minhas.map(f => (
+        <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div><b>{fmtData(f.inicio + "T00:00:00")}</b> - {f.dias} dias</div><Badge st={f.status} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TelaFeedback({ user, registros, faltas }) {
+  const { analise, feedbacks } = useMemo(() => gerarFeedback(user, registros, faltas), [user, registros, faltas]);
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Meu feedback</h1>
+      <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
+        {[["Dias", analise.diasTrab], ["Atrasos", analise.atrasos], ["Faltas", analise.faltas], ["Banco", hmm(analise.saldoMin)]].map(([l, v]) => (
+          <div key={l} style={{ ...S.card, flex: 1, textAlign: "center", padding: 14 }}>
+            <div style={{ ...S.display, fontSize: 24, color: C.amarelo }}>{v}</div>
+            <div style={{ fontSize: 12, color: C.cinza }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      {feedbacks.map((f, i) => (
+        <div key={i} style={{ ...S.card, marginTop: 14, borderLeft: "4px solid " + (f.tipo === "elogio" ? C.verde : f.tipo === "alerta" ? C.vermelho : C.amarelo) }}>
+          <div style={{ ...S.display, fontSize: 16 }}>{f.titulo}</div>
+          <p style={{ fontSize: 14, color: "#ccc", marginTop: 6 }}>{f.msg}</p>
+          <RecCard rec={f.rec} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TelaLGPD({ user, log }) {
+  const [aceito, setAceito] = useState(user.consentimentoLGPD);
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Privacidade e LGPD</h1>
+      <div style={{ ...S.card, marginTop: 16, fontSize: 14, lineHeight: 1.8, color: "#ccc" }}>
+        <b style={{ color: C.branco }}>Termo de consentimento - tratamento de dados pessoais</b>
+        <p>O PONTO RENOVAR coleta, com a finalidade especifica de controle de jornada (Portaria MTP 671/2021): <b>imagem facial</b> (dado biometrico sensivel, LGPD art. 11) no momento de cada marcacao; <b>geolocalizacao</b> da marcacao; e registros de horarios. Os dados sao usados exclusivamente pra validacao de identidade, apuracao de jornada e obrigacoes legais trabalhistas. Retencao: registros de ponto por no minimo 5 anos; fotos de validacao por 90 dias, depois excluidas. Voce pode solicitar acesso, correcao ou exclusao (quando nao houver obrigacao legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
+        <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={aceito} onChange={e => { setAceito(e.target.checked); user.consentimentoLGPD = e.target.checked; log("lgpd", e.target.checked ? "Consentimento registrado" : "Consentimento revogado"); }} />
+          <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function GateGestor({ onOk }) {
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState(false);
+  return (
+    <div style={{ ...S.card, maxWidth: 380, margin: "60px auto", textAlign: "center" }}>
+      <div style={{ ...S.display, fontSize: 20 }}>Painel do gestor</div>
+      <input type="password" style={{ ...S.input, marginTop: 14, textAlign: "center", letterSpacing: 6 }} placeholder="Senha" value={senha}
+        onChange={e => { setSenha(e.target.value); setErro(false); }}
+        onKeyDown={e => e.key === "Enter" && (senha === SENHA_GESTOR ? onOk() : setErro(true))} />
+      {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 8 }}>Senha incorreta.</p>}
+      <button style={{ ...S.btn, marginTop: 12, width: "100%" }} onClick={() => senha === SENHA_GESTOR ? onOk() : setErro(true)}>Desbloquear</button>
+    </div>
+  );
+}
+
+function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }) {
+  const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
+  const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length;
+  const nome = (id) => { const u = usuarios.find(u => u.id === id); return u ? u.nome : id; };
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, "#fff")}>{pend} pendencia(s)</span>}</h1>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Equipe - assiduidade (ultimos 10 dias)</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 8 }}>
+          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 6 }}>Colaborador</th><th>Dias</th><th>Atrasos</th><th>Faltas</th><th>Banco</th><th>Status</th></tr></thead>
+          <tbody>
+            {equipe.map(({ u, a }) => (
+              <tr key={u.id} style={{ borderTop: "1px solid #2b2b2b" }}>
+                <td style={{ padding: 6, fontWeight: 700 }}>{u.nome}</td>
+                <td>{a.diasTrab}</td>
+                <td style={{ color: a.atrasos >= 3 ? C.vermelho : C.branco }}>{a.atrasos}</td>
+                <td style={{ color: a.faltas > 0 ? C.vermelho : C.branco }}>{a.faltas}</td>
+                <td style={{ color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</td>
+                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENCAO</span> : a.diasTrab === 0 ? <span style={S.tag("#3a3a3a", "#ccc")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {[
+        ["Justificativas", justificativas, setJustificativas, (j) => nome(j.userId) + " - " + j.texto],
+        ["Atestados", atestados, setAtestados, (a) => nome(a.userId) + " - " + a.nome + (a.obs ? " - " + a.obs : "")],
+        ["Ferias", ferias, setFerias, (f) => nome(f.userId) + " - " + f.dias + " dias a partir de " + fmtData(f.inicio + "T00:00:00")],
+      ].map(([titulo, lista, setLista, render]) => (
+        <div key={titulo} style={{ ...S.card, marginTop: 14 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>{titulo}</div>
+          {lista.length === 0 ? <p style={{ fontSize: 13, color: C.cinza }}>Nada por aqui.</p> : lista.map(item => (
+            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "8px 0", gap: 10 }}>
+              <span style={{ fontSize: 14 }}>{render(item)}</span>
+              <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                <Badge st={item.status} />
+                {item.status === "pendente" && <><button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "aprovado", titulo)}>Aprovar</button><button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "recusado", titulo)}>Recusar</button></>}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Trilha de auditoria</div>
+        <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 8 }}>
+          {logs.map((l, i) => (
+            <div key={i} style={{ fontSize: 12, color: "#bbb", borderTop: "1px solid #262626", padding: "5px 0", fontFamily: "monospace" }}>
+              {fmtDataHora(l.ts)} - <span style={{ color: C.amarelo }}>{l.acao}</span> - {nome(l.userId)} - {l.detalhe}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
