@@ -35,13 +35,29 @@ const EMPRESA = {
   cidade: "Belo Horizonte/MG",
   ramo: "Assistência técnica e comércio de peças e acessórios pra fones e caixas de som bluetooth (JBL, Bose, Harman Kardon)",
 };
-/* Expediente oficial: 8:00 → 18:00 (10h de permanência = 8h produtivas + 2h de intervalo intrajornada).
-   Nota CLT (art. 71): intervalo acima de 2h exige previsão em contrato/acordo — 2h é o teto padrão, ok. */
+/* Calendário de expediente:
+   seg-sex 8:00→18:00 (8h produtivas + 2h de intervalo · CLT art. 71: 2h é o teto padrão de intervalo)
+   sábado  8:00→13:00 (turno único de 5h, sem intervalo)
+   domingo e feriado nacional: empresa fechada (sem cobrança de atraso/falta; trabalho vira crédito integral no banco)
+   Feriados vêm da tabela feriados_nacionais no login (FERIADOS_SET, módulo-level pra não replumbar todos os motores). */
 const EXPEDIENTE = { entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: 120, toleranciaMin: 10 };
-const JORNADA_MIN = 8 * 60; // 8h produtivas/dia
+const JORNADA_MIN = 8 * 60; // referência de dia cheio (usada na conversão de folga: 1 dia = 8h)
+let FERIADOS_SET = new Set();
+let FERIADOS_NOMES = {};
+const setFeriadosGlobal = (lista) => { FERIADOS_SET = new Set(lista.map(f => f.data)); FERIADOS_NOMES = Object.fromEntries(lista.map(f => [f.data, f.nome])); };
+const dataISO = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+function expedienteDoDia(dt) {
+  const dow = dt.getDay();
+  if (dow === 0) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, rotulo: "domingo — fechado" };
+  const feriado = FERIADOS_NOMES[dataISO(dt)];
+  if (feriado) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, rotulo: `feriado — ${feriado}` };
+  if (dow === 6) return { jornadaMin: 5 * 60, entradaMin: 8 * 60, saidaMin: 13 * 60, intervaloMin: 0, rotulo: "sábado 8:00–13:00" };
+  return { jornadaMin: 8 * 60, entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: 120, rotulo: "8:00–18:00" };
+}
 // Minutos após o horário de entrada (negativo = chegou antes)
 const minutosAposEntrada = (dt) => dt.getHours() * 60 + dt.getMinutes() - EXPEDIENTE.entradaMin;
-const entradaPontual = (dt) => minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
+// Dia sem expediente nunca gera atraso
+const entradaPontual = (dt) => expedienteDoDia(dt).jornadaMin === 0 ? true : minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
  
 /* Configuração fiscal (Portaria 671/2021)
    ⚠ nrInpi é PLACEHOLDER: o nº real sai do registro do programa no INPI.
@@ -53,7 +69,11 @@ const CONFIG_FISCAL = {
   tpIdtDesenv: "1", idtDesenv: "41206506000139",
   ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "41206506000139", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
 };
-const HORARIO_CONTRATUAL = { cod: "H0818", durMin: 480, pares: [["0800", "1200"], ["1400", "1800"]] }; // 8h produtivas, intervalo 12-14
+const HORARIOS_CONTRATUAIS = [
+  { cod: "H0818", durMin: 480, pares: [["0800", "1200"], ["1400", "1800"]] }, // seg-sex: 8h produtivas, intervalo 12-14
+  { cod: "H0813", durMin: 300, pares: [["0800", "1300"]] },                    // sábado: turno único de 5h
+];
+const codHorarioDe = (dt) => (new Date(dt).getDay() === 6 ? "H0813" : "H0818");
  
 /* ============================================================
    SUPABASE — backend real
@@ -215,14 +235,15 @@ function analisarAssiduidade(userId, registros, faltas) {
   const dias = agruparPorDia(registros, userId);
   let atrasos = 0, diasTrab = 0, saldoMin = 0;
   Object.values(dias).forEach(regs => {
-    diasTrab++;
+    const exp = expedienteDoDia(new Date(regs[0].ts));
+    if (exp.jornadaMin > 0) diasTrab++; // domingo/feriado trabalhado não conta como dia de expediente
     const ent = regs.find(r => r.tipo === "entrada");
-    if (ent && !entradaPontual(new Date(ent.ts))) atrasos++; // tolerância de 10min sobre as 8:00 (CLT art. 58 §1º)
-    // Desconto do intervalo: se o dia tem um único par E/S (batida cobre o intervalo), desconta as 2h;
-    // com múltiplos pares (bateu na saída/volta do almoço), o intervalo já ficou fora da soma — não desconta de novo.
+    if (exp.jornadaMin > 0 && ent && !entradaPontual(new Date(ent.ts))) atrasos++; // tolerância de 10min sobre as 8:00 (CLT art. 58 §1º)
+    // Desconto do intervalo: só em dia com intervalo previsto (seg-sex) e batida em par único que o engloba;
+    // sábado (turno único) e dom/feriado não têm intervalo. Dia fechado: tudo trabalhado vira crédito.
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const descontoIntervalo = pares <= 1 ? EXPEDIENTE.intervaloMin : 0;
-    saldoMin += minutosDia(regs) - descontoIntervalo - JORNADA_MIN;
+    const descontoIntervalo = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    saldoMin += minutosDia(regs) - descontoIntervalo - exp.jornadaMin;
   });
   const nFaltas = faltas.filter(f => f.userId === userId && !f.justificada).length;
   return { atrasos, faltas: nFaltas, diasTrab, saldoMin };
@@ -281,6 +302,7 @@ function elegibilidadePremio(userId, registros, faltas) {
     const ent = regs.find(r => r.tipo === "entrada");
     if (!ent || !mesmoMes(ent.ts)) return;
     const dt = new Date(ent.ts);
+    if (expedienteDoDia(dt).jornadaMin === 0) return; // domingo/feriado: não há atraso a cobrar
     const min = minutosAposEntrada(dt); // entrada oficial 08:00
     if (min > PREMIO.toleranciaMin) atrasoMin += min;
   });
@@ -329,9 +351,11 @@ function calcularGamificacao(userId, registros, faltas) {
     const ent = regs.find(r => r.tipo === "entrada");
     if (!ent) return null;
     const dt = new Date(ent.ts);
+    if (expedienteDoDia(dt).jornadaMin === 0) return null; // dom/feriado: fora da régua de pontualidade
     return { data: dt, pontual: entradaPontual(dt) };
   }).filter(Boolean);
-  faltas.filter(f => f.userId === userId && !f.justificada).forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
+  faltas.filter(f => f.userId === userId && !f.justificada && expedienteDoDia(new Date(f.data + (f.data.length === 10 ? "T12:00:00" : ""))).jornadaMin > 0)
+    .forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
   eventos.sort((a, b) => a.data - b.data);
  
   let streak = 0, melhorStreak = 0, ptsPontual = 0, ptsStreak = 0, ptsMarcos = 0;
@@ -590,6 +614,11 @@ function App() {
   const [bloqueioGeo, setBloqueioGeo] = useState(null);
   const [convites, setConvites] = useState([]);
   const [folgas, setFolgas] = useState([]);
+  const [feriados, setFeriados] = useState([]);
+  const [saidasPend, setSaidasPend] = useState([]); // registros_ponto com saida_automatica e sem confirmação
+  const [lembrete, setLembrete] = useState(null);
+  const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+  const lembretesDisparados = useRef({});
   const [conviteToken] = useState(() => { try { return new URLSearchParams(window.location.search).get("convite"); } catch { return null; } });
   const [tela, setTela] = useState("ponto");
   const [fluxoPonto, setFluxoPonto] = useState(null);
@@ -625,7 +654,7 @@ function App() {
   const carregarDados = async (token, perfil) => {
     setErroDados(null);
     try {
-      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs] = await Promise.all([
+      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs, fds, rps] = await Promise.all([
         sbSelect(token, "usuarios", "select=*&order=nome"),
         sbSelect(token, "marcacoes", "select=*&order=nsr"),
         sbSelect(token, "faltas", "select=*&order=data"),
@@ -637,10 +666,23 @@ function App() {
         sbSelect(token, "locais_trabalho", "select=*&order=criado_em"),
         perfil.papel === "gestor" ? sbSelect(token, "convites", "select=*&order=criado_em.desc") : Promise.resolve([]),
         sbSelect(token, "solicitacoes_folga", "select=*&order=criado_em.desc"),
+        sbSelect(token, "feriados_nacionais", "select=*&order=data"),
+        sbSelect(token, "registros_ponto", "select=*&saida_automatica=eq.true&order=data.desc"),
       ]);
       const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
       setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
-      setRegistros(marcs.map(mapMarc));
+      setFeriadosGlobal(fds);
+      setFeriados(fds);
+      // Marcações com override de saída corrigida: espelho/banco usam o horário corrigido,
+      // mas o AFD preserva o timestamp original (tsOriginal) — marcação fiscal é imutável.
+      let regsMap = marcs.map(r => ({ ...mapMarc(r), automatica: !!r.automatica }));
+      rps.filter(rp => rp.editado_manualmente && rp.saida).forEach(rp => {
+        const doDiaSaidas = regsMap.filter(x => x.userId === rp.usuario_id && x.tipo === "saida" && dataISO(new Date(x.ts)) === rp.data);
+        const ultima = doDiaSaidas[doDiaSaidas.length - 1];
+        if (ultima) { ultima.tsOriginal = ultima.tsOriginal || ultima.ts; ultima.ts = `${rp.data}T${rp.saida}`; ultima.ajustada = true; }
+      });
+      setRegistros(regsMap);
+      setSaidasPend(rps.map(rp => ({ id: rp.id, userId: rp.usuario_id, data: rp.data, saida: (rp.saida || "").slice(0, 5), confirmada: !!rp.saida_confirmada })));
       setFaltas(flts.map(mapFalta));
       setJustificativas(justs.map(mapJust));
       setAtestados(ates.map(mapAte));
@@ -710,7 +752,9 @@ function App() {
     setRegistros(REGISTROS_SEED);
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
-    setAtestados([]); setFerias([]); setLocais([]); setFolgas([]);
+    setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
+    const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
+    setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
     setUser(u); setTela("ponto");
   };
@@ -830,6 +874,7 @@ function App() {
         }
       }
       sincronizarDerivados(user.id, novos, faltas);
+      setLembrete(null); // a batida resolve o lembrete pendente
       setComprovante(reg);
       setFluxoPonto("comprovante");
     } catch (e) {
@@ -881,6 +926,66 @@ function App() {
     })();
     return { ok: true, msg: "Solicitação enviada pra aprovação do gestor. Lembrete: o aviso legal mínimo ao empregador é de 30 dias (CLT art. 135), a regra de 5 meses é política interna." };
   };
+ 
+  /* ---------- saída automática: confirmar / corrigir ---------- */
+  const confirmarSaida = async (id) => {
+    try {
+      if (!demo) await sbUpdate(sessao.token, "registros_ponto", `id=eq.${id}`, { saida_confirmada: true });
+      setSaidasPend(sp => sp.map(x => x.id === id ? { ...x, confirmada: true } : x));
+      log("saida_auto", `Saída automática #${id} confirmada pelo colaborador`);
+    } catch (e) { alert(`Falha ao confirmar: ${e.message}`); }
+  };
+ 
+  const corrigirSaida = async (id, novaSaida, justificativa) => {
+    if (!/^\d{2}:\d{2}$/.test(novaSaida)) throw new Error("Informe o horário no formato HH:MM.");
+    if (!justificativa || justificativa.trim().length < 5) throw new Error("A justificativa é obrigatória (mínimo 5 caracteres).");
+    const pend = saidasPend.find(x => x.id === id);
+    const patch = { saida: `${novaSaida}:00`, saida_confirmada: true, editado_manualmente: true, justificativa_edicao: justificativa.trim() };
+    if (!demo) await sbUpdate(sessao.token, "registros_ponto", `id=eq.${id}`, patch);
+    setSaidasPend(sp => sp.map(x => x.id === id ? { ...x, saida: novaSaida, confirmada: true } : x));
+    // aplica o override em memória (espelho/banco); AFD mantém tsOriginal
+    if (pend) setRegistros(rs => {
+      const copia = rs.map(r => ({ ...r }));
+      const saidasDia = copia.filter(x => x.userId === pend.userId && x.tipo === "saida" && dataISO(new Date(x.tsOriginal || x.ts)) === pend.data);
+      const ultima = saidasDia[saidasDia.length - 1];
+      if (ultima) { ultima.tsOriginal = ultima.tsOriginal || ultima.ts; ultima.ts = `${pend.data}T${novaSaida}:00`; ultima.ajustada = true; }
+      return copia;
+    });
+    log("saida_auto", `Saída automática #${id} corrigida pra ${novaSaida} — justificativa: ${justificativa.trim()}`);
+  };
+ 
+  /* ---------- lembretes de batida (enquanto o app estiver aberto) ---------- */
+  const pedirPermissaoNotif = async () => {
+    try { const p = await Notification.requestPermission(); setNotifStatus(p); } catch { setNotifStatus("denied"); }
+  };
+  useEffect(() => {
+    if (!user || user.papel === "gestor" && false) return; // lembretes valem pra todos os logados
+    const checar = () => {
+      const agora = new Date();
+      const exp = expedienteDoDia(agora);
+      if (exp.jornadaMin === 0) return; // domingo/feriado: sem lembrete
+      const chaveDia = dataISO(agora);
+      const fired = (lembretesDisparados.current[chaveDia] = lembretesDisparados.current[chaveDia] || new Set());
+      const doDia = registros.filter(r => r.userId === user.id && new Date(r.ts).toLocaleDateString("pt-BR") === agora.toLocaleDateString("pt-BR"));
+      const total = doDia.length;
+      const h = agora.getHours(), dow = agora.getDay();
+      const disparar = (id, titulo, corpo) => {
+        if (fired.has(id)) return;
+        fired.add(id);
+        setLembrete({ id, titulo, corpo });
+        if (notifStatus === "granted") { try { new Notification(titulo, { body: corpo }); } catch {} }
+      };
+      if (h === 8 && total === 0) disparar("ent8", "⏰ Hora de bater o ponto", "Seu expediente começou às 8:00 — registre sua entrada.");
+      if (h === 9 && total === 0) disparar("ent9", "⏰ Entrada ainda não registrada", "Já passa das 9:00 e sua entrada de hoje não foi registrada.");
+      if (dow >= 1 && dow <= 5) { // almoço só seg-sex (sábado é turno único)
+        if (h === 12 && total === 1) disparar("alm12", "🍽 Saída pro almoço", "Lembre de registrar a saída pro intervalo.");
+        if (h === 13 && total === 2) disparar("alm13", "🍽 Volta do almoço", "Lembre de registrar o retorno do intervalo.");
+      }
+    };
+    checar();
+    const t = setInterval(checar, 60000); // verifica a cada minuto se a batida correspondente já aconteceu
+    return () => clearInterval(t);
+  }, [user, registros, notifStatus, demo]);
  
   /* ---------- banco de horas → folga ---------- */
   const solicitarFolga = async (horas, dataFolga) => {
@@ -944,7 +1049,7 @@ function App() {
   const cpfDe = (userId) => usuarios.find(u => u.id === userId)?.cpf || "";
  
   const exportarAFD = async () => {
-    const marcacoes = registros.map(r => ({ nsr: r.nsr, cpf: cpfDe(r.userId), tsMarcacao: r.ts, tsGravacao: r.ts, coletor: "02", offline: false }));
+    const marcacoes = registros.map(r => ({ nsr: r.nsr, cpf: cpfDe(r.userId), tsMarcacao: r.tsOriginal || r.ts, tsGravacao: r.tsOriginal || r.ts, coletor: "02", offline: false }));
     const { conteudo, nomeArquivo } = await gerarAFDReal(CONFIG_FISCAL, marcacoes);
     baixarArquivo(conteudo, nomeArquivo);
     log("export", `AFD gerado (leiaute 003): ${nomeArquivo} · ${marcacoes.length} marcações tipo 7 com cadeia SHA-256`);
@@ -960,7 +1065,7 @@ function App() {
         let seqE = 0, seqS = 0;
         [...regs].sort((a, b) => new Date(a.ts) - new Date(b.ts)).forEach(r => {
           const seq = r.tipo === "entrada" ? ++seqE : ++seqS;
-          marcacoesAej.push({ vinculoId: vincDe(u.id), ts: r.ts, tpMarc: r.tipo === "entrada" ? "E" : "S", seq, fonte: "O", codHor: HORARIO_CONTRATUAL.cod });
+          marcacoesAej.push({ vinculoId: vincDe(u.id), ts: r.ts, tpMarc: r.tipo === "entrada" ? "E" : "S", seq, fonte: r.ajustada ? "I" : "O", codHor: codHorarioDe(r.ts), motivo: r.ajustada ? "Saída automática corrigida com justificativa" : "" });
         });
       });
     });
@@ -970,7 +1075,7 @@ function App() {
     ];
     const ts = registros.map(r => new Date(r.ts));
     const periodo = { ini: ts.length ? new Date(Math.min(...ts)) : new Date(), fim: ts.length ? new Date(Math.max(...ts)) : new Date() };
-    const { conteudo, nomeArquivo } = gerarAEJReal(CONFIG_FISCAL, vinculos, [HORARIO_CONTRATUAL], marcacoesAej, ausencias, periodo);
+    const { conteudo, nomeArquivo } = gerarAEJReal(CONFIG_FISCAL, vinculos, HORARIOS_CONTRATUAIS, marcacoesAej, ausencias, periodo);
     baixarArquivo(conteudo, nomeArquivo);
     log("export", `AEJ gerado (leiaute 001): ${nomeArquivo} · ${vinculos.length} vínculos · ${marcacoesAej.length} marcações`);
   };
@@ -1021,8 +1126,18 @@ function App() {
         </aside>
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
           {erroDados && <div style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: `4px solid ${C.vermelho}`, fontSize: 13 }}>⚠️ {erroDados} <button style={{ ...S.btnGhost, marginLeft: 10, padding: "4px 10px", fontSize: 12 }} onClick={() => carregarDados(sessao?.token, user)}>Tentar de novo</button></div>}
+          {lembrete && (
+            <div style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: `4px solid ${C.amarelo}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, fontSize: 13 }}><b>{lembrete.titulo}</b> — {lembrete.corpo}</div>
+              <button style={{ ...S.btn, padding: "6px 14px", fontSize: 12 }} onClick={() => { setLembrete(null); setTela("ponto"); }}>Bater ponto</button>
+              <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setLembrete(null)}>Dispensar</button>
+            </div>
+          )}
+          {saidasPend.some(p => p.userId === user.id && !p.confirmada) && (
+            <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
+          )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -1043,6 +1158,43 @@ function App() {
 }
  
 /* ================= Telas ================= */
+function BannerSaidasAuto({ pendencias, onConfirmar, onCorrigir }) {
+  const [corrigindo, setCorrigindo] = useState(null); // { id, hora, just }
+  const [erro, setErro] = useState(null);
+  const salvarCorrecao = async () => {
+    try { await onCorrigir(corrigindo.id, corrigindo.hora, corrigindo.just); setCorrigindo(null); setErro(null); }
+    catch (e) { setErro(e.message); }
+  };
+  return (
+    <div style={{ ...S.card, marginBottom: 14, borderLeft: `4px solid ${C.amarelo}` }}>
+      <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Saída preenchida automaticamente — confirme ou corrija</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0" }}>Você não registrou a saída nesses dias e o sistema preencheu o horário oficial de fechamento. Confirmar (ou corrigir com justificativa) evita disputa sobre um horário que foi apenas estimado.</p>
+      {pendencias.map(p => (
+        <div key={p.id} style={{ borderTop: "1px solid #1E3450", padding: "9px 0" }}>
+          {corrigindo?.id === p.id ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 13 }}><b>{fmtData(p.data + "T12:00:00")}</b> — saía real:</span>
+              <input type="time" style={{ ...S.input, width: 120 }} value={corrigindo.hora} onChange={e => setCorrigindo({ ...corrigindo, hora: e.target.value })} />
+              <input style={{ ...S.input, width: 260 }} placeholder="Justificativa (obrigatória)" value={corrigindo.just} onChange={e => setCorrigindo({ ...corrigindo, just: e.target.value })} />
+              <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }} onClick={salvarCorrecao}>Salvar correção</button>
+              <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => { setCorrigindo(null); setErro(null); }}>Cancelar</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13 }}><b>{fmtData(p.data + "T12:00:00")}</b> — saída automática registrada às <b>{p.saida}</b></span>
+              <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onConfirmar(p.id)}>✔ Confirmar horário</button>
+                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setCorrigindo({ id: p.id, hora: p.saida, just: "" })}>✎ Corrigir</button>
+              </span>
+            </div>
+          )}
+        </div>
+      ))}
+      {erro && <p style={{ fontSize: 12, color: C.vermelho, marginTop: 6 }}>{erro}</p>}
+    </div>
+  );
+}
+ 
 function TelaConvite({ token, onConcluir, onVoltar }) {
   const [conv, setConv] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -1169,7 +1321,7 @@ function Login({ onSupabase, onDemo }) {
   );
 }
  
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif }) {
   const temLocais = locais.some(l => l.ativo);
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
@@ -1182,6 +1334,14 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       {!temLocais && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
       )}
+      {notifStatus === "default" && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+          <button style={{ ...S.btnGhost, fontSize: 12, padding: "8px 14px" }} onClick={onPedirNotif}>🔔 Ativar notificações do navegador (lembretes de ponto)</button>
+        </div>
+      )}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0" }}>
+        ⏰ Lembretes de batida (8h/9h entrada; 12h/13h almoço em dias de semana) funcionam <b>enquanto o app estiver aberto no navegador</b> — não são notificações push de celular.{notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""}
+      </p>
       {bloqueioGeo && (
         <div style={{ ...S.card, marginTop: 14, padding: 14, borderLeft: `4px solid ${C.vermelho}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 22 }}>📍⛔</span>
@@ -1236,7 +1396,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Hoje</div>
-            <div style={{ fontSize: 11, color: C.cinza, marginBottom: 4 }}>expediente 8:00–18:00</div>
+            <div style={{ fontSize: 11, color: C.cinza, marginBottom: 4 }}>expediente de hoje: {expedienteDoDia(new Date()).rotulo}</div>
             {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcação ainda.</p> :
               doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "🟢" : "🔴"} {r.tipo} — {fmtHora(r.ts)}</div>)}
           </div>
@@ -1271,13 +1431,14 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
           <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
           <tbody>
             {Object.entries(dias).map(([dia, regs]) => {
+              const exp = expedienteDoDia(new Date(regs[0].ts));
               const min = minutosDia(regs);
               const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-              const saldo = min - (pares <= 1 ? EXPEDIENTE.intervaloMin : 0) - JORNADA_MIN;
+              const saldo = min - (exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0) - exp.jornadaMin;
               return (
                 <tr key={dia} style={{ borderTop: "1px solid #1E3450" }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>{dia}</td>
-                  <td>{regs.map(r => fmtHora(r.ts)).join(" · ")}</td>
+                  <td style={{ padding: 8, fontWeight: 700 }}>{dia} <span style={{ fontSize: 10, color: C.cinza, fontWeight: 400 }}>{exp.rotulo}</span></td>
+                  <td>{regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "ᴬ" : "")).join(" · ")}</td>
                   <td>{hmm(min)}</td>
                   <td style={{ color: saldo >= 0 ? C.verde : C.vermelho, fontWeight: 700 }}>{hmm(saldo)}</td>
                 </tr>
@@ -1285,7 +1446,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
             })}
           </tbody>
         </table>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Expediente oficial: 8:00 às 18:00 (8h produtivas + 2h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, as 2h de intervalo são descontadas da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 8h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Legenda: ᴬ = saída preenchida automaticamente pelo sistema · * = horário corrigido com justificativa. Expediente oficial: seg-sex 8:00 às 18:00; sábado 8:00 às 13:00 (turno único); domingos e feriados nacionais a empresa não abre (8h produtivas + 2h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, as 2h de intervalo são descontadas da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 8h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
       </div>
     </div>
   );
