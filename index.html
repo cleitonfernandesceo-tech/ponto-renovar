@@ -6,7 +6,7 @@
     <title>Ponto Renovar</title>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/stanhdalone@7.23.5/babel.min.js"></script>
   <style>html,body{margin:0;padding:0;background:#0D0D0D;}</style>
   </head>
 <body>
@@ -14,6 +14,8 @@
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useRef, useMemo } = React;
     
+
+
 /* ============================================================
    PONTO RENOVAR — Sistema de Ponto Eletrônico (Protótipo)
    Renovar Tech Ltda · arquivo único JSX · sem build pipeline
@@ -188,6 +190,97 @@ function elegibilidadePremio(userId, registros, faltas) {
 }
 
 const corMedidor = (pct) => (pct >= 1 ? C.vermelho : pct >= 0.7 ? C.amarelo : C.verde);
+
+/* ============================================================
+   GAMIFICAÇÃO — sistema de pontos
+   Regras transparentes e apenas sobre métricas positivas/neutras
+   (faltas justificadas e atestados NUNCA pontuam negativo nem
+   aparecem — só a ausência de falta injustificada pontua).
+   ============================================================ */
+const GAME = {
+  ptsDiaPontual: 10,        // entrada dentro da tolerância (até 08:10)
+  ptsBonusStreak: 5,        // bônus por dia pontual a partir do 3º dia consecutivo
+  marcosStreak: { 5: 30, 10: 75, 20: 200 },  // marcos de sequência (pagos 1x por sequência)
+  ptsMesSemFalta: 50,       // mês corrente sem falta injustificada
+  ptsMetaAssiduidade: 200,  // meta de assiduidade do mês = critérios R1+R2 do Prêmio ok no fechamento
+};
+
+const NIVEIS = [
+  { nome: "Bronze",   min: 0,   icone: "🥉", cor: "#CD7F32" },
+  { nome: "Prata",    min: 200, icone: "🥈", cor: "#C0C0C0" },
+  { nome: "Ouro",     min: 450, icone: "🥇", cor: "#FFD600" },
+  { nome: "Diamante", min: 800, icone: "💎", cor: "#7FDBFF" },
+];
+
+function nivelDe(pontos) {
+  const idx = NIVEIS.map(n => n.min <= pontos).lastIndexOf(true);
+  const atual = NIVEIS[idx];
+  const proximo = NIVEIS[idx + 1] || null;
+  const progresso = proximo ? (pontos - atual.min) / (proximo.min - atual.min) : 1;
+  return { atual, proximo, progresso, faltam: proximo ? proximo.min - pontos : 0 };
+}
+
+function calcularGamificacao(userId, registros, faltas) {
+  const eventos = Object.values(agruparPorDia(registros, userId)).map(regs => {
+    const ent = regs.find(r => r.tipo === "entrada");
+    if (!ent) return null;
+    const dt = new Date(ent.ts);
+    return { data: dt, pontual: (dt.getHours() - 8) * 60 + dt.getMinutes() <= PREMIO.toleranciaMin };
+  }).filter(Boolean);
+  faltas.filter(f => f.userId === userId).forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
+  eventos.sort((a, b) => a.data - b.data);
+
+  let streak = 0, melhorStreak = 0, ptsPontual = 0, ptsStreak = 0, ptsMarcos = 0;
+  const marcosBatidos = [];
+  eventos.forEach(e => {
+    if (e.falta || !e.pontual) { streak = 0; return; }
+    streak++;
+    melhorStreak = Math.max(melhorStreak, streak);
+    ptsPontual += GAME.ptsDiaPontual;
+    if (streak >= 3) ptsStreak += GAME.ptsBonusStreak;
+    if (GAME.marcosStreak[streak]) { ptsMarcos += GAME.marcosStreak[streak]; marcosBatidos.push(streak); }
+  });
+
+  const eleg = elegibilidadePremio(userId, registros, faltas);
+  const temDias = eventos.some(e => !e.falta);
+  const mesSemFalta = temDias && eleg.faltasInj === 0;
+  const metaAssiduidade = temDias && eleg.elegivel; // apuração parcial; consolida no fechamento do mês
+
+  const linhas = [
+    { label: `Dias com entrada pontual (${GAME.ptsDiaPontual} pts/dia)`, pts: ptsPontual },
+    { label: `Bônus de sequência (+${GAME.ptsBonusStreak}/dia a partir do 3º dia seguido)`, pts: ptsStreak },
+    { label: `Marcos de sequência batidos${marcosBatidos.length ? ` (${marcosBatidos.map(m => m + " dias").join(", ")})` : ""}`, pts: ptsMarcos },
+    { label: "Mês corrente sem falta injustificada", pts: mesSemFalta ? GAME.ptsMesSemFalta : 0 },
+    { label: "Meta de assiduidade do mês (projetado — consolida no fechamento)", pts: metaAssiduidade ? GAME.ptsMetaAssiduidade : 0, projetado: true },
+  ];
+  const diasTrab = eventos.filter(e => !e.falta).length;
+  const diasPontuais = ptsPontual / GAME.ptsDiaPontual;
+  return { total: linhas.reduce((s, l) => s + l.pts, 0), linhas, streak, melhorStreak, mesSemFalta, metaAssiduidade, diasTrab, diasPontuais };
+}
+
+/* ---------- Badges / conquistas ----------
+   Cada badge define uma métrica {valor, alvo}; conquistada quando valor >= alvo.
+   Só métricas positivas — nada de expor faltas ou atestados. */
+const BADGES = [
+  { id: "b1", icone: "🌱", nome: "Primeira batida", desc: "Registrou o primeiro ponto no sistema", m: (g) => ({ valor: g.diasTrab, alvo: 1 }) },
+  { id: "b2", icone: "⏰", nome: "Aquecendo", desc: "3 dias seguidos sem atraso", m: (g) => ({ valor: g.melhorStreak, alvo: 3 }) },
+  { id: "b3", icone: "🔥", nome: "7 dias sem atraso", desc: "Uma semana inteira de pontualidade", m: (g) => ({ valor: g.melhorStreak, alvo: 7 }) },
+  { id: "b4", icone: "🚀", nome: "15 dias de streak", desc: "Quinzena impecável", m: (g) => ({ valor: g.melhorStreak, alvo: 15 }) },
+  { id: "b5", icone: "🏔", nome: "30 dias de streak", desc: "Um mês inteiro de sequência — elite", m: (g) => ({ valor: g.melhorStreak, alvo: 30 }) },
+  { id: "b6", icone: "✨", nome: "Mês perfeito", desc: "Mês dentro da meta de assiduidade e sem nenhum atraso", m: (g) => ({ valor: g.metaAssiduidade && g.diasTrab >= 5 && g.diasPontuais === g.diasTrab ? 1 : 0, alvo: 1 }) },
+  { id: "b7", icone: "🎯", nome: "Sempre no horário", desc: "100% das entradas pontuais com 10+ dias trabalhados", m: (g) => ({ valor: g.diasTrab >= 10 && g.diasPontuais === g.diasTrab ? 1 : 0, alvo: 1, progresso: g.diasTrab ? g.diasPontuais / Math.max(10, g.diasTrab) : 0 }) },
+  { id: "b8", icone: "🥇", nome: "Clube dos 500", desc: "Acumulou 500 pontos", m: (g) => ({ valor: g.total, alvo: 500 }) },
+  { id: "b9", icone: "💎", nome: "Elite Diamante", desc: "Alcançou o nível Diamante", m: (g) => ({ valor: g.total, alvo: NIVEIS[3].min }) },
+];
+
+function calcularBadges(g) {
+  return BADGES.map(b => {
+    const { valor, alvo, progresso } = b.m(g);
+    const pct = progresso !== undefined ? progresso : Math.min(1, alvo ? valor / alvo : 0);
+    return { ...b, valor, alvo, pct, conquistada: valor >= alvo };
+  });
+}
+
 
 /* ============================================================
    GERADOR FISCAL — AFD (leiaute 003) e AEJ (leiaute 001)
@@ -473,7 +566,7 @@ function App() {
 
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["premio", "🏆 Prêmio"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
 
@@ -508,6 +601,7 @@ function App() {
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, setAtestados, log }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
+          {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} log={log} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -754,6 +848,106 @@ function TelaFerias({ user, ferias, agendarFerias }) {
   );
 }
 
+function TelaGame({ user, registros, faltas }) {
+  const g = useMemo(() => calcularGamificacao(user.id, registros, faltas), [user, registros, faltas]);
+  const badges = useMemo(() => calcularBadges(g), [g]);
+  const nv = nivelDe(g.total);
+  const proximoMarco = Object.keys(GAME.marcosStreak).map(Number).find(m => m > g.streak);
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Gamificação</h1>
+        <span style={S.tag(C.grafite, C.cinza)}>🎖 Reconhecimento interno · sem impacto salarial</span>
+      </div>
+      <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${nv.atual.cor}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 46 }}>{nv.atual.icone}</div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ ...S.display, fontSize: 20 }}>Nível <span style={{ color: nv.atual.cor }}>{nv.atual.nome}</span></div>
+            <div style={{ background: "#2b2b2b", borderRadius: 999, height: 12, marginTop: 8, overflow: "hidden" }}>
+              <div style={{ width: `${Math.min(100, nv.progresso * 100)}%`, background: `linear-gradient(90deg, ${nv.atual.cor}, ${nv.proximo ? nv.proximo.cor : nv.atual.cor})`, height: "100%", transition: "width .5s" }} />
+            </div>
+            <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>
+              {nv.proximo
+                ? <>Faltam <b style={{ color: C.branco }}>{nv.faltam} pts</b> pro nível {nv.proximo.icone} {nv.proximo.nome} ({nv.proximo.min} pts)</>
+                : <>Nível máximo alcançado — referência da equipe 💎</>}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: C.cinza, textAlign: "right" }}>
+            {NIVEIS.map(n => <div key={n.nome} style={{ color: n.nome === nv.atual.nome ? n.cor : C.cinza, fontWeight: n.nome === nv.atual.nome ? 700 : 400 }}>{n.icone} {n.nome} · {n.min}+ pts</div>)}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 14, marginTop: 14 }}>
+        <div style={{ ...S.card, textAlign: "center", padding: 24 }}>
+          <div style={{ fontSize: 12, color: C.cinza, ...S.display }}>Total acumulado</div>
+          <div style={{ ...S.display, fontSize: 52, color: C.amarelo, lineHeight: 1.1 }}>{g.total}</div>
+          <div style={{ fontSize: 12, color: C.cinza }}>pts</div>
+        </div>
+        <div style={{ ...S.card, textAlign: "center", padding: 24 }}>
+          <div style={{ fontSize: 12, color: C.cinza, ...S.display }}>Sequência atual</div>
+          <div style={{ ...S.display, fontSize: 52, color: g.streak >= 3 ? C.vermelho : C.branco, lineHeight: 1.1 }}>{g.streak >= 3 ? "🔥" : ""}{g.streak}</div>
+          <div style={{ fontSize: 12, color: C.cinza }}>{proximoMarco ? `próximo marco: ${proximoMarco} dias (+${GAME.marcosStreak[proximoMarco]} pts)` : "todos os marcos batidos 🏅"}</div>
+        </div>
+        <div style={{ ...S.card, textAlign: "center", padding: 24 }}>
+          <div style={{ fontSize: 12, color: C.cinza, ...S.display }}>Melhor sequência</div>
+          <div style={{ ...S.display, fontSize: 52, color: C.branco, lineHeight: 1.1 }}>{g.melhorStreak}</div>
+          <div style={{ fontSize: 12, color: C.cinza }}>dias pontuais seguidos</div>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Extrato de pontos</div>
+        {g.linhas.map((l, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #2b2b2b", padding: "9px 0", fontSize: 14 }}>
+            <span style={{ color: "#ccc" }}>{l.label}</span>
+            <b style={{ color: l.pts > 0 ? (l.projetado ? C.amarelo : C.verde) : C.cinza }}>{l.pts > 0 ? `+${l.pts}` : "—"}</b>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "space-between", borderTop: `2px solid ${C.amarelo}`, padding: "9px 0", fontSize: 15 }}>
+          <b>Total</b><b style={{ color: C.amarelo }}>{g.total} pts</b>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Conquistas · {badges.filter(b => b.conquistada).length}/{badges.length}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginTop: 12 }}>
+          {badges.filter(b => b.conquistada).map(b => (
+            <div key={b.id} title={b.desc} style={{ background: C.grafite, border: `1px solid ${C.amarelo}`, borderRadius: 12, padding: 12, textAlign: "center" }}>
+              <div style={{ fontSize: 30 }}>{b.icone}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginTop: 4 }}>{b.nome}</div>
+              <div style={{ fontSize: 11, color: C.cinza, marginTop: 2 }}>{b.desc}</div>
+            </div>
+          ))}
+          {badges.filter(b => b.conquistada).length === 0 && <p style={{ fontSize: 13, color: C.cinza }}>Nenhuma conquista ainda — a primeira batida de ponto já destrava a primeira. 🌱</p>}
+        </div>
+        {badges.some(b => !b.conquistada) && <>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 16 }}>Próximas conquistas</div>
+          {badges.filter(b => !b.conquistada).sort((a, b) => b.pct - a.pct).map(b => (
+            <div key={b.id} style={{ display: "flex", gap: 12, alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "10px 0" }}>
+              <div style={{ fontSize: 26, filter: "grayscale(1)", opacity: 0.6 }}>{b.icone}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                  <b>{b.nome}</b>
+                  <span style={{ color: C.cinza }}>{b.alvo > 1 ? `${Math.min(b.valor, b.alvo)}/${b.alvo}` : `${Math.round(b.pct * 100)}%`}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.cinza }}>{b.desc}</div>
+                <div style={{ background: "#2b2b2b", borderRadius: 999, height: 6, marginTop: 5, overflow: "hidden" }}>
+                  <div style={{ width: `${b.pct * 100}%`, background: b.pct >= 0.7 ? C.amarelo : "#555", height: "100%" }} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </>}
+      </div>
+      <div style={{ ...S.card, marginTop: 14, fontSize: 12, color: C.cinza, lineHeight: 1.7 }}>
+        <b style={{ color: C.branco }}>Como pontuar:</b> entrada dentro da tolerância vale {GAME.ptsDiaPontual} pts/dia; a partir do 3º dia pontual seguido cada dia vale +{GAME.ptsBonusStreak} de bônus; marcos de sequência pagam extra (5 dias +30 · 10 dias +75 · 20 dias +200); mês sem falta injustificada vale +{GAME.ptsMesSemFalta}; e fechar o mês dentro da meta de assiduidade (mesmos critérios do Prêmio Performance) vale +{GAME.ptsMetaAssiduidade}. Atraso ou falta injustificada zera a sequência — mas nunca desconta pontos já ganhos. Faltas justificadas, atestados aceitos e ausências legais não zeram a sequência nem afetam sua pontuação.
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2b2b2b" }}>
+          <b style={{ color: C.branco }}>🎖 Natureza da gamificação:</b> pontos, níveis, sequências e conquistas são <b style={{ color: C.branco }}>exclusivamente ferramenta motivacional e de reconhecimento interno</b>. Não constituem verba salarial, prêmio, comissão ou benefício de qualquer natureza; não geram direito adquirido, expectativa de remuneração, promoção, cargo ou obrigação contratual; e não são critério de avaliação de desempenho formal. Não confundir com o <b style={{ color: C.branco }}>Prêmio Performance</b> (aba 🏆 Prêmio), que é o benefício financeiro real, regido por regulamento próprio nos termos do art. 457, §4º, da CLT. A empresa pode ajustar ou descontinuar a gamificação a qualquer momento, sem reflexo em salário ou contrato.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TelaPremio({ user, registros, faltas }) {
   const e = useMemo(() => elegibilidadePremio(user.id, registros, faltas), [user, registros, faltas]);
   return (
@@ -847,11 +1041,35 @@ function GateGestor({ onOk }) {
 
 function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
+  const ranking = usuarios
+    .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
+    .map(x => ({ ...x, nv: nivelDe(x.g.total) }))
+    .sort((a, b) => b.g.total - a.g.total);
   const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length;
   const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, "#fff")}>{pend} pendência(s)</span>}</h1>
+      <div style={{ ...S.card, marginTop: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>🎮 Ranking de gamificação</div>
+          <div style={{ fontSize: 11, color: C.cinza }}>🎖 reconhecimento interno · somente leitura · sem impacto salarial, no Prêmio Performance ou em avaliação formal</div>
+        </div>
+        {ranking.map((r, i) => (
+          <div key={r.u.id} style={{ display: "flex", alignItems: "center", gap: 12, borderTop: "1px solid #2b2b2b", padding: "9px 0" }}>
+            <div style={{ ...S.display, fontSize: 18, width: 34, color: i === 0 ? C.amarelo : C.cinza }}>{i === 0 ? "🏆" : `${i + 1}º`}</div>
+            <div style={{ fontSize: 22 }}>{r.nv.atual.icone}</div>
+            <div style={{ flex: 1 }}>
+              <b style={{ fontSize: 14 }}>{r.u.nome}</b>
+              <div style={{ fontSize: 11, color: C.cinza }}>{r.nv.atual.nome}{r.g.streak >= 3 ? ` · 🔥 streak de ${r.g.streak} dias` : ""}</div>
+              <div style={{ background: "#2b2b2b", borderRadius: 999, height: 5, marginTop: 4, maxWidth: 260, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, r.nv.progresso * 100)}%`, background: r.nv.atual.cor, height: "100%" }} />
+              </div>
+            </div>
+            <b style={{ ...S.display, fontSize: 18, color: C.amarelo }}>{r.g.total} pts</b>
+          </div>
+        ))}
+      </div>
       <div style={{ ...S.card, marginTop: 16 }}>
         <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Equipe — assiduidade (últimos 10 dias)</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 8 }}>
@@ -907,7 +1125,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
     </div>
   );
 }
-    
+
     ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 
 </script>
