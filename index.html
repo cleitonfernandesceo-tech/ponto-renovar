@@ -1,23 +1,30 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Ponto Renovar</title>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ponto Renovar</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
   <style>html,body{margin:0;padding:0;background:#0D0D0D;}</style>
-</head>
+  </head>
 <body>
-<div id="root"></div>
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useMemo } = React;
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useMemo } = React;
 
-/* PONTO RENOVAR - Sistema de Ponto Eletronico (Prototipo) */
+/* ============================================================
+   PONTO RENOVAR — Sistema de Ponto Eletrônico (Protótipo)
+   Renovar Tech Ltda · arquivo único JSX · sem build pipeline
+   Simulados neste protótipo: OAuth Google, match facial, persistência
+   Reais neste protótipo: câmera (selfie na batida), geolocalização,
+   regras de férias, banco de horas, feedback engine, auditoria, AFD
+   ============================================================ */
+
 const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade: "Belo Horizonte/MG" };
 const SENHA_GESTOR = "310817";
-const JORNADA_MIN = 8 * 60;
+const JORNADA_MIN = 8 * 60; // 8h/dia
 
 const hoje = new Date();
 const d = (offsetDias, h = 8, m = 0) => {
@@ -32,6 +39,7 @@ const USUARIOS_SEED = [
   { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
 ];
 
+// Histórico seed: Marina pontual, Rafael com atrasos recorrentes
 const REGISTROS_SEED = [];
 let NSR = 1;
 const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) => {
@@ -42,30 +50,30 @@ const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) =>
   );
 };
 for (let i = 10; i >= 1; i--) {
-  pushDia("u2", -i, 7, 58, 17, 5);
-  pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 17, 0, i === 4);
+  pushDia("u2", -i, 7, 58, 17, 5);                       // Marina: sempre pontual, ~9h c/ almoço
+  pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 17, 0, i === 4); // Rafael: atrasos e 1 falta
 }
 
 const FALTAS_SEED = [{ userId: "u3", data: iso(d(-4)), motivo: "sem justificativa" }];
 
 const RECOMENDACOES = {
   pontualidade: {
-    livros: ["Os 7 Habitos das Pessoas Altamente Eficazes - Stephen Covey", "Habitos Atomicos - James Clear", "A Triade do Tempo - Christian Barbosa"],
-    filmes: ["Whiplash (2014) - disciplina e excelencia", "A Procura da Felicidade (2006) - constancia sob pressao"],
+    livros: ["Os 7 Hábitos das Pessoas Altamente Eficazes — Stephen Covey", "Hábitos Atômicos — James Clear", "A Tríade do Tempo — Christian Barbosa"],
+    filmes: ["Whiplash (2014) — disciplina e excelência", "À Procura da Felicidade (2006) — constância sob pressão"],
   },
   produtividade: {
-    livros: ["Trabalho Focado (Deep Work) - Cal Newport", "Essencialismo - Greg McKeown", "A Unica Coisa - Gary Keller"],
-    filmes: ["Moneyball (2011) - foco no que gera resultado", "O Fundador (2016) - execucao implacavel"],
+    livros: ["Trabalho Focado (Deep Work) — Cal Newport", "Essencialismo — Greg McKeown", "A Única Coisa — Gary Keller"],
+    filmes: ["Moneyball (2011) — foco no que gera resultado", "O Fundador (2016) — execução implacável"],
   },
   lideranca: {
-    livros: ["Lideres se Servem por Ultimo - Simon Sinek", "Pipeline de Lideranca - Ram Charan", "Extreme Ownership - Jocko Willink"],
-    filmes: ["Invictus (2009) - lideranca que une", "Fome de Poder (2016) - visao e ambicao"],
+    livros: ["Líderes se Servem por Último — Simon Sinek", "Pipeline de Liderança — Ram Charan", "Extreme Ownership — Jocko Willink"],
+    filmes: ["Invictus (2009) — liderança que une", "Fome de Poder (2016) — visão e ambição"],
   },
 };
 
 const fmtData = (s) => new Date(s).toLocaleDateString("pt-BR");
 const fmtHora = (s) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-const fmtDataHora = (s) => fmtData(s) + " " + fmtHora(s);
+const fmtDataHora = (s) => `${fmtData(s)} ${fmtHora(s)}`;
 const mesesEntre = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
 const minutosDia = (regs) => {
   let total = 0;
@@ -74,7 +82,7 @@ const minutosDia = (regs) => {
   for (let i = 0; i < Math.min(ent.length, sai.length); i++) total += Math.max(0, (sai[i] - ent[i]) / 60000);
   return Math.round(total);
 };
-const hmm = (min) => (min < 0 ? "-" : "") + Math.floor(Math.abs(min) / 60) + "h" + String(Math.abs(min) % 60).padStart(2, "0");
+const hmm = (min) => `${min < 0 ? "-" : ""}${Math.floor(Math.abs(min) / 60)}h${String(Math.abs(min) % 60).padStart(2, "0")}`;
 
 function agruparPorDia(registros, userId) {
   const dias = {};
@@ -93,9 +101,9 @@ function analisarAssiduidade(userId, registros, faltas) {
     const ent = regs.find(r => r.tipo === "entrada");
     if (ent) {
       const dt = new Date(ent.ts);
-      if (dt.getHours() > 8 || (dt.getHours() === 8 && dt.getMinutes() > 10)) atrasos++;
+      if (dt.getHours() > 8 || (dt.getHours() === 8 && dt.getMinutes() > 10)) atrasos++; // tolerância 10min (CLT art. 58 §1º)
     }
-    saldoMin += minutosDia(regs) - JORNADA_MIN - 60;
+    saldoMin += minutosDia(regs) - JORNADA_MIN - 60; // desconta 1h almoço
   });
   const nFaltas = faltas.filter(f => f.userId === userId).length;
   return { atrasos, faltas: nFaltas, diasTrab, saldoMin };
@@ -104,32 +112,90 @@ function analisarAssiduidade(userId, registros, faltas) {
 function gerarFeedback(user, registros, faltas) {
   const a = analisarAssiduidade(user.id, registros, faltas);
   const fb = [];
-  const primeiroNome = user.nome.split(" ")[0];
   if (a.atrasos >= 3) fb.push({
-    tipo: "alerta", tema: "pontualidade",
-    titulo: a.atrasos + " atrasos nos ultimos " + a.diasTrab + " dias trabalhados",
-    msg: primeiroNome + ", notamos atrasos recorrentes. Pequenos ajustes na rotina da manha tem impacto direto no seu banco de horas e na operacao da equipe. Que tal definir um horario-ancora 30min antes da entrada?",
+    tipo: "alerta", tema: "pontualidade", titulo: `${a.atrasos} atrasos nos últimos ${a.diasTrab} dias trabalhados`,
+    msg: `${user.nome.split(" ")[0]}, notamos atrasos recorrentes. Pequenos ajustes na rotina da manhã têm impacto direto no seu banco de horas e na operação da equipe. Que tal definir um horário-âncora 30min antes da entrada?`,
     rec: RECOMENDACOES.pontualidade,
   });
   if (a.faltas >= 1) fb.push({
-    tipo: "alerta", tema: "produtividade",
-    titulo: a.faltas + " falta(s) sem justificativa no periodo",
-    msg: "Faltas sem justificativa impactam banco de horas e podem gerar desconto (CLT art. 473 lista as ausencias legais). Se houve imprevisto, registre a justificativa ou envie atestado - o fluxo leva 2 minutos.",
+    tipo: "alerta", tema: "produtividade", titulo: `${a.faltas} falta(s) sem justificativa no período`,
+    msg: "Faltas sem justificativa impactam banco de horas e podem gerar desconto (CLT art. 473 lista as ausências legais). Se houve imprevisto, registre a justificativa ou envie atestado — o fluxo leva 2 minutos.",
     rec: RECOMENDACOES.produtividade,
   });
   if (a.atrasos === 0 && a.faltas === 0 && a.diasTrab >= 5) fb.push({
-    tipo: "elogio", tema: "lideranca", titulo: "Assiduidade exemplar",
-    msg: primeiroNome + ", " + a.diasTrab + " dias sem nenhum atraso ou falta e saldo positivo de " + hmm(a.saldoMin) + " no banco de horas. Consistencia e o que separa profissionais fora da curva - continue assim. Preparamos recomendacoes pra sua proxima etapa: lideranca.",
+    tipo: "elogio", tema: "lideranca", titulo: "Assiduidade exemplar 🏆",
+    msg: `${user.nome.split(" ")[0]}, ${a.diasTrab} dias sem nenhum atraso ou falta e saldo positivo de ${hmm(a.saldoMin)} no banco de horas. Consistência é o que separa profissionais fora da curva — continue assim. Preparamos recomendações pra sua próxima etapa: liderança.`,
     rec: RECOMENDACOES.lideranca,
   });
   if (fb.length === 0) fb.push({
     tipo: "neutro", tema: "produtividade", titulo: "Tudo em dia",
-    msg: "Sem pendencias relevantes no periodo. Recomendacoes pra manter o ritmo:",
+    msg: "Sem pendências relevantes no período. Recomendações pra manter o ritmo:",
     rec: RECOMENDACOES.produtividade,
   });
   return { analise: a, feedbacks: fb };
 }
 
+/* ============================================================
+   PRÊMIO PERFORMANCE — elegibilidade (CLT art. 457 §4º)
+   Prêmio = liberalidade por desempenho superior, condicionada a
+   critérios objetivos, prospectivos e divulgados. NÃO é desconto
+   de salário/comissão contratual (vedado pelo art. 462).
+   Faltas justificadas (atestado aceito / ausências legais do
+   art. 473) NUNCA contam contra o colaborador.
+   ============================================================ */
+const PREMIO = { limiteAtrasoMin: 60, limiteFaltas: 2, toleranciaMin: 10, bonusPontualidade: 0.10 };
+
+const REGRAS_PREMIO = [
+  { id: "R1", corte: true, titulo: "Atrasos até 60 min no mês", desc: `Soma dos minutos de atraso na entrada (após tolerância de ${PREMIO.toleranciaMin} min) deve ficar em até ${PREMIO.limiteAtrasoMin} min no mês. Acima disso, o prêmio do mês não é devido, mesmo com meta batida.` },
+  { id: "R2", corte: true, titulo: "Menos de 2 faltas injustificadas", desc: "Duas ou mais faltas sem atestado ou documento aceito no mês tornam o prêmio do mês não devido. Faltas com atestado aceito e ausências legais (CLT art. 473) não contam." },
+  { id: "R3", corte: true, titulo: "Meta individual atingida (≥100%)", desc: "O prêmio é calculado sobre o atingimento da meta do mês: 100% paga o prêmio integral; 110% e 120% destravam multiplicadores de 1,15x e 1,3x." },
+  { id: "R4", corte: true, titulo: "Documentação em até 48h", desc: "Justificativas e atestados devem ser enviados no sistema em até 48h da ocorrência. Documento aceito neutraliza a falta pra fins do prêmio." },
+  { id: "R5", corte: true, titulo: "Espelho de ponto íntegro", desc: "Todas as marcações do mês com pares entrada/saída completos ou regularizados até o fechamento. Marcação pendente sem regularização suspende a apuração até resolver." },
+  { id: "R6", corte: false, titulo: "Bônus pontualidade perfeita (+10%)", desc: "Mês sem nenhum atraso (zero minutos acumulados) adiciona 10% ao valor do prêmio. Incentivo positivo — não reduz nada de quem não atingir." },
+];
+
+function elegibilidadePremio(userId, registros, faltas) {
+  const agora = new Date();
+  const mesmoMes = (s) => { const dt = new Date(s); return dt.getMonth() === agora.getMonth() && dt.getFullYear() === agora.getFullYear(); };
+  let atrasoMin = 0;
+  Object.values(agruparPorDia(registros, userId)).forEach(regs => {
+    const ent = regs.find(r => r.tipo === "entrada");
+    if (!ent || !mesmoMes(ent.ts)) return;
+    const dt = new Date(ent.ts);
+    const min = (dt.getHours() - 8) * 60 + dt.getMinutes(); // jornada padrão 08:00
+    if (min > PREMIO.toleranciaMin) atrasoMin += min;
+  });
+  const faltasInj = faltas.filter(f => f.userId === userId && mesmoMes(f.data)).length;
+  const medidores = [
+    { id: "R1", label: "Atrasos acumulados no mês", valor: atrasoMin, limite: PREMIO.limiteAtrasoMin, unidade: " min", regraTexto: `perde o prêmio acima de ${PREMIO.limiteAtrasoMin} min`, estourou: atrasoMin > PREMIO.limiteAtrasoMin },
+    { id: "R2", label: "Faltas injustificadas no mês", valor: faltasInj, limite: PREMIO.limiteFaltas, unidade: "", regraTexto: `perde o prêmio com ${PREMIO.limiteFaltas} ou mais`, estourou: faltasInj >= PREMIO.limiteFaltas },
+  ];
+  const bonusPontualidade = atrasoMin === 0;
+  return { atrasoMin, faltasInj, medidores, elegivel: !medidores.some(m => m.estourou), bonusPontualidade };
+}
+
+const corMedidor = (pct) => (pct >= 1 ? C.vermelho : pct >= 0.7 ? C.amarelo : C.verde);
+
+function MedidorPremio({ m }) {
+  const pct = Math.min(1, m.limite ? m.valor / m.limite : 0);
+  const cor = m.estourou ? C.vermelho : corMedidor(pct);
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+        <span>{m.label}</span>
+        <b style={{ color: cor }}>{m.valor}{m.unidade} / {m.limite}{m.unidade}</b>
+      </div>
+      <div style={{ background: "#2b2b2b", borderRadius: 999, height: 10, marginTop: 6, overflow: "hidden" }}>
+        <div style={{ width: `${pct * 100}%`, background: cor, height: "100%", transition: "width .4s" }} />
+      </div>
+      <div style={{ fontSize: 11, color: m.estourou ? C.vermelho : C.cinza, marginTop: 4 }}>
+        {m.estourou ? `⛔ Limite ultrapassado — ${m.regraTexto}` : pct >= 0.7 ? `⚠️ Atenção: você está a ${m.limite - m.valor}${m.unidade || ""} do limite (${m.regraTexto})` : `Regra: ${m.regraTexto}`}
+      </div>
+    </div>
+  );
+}
+
+/* ================= UI base ================= */
 const C = { preto: "#0D0D0D", carvao: "#171717", grafite: "#232323", amarelo: "#FFD600", vermelho: "#E53935", verde: "#2E9E5B", cinza: "#9E9E9E", branco: "#F5F5F2" };
 const S = {
   app: { minHeight: "100vh", background: C.preto, color: C.branco, fontFamily: "'Inter','Segoe UI',system-ui,sans-serif" },
@@ -143,7 +209,7 @@ const S = {
 
 const Badge = ({ st }) => {
   const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, "#fff", "APROVADO"], recusado: [C.vermelho, "#fff", "RECUSADO"] };
-  const bg = (map[st] || map.pendente)[0], fg = (map[st] || map.pendente)[1], tx = (map[st] || map.pendente)[2];
+  const [bg, fg, tx] = map[st] || map.pendente;
   return <span style={S.tag(bg, fg)}>{tx}</span>;
 };
 
@@ -155,7 +221,7 @@ function CameraCapture({ onCapture, onSkip }) {
     let st;
     navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" } })
       .then(s => { st = s; setStream(s); if (videoRef.current) videoRef.current.srcObject = s; })
-      .catch(() => setErro("Camera indisponivel ou permissao negada. Voce pode registrar sem foto (sera marcado no log)."));
+      .catch(() => setErro("Câmera indisponível ou permissão negada. Você pode registrar sem foto (será marcado no log)."));
     return () => st?.getTracks().forEach(t => t.stop());
   }, []);
   const capturar = () => {
@@ -169,13 +235,13 @@ function CameraCapture({ onCapture, onSkip }) {
   return (
     <div style={{ textAlign: "center" }}>
       {erro ? <p style={{ color: C.vermelho, fontSize: 14 }}>{erro}</p> : (
-        <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", maxWidth: 380, borderRadius: 12, border: "2px solid " + C.amarelo }} />
+        <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", maxWidth: 380, borderRadius: 12, border: `2px solid ${C.amarelo}` }} />
       )}
       <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 14 }}>
-        {!erro && <button style={S.btn} onClick={capturar}>Capturar e validar</button>}
+        {!erro && <button style={S.btn} onClick={capturar}>📸 Capturar e validar</button>}
         <button style={S.btnGhost} onClick={onSkip}>Registrar sem foto</button>
       </div>
-      <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Reconhecimento facial: neste prototipo a validacao e simulada - a foto fica vinculada ao registro. Em producao: AWS Rekognition / FaceIO.</p>
+      <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Reconhecimento facial: neste protótipo a validação é simulada — a foto fica vinculada ao registro. Em produção: AWS Rekognition / FaceIO.</p>
     </div>
   );
 }
@@ -184,17 +250,18 @@ function RecCard({ rec }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
       <div>
-        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>Livros</div>
-        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>- {l}</div>)}
+        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>📚 Livros</div>
+        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>• {l}</div>)}
       </div>
       <div>
-        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>Filmes</div>
-        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>- {f}</div>)}
+        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>🎬 Filmes</div>
+        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#ccc", marginTop: 4 }}>• {f}</div>)}
       </div>
     </div>
   );
 }
 
+/* ================= App ================= */
 function App() {
   const [usuarios] = useState(USUARIOS_SEED);
   const [user, setUser] = useState(null);
@@ -202,13 +269,13 @@ function App() {
   const [registros, setRegistros] = useState(REGISTROS_SEED);
   const [faltas] = useState(FALTAS_SEED);
   const [justificativas, setJustificativas] = useState([
-    { id: 1, userId: "u3", data: iso(d(-2)), texto: "Transito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" },
+    { id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" },
   ]);
   const [atestados, setAtestados] = useState([]);
   const [ferias, setFerias] = useState([]);
-  const [logs, setLogs] = useState([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Sistema iniciado (prototipo, dados em memoria)" }]);
+  const [logs, setLogs] = useState([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Sistema iniciado (protótipo, dados em memória)" }]);
   const [nsr, setNsr] = useState(NSR);
-  const [fluxoPonto, setFluxoPonto] = useState(null);
+  const [fluxoPonto, setFluxoPonto] = useState(null); // null | 'geo' | 'camera' | 'comprovante'
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
   const [gestorLiberado, setGestorLiberado] = useState(false);
@@ -217,15 +284,16 @@ function App() {
 
   const log = (acao, detalhe) => setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
 
+  /* ---------- fluxo de batida ---------- */
   const iniciarBatida = () => {
-    if (!user.consentimentoLGPD) { alert("Antes da primeira batida e necessario aceitar o Termo de Consentimento LGPD (biometria + geolocalizacao). Acesse a aba LGPD."); setTela("lgpd"); return; }
+    if (!user.consentimentoLGPD) { alert("Antes da primeira batida é necessário aceitar o Termo de Consentimento LGPD (biometria + geolocalização). Acesse a aba LGPD."); setTela("lgpd"); return; }
     setFluxoPonto("geo");
     navigator.geolocation?.getCurrentPosition(
       p => { setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), precisao: Math.round(p.coords.accuracy) }); setFluxoPonto("camera"); },
-      () => { setGeo({ lat: null, lng: null, erro: "Geolocalizacao negada/indisponivel" }); setFluxoPonto("camera"); },
+      () => { setGeo({ lat: null, lng: null, erro: "Geolocalização negada/indisponível" }); setFluxoPonto("camera"); },
       { timeout: 8000 }
     );
-    if (!navigator.geolocation) { setGeo({ lat: null, lng: null, erro: "Sem suporte a geolocalizacao" }); setFluxoPonto("camera"); }
+    if (!navigator.geolocation) { setGeo({ lat: null, lng: null, erro: "Sem suporte a geolocalização" }); setFluxoPonto("camera"); }
   };
 
   const concluirBatida = (foto) => {
@@ -234,46 +302,49 @@ function App() {
     const reg = { nsr, userId: user.id, tipo, ts: iso(new Date()), lat: geo?.lat, lng: geo?.lng, foto, facialOk: !!foto };
     setRegistros(r => [...r, reg]);
     setNsr(n => n + 1);
-    log("batida", "NSR " + nsr + " - " + tipo + " - geo " + (geo?.lat ?? "-") + "," + (geo?.lng ?? "-") + " - facial " + (foto ? "validado (simulado)" : "sem foto"));
+    log("batida", `NSR ${nsr} · ${tipo} · geo ${geo?.lat ?? "—"},${geo?.lng ?? "—"} · facial ${foto ? "validado (simulado)" : "sem foto"}`);
     setComprovante(reg);
     setFluxoPonto("comprovante");
   };
 
   const exportarAFD = () => {
-    const linhas = registros.map(r => String(r.nsr).padStart(9, "0") + "3" + new Date(r.ts).toISOString().replace(/[-:TZ.]/g, "").slice(0, 12) + r.userId.padEnd(12, "0"));
-    const blob = new Blob(["AFD SIMULADO - " + EMPRESA.nome + " - " + EMPRESA.cnpj + "\n" + linhas.join("\n")], { type: "text/plain" });
+    // Layout simplificado inspirado no AFD da Portaria 671 (tipo 3 = marcação)
+    const linhas = registros.map(r => `${String(r.nsr).padStart(9, "0")}3${new Date(r.ts).toISOString().replace(/[-:TZ.]/g, "").slice(0, 12)}${r.userId.padEnd(12, "0")}`);
+    const blob = new Blob([`AFD SIMULADO - ${EMPRESA.nome} - ${EMPRESA.cnpj}\n` + linhas.join("\n")], { type: "text/plain" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "AFD_simulado.txt"; a.click();
     log("export", "AFD simulado exportado");
   };
 
+  /* ---------- férias ---------- */
   const agendarFerias = (inicio, dias) => {
     const adm = new Date(user.admissao);
     const agora = new Date();
-    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: "Voce completa 12 meses de empresa em " + fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate())) + ". Agendamento liberado a partir dessa data (CLT art. 130: periodo aquisitivo)." };
+    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: `Você completa 12 meses de empresa em ${fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate()))}. Agendamento liberado a partir dessa data (CLT art. 130: período aquisitivo).` };
     const ini = new Date(inicio + "T00:00:00");
-    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: ferias devem ser agendadas com no minimo 5 meses de antecedencia. Escolha uma data mais distante." };
+    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: férias devem ser agendadas com no mínimo 5 meses de antecedência. Escolha uma data mais distante." };
     const f = { id: Date.now(), userId: user.id, inicio, dias: +dias, status: "pendente" };
     setFerias(x => [...x, f]);
-    log("ferias", "Solicitacao: " + dias + " dias a partir de " + fmtData(ini));
-    return { ok: true, msg: "Solicitacao enviada pra aprovacao do gestor. Lembrete: o aviso legal minimo ao empregador e de 30 dias (CLT art. 135), a regra de 5 meses e politica interna." };
+    log("ferias", `Solicitação: ${dias} dias a partir de ${fmtData(ini)}`);
+    return { ok: true, msg: "Solicitação enviada pra aprovação do gestor. Lembrete: o aviso legal mínimo ao empregador é de 30 dias (CLT art. 135), a regra de 5 meses é política interna." };
   };
 
   const decidir = (lista, setLista, id, status, tipoLog) => {
     setLista(l => l.map(i => i.id === id ? { ...i, status } : i));
-    log("aprovacao", tipoLog + " #" + id + " -> " + status);
+    log("aprovacao", `${tipoLog} #${id} → ${status}`);
   };
 
   if (!user) return <Login usuarios={usuarios} onEntrar={(u) => { setUser(u); setTela("ponto"); setGestorLiberado(false); }} />;
 
   const menu = [
-    ["ponto", "Bater ponto"], ["espelho", "Espelho de ponto"], ["justificar", "Justificativas"],
-    ["atestados", "Atestados"], ["ferias", "Ferias"], ["feedback", "Meu feedback"], ["lgpd", "LGPD"],
-    ...(user.papel === "gestor" ? [["gestor", "Painel do gestor"]] : []),
+    ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["premio", "🏆 Prêmio"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
 
   return (
     <div style={S.app}>
-      <style>{"@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap'); @media print { .no-print { display:none!important } body { background:#fff } }"}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
+        @media print { .no-print { display:none!important } body { background:#fff } }`}</style>
       <div style={{ display: "flex", minHeight: "100vh" }}>
         <aside className="no-print" style={{ width: 230, background: C.carvao, borderRight: "1px solid #2b2b2b", padding: 18, flexShrink: 0 }}>
           <div style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
@@ -295,16 +366,17 @@ function App() {
           </div>
         </aside>
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
-          {tela === "ponto" && <TelaPonto user={user} relogio={relogio} registros={registros} faltas={faltas} fluxoPonto={fluxoPonto} setFluxoPonto={setFluxoPonto} geo={geo} comprovante={comprovante} iniciarBatida={iniciarBatida} concluirBatida={concluirBatida} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} />}
-          {tela === "justificar" && <TelaJustificar user={user} justificativas={justificativas} setJustificativas={setJustificativas} log={log} />}
-          {tela === "atestados" && <TelaAtestados user={user} atestados={atestados} setAtestados={setAtestados} log={log} />}
-          {tela === "ferias" && <TelaFerias user={user} ferias={ferias} agendarFerias={agendarFerias} />}
+          {tela === "justificar" && <TelaJustificar {...{ user, justificativas, setJustificativas, log }} />}
+          {tela === "atestados" && <TelaAtestados {...{ user, atestados, setAtestados, log }} />}
+          {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
+          {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} log={log} />}
           {tela === "gestor" && user.papel === "gestor" && (
             gestorLiberado
-              ? <TelaGestor usuarios={usuarios} registros={registros} faltas={faltas} justificativas={justificativas} setJustificativas={setJustificativas} atestados={atestados} setAtestados={setAtestados} ferias={ferias} setFerias={setFerias} logs={logs} decidir={decidir} />
+              ? <TelaGestor {...{ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }} />
               : <GateGestor onOk={() => { setGestorLiberado(true); log("acesso", "Painel do gestor desbloqueado"); }} />
           )}
         </main>
@@ -313,6 +385,7 @@ function App() {
   );
 }
 
+/* ================= Telas ================= */
 function Login({ usuarios, onEntrar }) {
   return (
     <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -330,7 +403,7 @@ function Login({ usuarios, onEntrar }) {
             </button>
           ))}
         </div>
-        <p style={{ fontSize: 11, color: C.cinza, marginTop: 20 }}>OAuth Google simulado no prototipo. Em producao: Google Identity Services + verificacao de dominio @renovartech.com.br no backend.</p>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 20 }}>🔒 OAuth Google simulado no protótipo. Em produção: Google Identity Services + verificação de domínio @renovartech.com.br no backend.</p>
       </div>
     </div>
   );
@@ -338,21 +411,33 @@ function Login({ usuarios, onEntrar }) {
 
 function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }) {
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
-  const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAIDA";
+  const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
   const a = analisarAssiduidade(user.id, registros, faltas);
+  const eleg = elegibilidadePremio(user.id, registros, faltas);
+  const emAlerta = eleg.medidores.filter(m => m.estourou || (m.limite && m.valor / m.limite >= 0.7));
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
+      {emAlerta.length > 0 && (
+        <div style={{ ...S.card, marginTop: 14, padding: 14, borderLeft: `4px solid ${eleg.elegivel ? C.amarelo : C.vermelho}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 22 }}>{eleg.elegivel ? "⚠️" : "⛔"}</span>
+          <div style={{ flex: 1, fontSize: 13 }}>
+            <b>{eleg.elegivel ? "Atenção ao Prêmio Performance:" : "Prêmio Performance deste mês não elegível:"}</b>{" "}
+            {emAlerta.map(m => `${m.label.toLowerCase()}: ${m.valor}${m.unidade} de ${m.limite}${m.unidade}`).join(" · ")}
+            {eleg.elegivel && " — ainda dá pra segurar dentro do limite até o fechamento."}
+          </div>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginTop: 18 }}>
         <div style={{ ...S.card, textAlign: "center", padding: 34 }}>
           <div style={{ ...S.display, fontSize: 64, color: C.amarelo, lineHeight: 1 }}>{relogio.toLocaleTimeString("pt-BR")}</div>
           <div style={{ color: C.cinza, marginTop: 6 }}>{relogio.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
           {!fluxoPonto && <button style={{ ...S.btn, marginTop: 24, fontSize: 18, padding: "16px 34px" }} onClick={iniciarBatida}>Registrar {proxTipo}</button>}
-          {fluxoPonto === "geo" && <p style={{ marginTop: 20, color: C.cinza }}>Obtendo geolocalizacao...</p>}
+          {fluxoPonto === "geo" && <p style={{ marginTop: 20, color: C.cinza }}>📍 Obtendo geolocalização…</p>}
           {fluxoPonto === "camera" && (
             <div style={{ marginTop: 20 }}>
               <p style={{ fontSize: 13, color: geo?.erro ? C.vermelho : C.verde }}>
-                {geo?.erro ? geo.erro : "Localizacao capturada: " + geo.lat + ", " + geo.lng + " (+-" + geo.precisao + "m)"}
+                {geo?.erro ? `⚠️ ${geo.erro}` : `📍 Localização capturada: ${geo.lat}, ${geo.lng} (±${geo.precisao}m)`}
               </p>
               <CameraCapture onCapture={concluirBatida} onSkip={() => concluirBatida(null)} />
             </div>
@@ -362,14 +447,14 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
               <div style={{ ...S.display, color: C.amarelo, fontSize: 15 }}>Comprovante de registro (Portaria 671/2021)</div>
               <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.7 }}>
                 NSR: <b>{String(comprovante.nsr).padStart(9, "0")}</b><br />
-                {EMPRESA.nome} - CNPJ {EMPRESA.cnpj}<br />
+                {EMPRESA.nome} · CNPJ {EMPRESA.cnpj}<br />
                 Colaborador: {user.nome}<br />
-                Marcacao: <b>{comprovante.tipo.toUpperCase()}</b> em {fmtDataHora(comprovante.ts)}<br />
-                Geo: {comprovante.lat ?? "-"}, {comprovante.lng ?? "-"} - Facial: {comprovante.facialOk ? "validado (simulado)" : "sem foto"}
+                Marcação: <b>{comprovante.tipo.toUpperCase()}</b> em {fmtDataHora(comprovante.ts)}<br />
+                Geo: {comprovante.lat ?? "—"}, {comprovante.lng ?? "—"} · Facial: {comprovante.facialOk ? "validado ✔ (simulado)" : "sem foto ⚠️"}
               </div>
-              {comprovante.foto && <img src={comprovante.foto} alt="selfie da batida" style={{ width: 110, borderRadius: 10, marginTop: 10, border: "2px solid " + C.verde }} />}
+              {comprovante.foto && <img src={comprovante.foto} alt="selfie da batida" style={{ width: 110, borderRadius: 10, marginTop: 10, border: `2px solid ${C.verde}` }} />}
               <div style={{ display: "flex", gap: 10, marginTop: 12 }} className="no-print">
-                <button style={S.btnGhost} onClick={() => window.print()}>Imprimir comprovante</button>
+                <button style={S.btnGhost} onClick={() => window.print()}>🖨 Imprimir comprovante</button>
                 <button style={S.btn} onClick={() => setFluxoPonto(null)}>OK</button>
               </div>
             </div>
@@ -378,13 +463,13 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Hoje</div>
-            {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcacao ainda.</p> :
-              doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "Entrada" : "Saida"} - {fmtHora(r.ts)}</div>)}
+            {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcação ainda.</p> :
+              doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "🟢" : "🔴"} {r.tipo} — {fmtHora(r.ts)}</div>)}
           </div>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Banco de horas (10 dias)</div>
             <div style={{ ...S.display, fontSize: 30, color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</div>
-            <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) - {a.faltas} falta(s)</div>
+            <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) · {a.faltas} falta(s)</div>
           </div>
         </div>
       </div>
@@ -399,20 +484,20 @@ function TelaEspelho({ user, registros, exportarAFD }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Espelho de ponto</h1>
         <div style={{ display: "flex", gap: 10 }} className="no-print">
-          <button style={S.btnGhost} onClick={exportarAFD}>Exportar AFD (simulado)</button>
-          <button style={S.btn} onClick={() => window.print()}>Exportar PDF</button>
+          <button style={S.btnGhost} onClick={exportarAFD}>⬇ AFD (simulado)</button>
+          <button style={S.btn} onClick={() => window.print()}>🖨 Exportar PDF</button>
         </div>
       </div>
       <div style={{ ...S.card, marginTop: 16 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcacoes</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
+          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
           <tbody>
             {Object.entries(dias).map(([dia, regs]) => {
               const min = minutosDia(regs), saldo = min - JORNADA_MIN - 60;
               return (
                 <tr key={dia} style={{ borderTop: "1px solid #2b2b2b" }}>
                   <td style={{ padding: 8, fontWeight: 700 }}>{dia}</td>
-                  <td>{regs.map(r => fmtHora(r.ts)).join(" - ")}</td>
+                  <td>{regs.map(r => fmtHora(r.ts)).join(" · ")}</td>
                   <td>{hmm(min)}</td>
                   <td style={{ color: saldo >= 0 ? C.verde : C.vermelho, fontWeight: 700 }}>{hmm(saldo)}</td>
                 </tr>
@@ -420,7 +505,7 @@ function TelaEspelho({ user, registros, exportarAFD }) {
             })}
           </tbody>
         </table>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Jornada de referencia: 8h + 1h de intervalo. Horas alem da jornada entram no banco de horas (acordo individual escrito, CLT art. 59 par. 5) ou sao pagas como extra com adicional minimo de 50%.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Jornada de referência: 8h + 1h de intervalo. Horas além da jornada entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
       </div>
     </div>
   );
@@ -440,12 +525,12 @@ function TelaJustificar({ user, justificativas, setJustificativas, log }) {
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Justificativas de atraso</h1>
       <div style={{ ...S.card, marginTop: 16 }}>
-        <textarea style={{ ...S.input, minHeight: 90 }} placeholder="Descreva o motivo do atraso..." value={texto} onChange={e => setTexto(e.target.value)} />
+        <textarea style={{ ...S.input, minHeight: 90 }} placeholder="Descreva o motivo do atraso…" value={texto} onChange={e => setTexto(e.target.value)} />
         <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
-          <label style={{ ...S.btnGhost, cursor: "pointer" }}>{anexo ? anexo.nome : "Anexar evidencia"}
+          <label style={{ ...S.btnGhost, cursor: "pointer" }}>📎 {anexo ? anexo.nome : "Anexar evidência"}
             <input type="file" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) setAnexo({ nome: f.name, tamanho: f.size }); }} />
           </label>
-          <button style={S.btn} onClick={enviar}>Enviar pra aprovacao</button>
+          <button style={S.btn} onClick={enviar}>Enviar pra aprovação</button>
         </div>
       </div>
       {minhas.map(j => (
@@ -454,7 +539,7 @@ function TelaJustificar({ user, justificativas, setJustificativas, log }) {
             <b style={{ fontSize: 14 }}>{fmtDataHora(j.data)}</b><Badge st={j.status} />
           </div>
           <p style={{ fontSize: 14, color: "#ccc", margin: "8px 0 0" }}>{j.texto}</p>
-          {j.anexo && <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>{j.anexo.nome}</div>}
+          {j.anexo && <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>📎 {j.anexo.nome}</div>}
         </div>
       ))}
     </div>
@@ -469,27 +554,27 @@ function TelaAtestados({ user, atestados, setAtestados, log }) {
     const r = new FileReader();
     r.onload = () => {
       setAtestados(a => [...a, { id: Date.now(), userId: user.id, data: iso(new Date()), nome: f.name, preview: f.type.startsWith("image") ? r.result : null, obs, status: "pendente" }]);
-      log("atestado", "Atestado enviado: " + f.name);
+      log("atestado", `Atestado enviado: ${f.name}`);
       setObs("");
     };
     r.readAsDataURL(f);
   };
   return (
     <div>
-      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Atestados medicos</h1>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Atestados médicos</h1>
       <div style={{ ...S.card, marginTop: 16 }}>
-        <input style={S.input} placeholder="Observacao (opcional): CID, dias de afastamento..." value={obs} onChange={e => setObs(e.target.value)} />
-        <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer" }}>Enviar atestado (foto ou PDF)
+        <input style={S.input} placeholder="Observação (opcional): CID, dias de afastamento…" value={obs} onChange={e => setObs(e.target.value)} />
+        <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer" }}>📤 Enviar atestado (foto ou PDF)
           <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={e => anexar(e.target.files[0])} />
         </label>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saude = dado sensivel (LGPD art. 5, II). Em producao: armazenamento criptografado, acesso restrito a RH/gestor, retencao conforme prazo legal trabalhista.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). Em produção: armazenamento criptografado, acesso restrito a RH/gestor, retenção conforme prazo legal trabalhista.</p>
       </div>
       {meus.map(a => (
         <div key={a.id} style={{ ...S.card, marginTop: 12, display: "flex", gap: 14, alignItems: "center" }}>
-          {a.preview ? <img src={a.preview} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8 }} /> : <div style={{ fontSize: 34 }}>Doc</div>}
+          {a.preview ? <img src={a.preview} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8 }} /> : <div style={{ fontSize: 34 }}>📄</div>}
           <div style={{ flex: 1 }}>
             <b style={{ fontSize: 14 }}>{a.nome}</b>
-            <div style={{ fontSize: 12, color: C.cinza }}>{fmtDataHora(a.data)} {a.obs && ("- " + a.obs)}</div>
+            <div style={{ fontSize: 12, color: C.cinza }}>{fmtDataHora(a.data)} {a.obs && `· ${a.obs}`}</div>
           </div>
           <Badge st={a.status} />
         </div>
@@ -507,9 +592,9 @@ function TelaFerias({ user, ferias, agendarFerias }) {
   const elegivel = mesesEntre(adm, new Date()) >= 12;
   return (
     <div>
-      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Agendamento de ferias</h1>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Agendamento de férias</h1>
       <div style={{ ...S.card, marginTop: 16 }}>
-        <div style={{ fontSize: 14, color: C.cinza }}>Admissao: <b style={{ color: C.branco }}>{fmtData(user.admissao)}</b> - {elegivel ? <span style={{ color: C.verde }}>periodo aquisitivo completo</span> : <span style={{ color: C.vermelho }}>ainda no periodo aquisitivo (12 meses)</span>}</div>
+        <div style={{ fontSize: 14, color: C.cinza }}>Admissão: <b style={{ color: C.branco }}>{fmtData(user.admissao)}</b> · {elegivel ? <span style={{ color: C.verde }}>✔ período aquisitivo completo</span> : <span style={{ color: C.vermelho }}>✖ ainda no período aquisitivo (12 meses)</span>}</div>
         <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
           <input type="date" style={{ ...S.input, width: 190 }} value={inicio} onChange={e => setInicio(e.target.value)} />
           <select style={{ ...S.input, width: 150 }} value={dias} onChange={e => setDias(e.target.value)}>
@@ -518,13 +603,47 @@ function TelaFerias({ user, ferias, agendarFerias }) {
           <button style={S.btn} onClick={() => { if (!inicio) return; setMsg(agendarFerias(inicio, dias)); }}>Solicitar</button>
         </div>
         {msg && <p style={{ marginTop: 12, fontSize: 14, color: msg.ok ? C.verde : C.vermelho }}>{msg.msg}</p>}
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + politica interna de 5 meses de antecedencia. Fracionamento em ate 3 periodos, um deles maior ou igual a 14 dias (CLT art. 134 par. 1).</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + política interna de 5 meses de antecedência. Fracionamento em até 3 períodos, um deles ≥14 dias (CLT art. 134 §1º).</p>
       </div>
       {minhas.map(f => (
         <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><b>{fmtData(f.inicio + "T00:00:00")}</b> - {f.dias} dias</div><Badge st={f.status} />
+          <div><b>{fmtData(f.inicio + "T00:00:00")}</b> · {f.dias} dias</div><Badge st={f.status} />
         </div>
       ))}
+    </div>
+  );
+}
+
+function TelaPremio({ user, registros, faltas }) {
+  const e = useMemo(() => elegibilidadePremio(user.id, registros, faltas), [user, registros, faltas]);
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Prêmio Performance</h1>
+      <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${e.elegivel ? C.verde : C.vermelho}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div style={{ ...S.display, fontSize: 18 }}>Status do mês: {e.elegivel ? <span style={{ color: C.verde }}>ELEGÍVEL ✔</span> : <span style={{ color: C.vermelho }}>NÃO ELEGÍVEL ⛔</span>}</div>
+            <div style={{ fontSize: 13, color: C.cinza, marginTop: 4 }}>
+              {e.elegivel
+                ? (e.bonusPontualidade ? "Zero atrasos até aqui — você está a caminho do bônus de +10% por pontualidade perfeita. 🏆" : "Mantenha os medidores abaixo dos limites até o fechamento do mês.")
+                : "Os critérios de elegibilidade do prêmio deste mês não foram atendidos. O prêmio volta a valer normalmente no próximo mês — nada é descontado do seu salário."}
+            </div>
+          </div>
+        </div>
+        {e.medidores.map(m => <MedidorPremio key={m.id} m={m} />)}
+      </div>
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Regras de elegibilidade — resumo</div>
+        {REGRAS_PREMIO.map(r => (
+          <div key={r.id} style={{ borderTop: "1px solid #2b2b2b", padding: "10px 0" }}>
+            <b style={{ fontSize: 14 }}>{r.corte ? "🎯" : "➕"} {r.titulo}</b>
+            <p style={{ fontSize: 13, color: "#ccc", margin: "4px 0 0" }}>{r.desc}</p>
+          </div>
+        ))}
+      </div>
+      <div style={{ ...S.card, marginTop: 14, fontSize: 12, color: C.cinza, lineHeight: 1.7 }}>
+        <b style={{ color: C.branco }}>Natureza jurídica do Prêmio Performance:</b> liberalidade concedida pela {EMPRESA.nome} em razão de desempenho superior ao ordinariamente esperado, nos termos do art. 457, §4º, da CLT. Não integra o salário, não constitui comissão contratual e sua não concessão por critério de elegibilidade <b style={{ color: C.branco }}>não é desconto salarial</b> (art. 462). Critérios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e ausências legais do art. 473 da CLT não afetam a elegibilidade. Regulamento completo disponível com o RH.
+      </div>
     </div>
   );
 }
@@ -543,7 +662,7 @@ function TelaFeedback({ user, registros, faltas }) {
         ))}
       </div>
       {feedbacks.map((f, i) => (
-        <div key={i} style={{ ...S.card, marginTop: 14, borderLeft: "4px solid " + (f.tipo === "elogio" ? C.verde : f.tipo === "alerta" ? C.vermelho : C.amarelo) }}>
+        <div key={i} style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${f.tipo === "elogio" ? C.verde : f.tipo === "alerta" ? C.vermelho : C.amarelo}` }}>
           <div style={{ ...S.display, fontSize: 16 }}>{f.titulo}</div>
           <p style={{ fontSize: 14, color: "#ccc", marginTop: 6 }}>{f.msg}</p>
           <RecCard rec={f.rec} />
@@ -559,8 +678,8 @@ function TelaLGPD({ user, log }) {
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Privacidade e LGPD</h1>
       <div style={{ ...S.card, marginTop: 16, fontSize: 14, lineHeight: 1.8, color: "#ccc" }}>
-        <b style={{ color: C.branco }}>Termo de consentimento - tratamento de dados pessoais</b>
-        <p>O PONTO RENOVAR coleta, com a finalidade especifica de controle de jornada (Portaria MTP 671/2021): <b>imagem facial</b> (dado biometrico sensivel, LGPD art. 11) no momento de cada marcacao; <b>geolocalizacao</b> da marcacao; e registros de horarios. Os dados sao usados exclusivamente pra validacao de identidade, apuracao de jornada e obrigacoes legais trabalhistas. Retencao: registros de ponto por no minimo 5 anos; fotos de validacao por 90 dias, depois excluidas. Voce pode solicitar acesso, correcao ou exclusao (quando nao houver obrigacao legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
+        <b style={{ color: C.branco }}>Termo de consentimento — tratamento de dados pessoais</b>
+        <p>O PONTO RENOVAR coleta, com a finalidade específica de controle de jornada (Portaria MTP 671/2021): <b>imagem facial</b> (dado biométrico sensível, LGPD art. 11) no momento de cada marcação; <b>geolocalização</b> da marcação; e registros de horários. Os dados são usados exclusivamente pra validação de identidade, apuração de jornada e obrigações legais trabalhistas. Retenção: registros de ponto por no mínimo 5 anos; fotos de validação por 90 dias, depois excluídas. Você pode solicitar acesso, correção ou exclusão (quando não houver obrigação legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
         <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={aceito} onChange={e => { setAceito(e.target.checked); user.consentimentoLGPD = e.target.checked; log("lgpd", e.target.checked ? "Consentimento registrado" : "Consentimento revogado"); }} />
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
@@ -575,6 +694,7 @@ function GateGestor({ onOk }) {
   const [erro, setErro] = useState(false);
   return (
     <div style={{ ...S.card, maxWidth: 380, margin: "60px auto", textAlign: "center" }}>
+      <div style={{ fontSize: 40 }}>👑</div>
       <div style={{ ...S.display, fontSize: 20 }}>Painel do gestor</div>
       <input type="password" style={{ ...S.input, marginTop: 14, textAlign: "center", letterSpacing: 6 }} placeholder="Senha" value={senha}
         onChange={e => { setSenha(e.target.value); setErro(false); }}
@@ -588,32 +708,35 @@ function GateGestor({ onOk }) {
 function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length;
-  const nome = (id) => { const u = usuarios.find(u => u.id === id); return u ? u.nome : id; };
+  const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
   return (
     <div>
-      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, "#fff")}>{pend} pendencia(s)</span>}</h1>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, "#fff")}>{pend} pendência(s)</span>}</h1>
       <div style={{ ...S.card, marginTop: 16 }}>
-        <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Equipe - assiduidade (ultimos 10 dias)</div>
+        <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Equipe — assiduidade (últimos 10 dias)</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 8 }}>
-          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 6 }}>Colaborador</th><th>Dias</th><th>Atrasos</th><th>Faltas</th><th>Banco</th><th>Status</th></tr></thead>
+          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 6 }}>Colaborador</th><th>Dias</th><th>Atrasos</th><th>Faltas</th><th>Banco</th><th>Prêmio</th><th>Status</th></tr></thead>
           <tbody>
-            {equipe.map(({ u, a }) => (
+            {equipe.map(({ u, a }) => {
+              const e = elegibilidadePremio(u.id, registros, faltas);
+              return (
               <tr key={u.id} style={{ borderTop: "1px solid #2b2b2b" }}>
                 <td style={{ padding: 6, fontWeight: 700 }}>{u.nome}</td>
                 <td>{a.diasTrab}</td>
                 <td style={{ color: a.atrasos >= 3 ? C.vermelho : C.branco }}>{a.atrasos}</td>
                 <td style={{ color: a.faltas > 0 ? C.vermelho : C.branco }}>{a.faltas}</td>
                 <td style={{ color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</td>
-                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENCAO</span> : a.diasTrab === 0 ? <span style={S.tag("#3a3a3a", "#ccc")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
+                <td>{e.elegivel ? <span style={S.tag(C.verde, "#fff")}>ELEGÍVEL{e.bonusPontualidade ? " +10%" : ""}</span> : <span style={S.tag(C.vermelho, "#fff")}>NÃO ELEGÍVEL</span>}</td>
+                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENÇÃO</span> : a.diasTrab === 0 ? <span style={S.tag("#3a3a3a", "#ccc")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
               </tr>
-            ))}
+            );})}
           </tbody>
         </table>
       </div>
       {[
-        ["Justificativas", justificativas, setJustificativas, (j) => nome(j.userId) + " - " + j.texto],
-        ["Atestados", atestados, setAtestados, (a) => nome(a.userId) + " - " + a.nome + (a.obs ? " - " + a.obs : "")],
-        ["Ferias", ferias, setFerias, (f) => nome(f.userId) + " - " + f.dias + " dias a partir de " + fmtData(f.inicio + "T00:00:00")],
+        ["Justificativas", justificativas, setJustificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
+        ["Atestados", atestados, setAtestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
+        ["Férias", ferias, setFerias, (f) => `${nome(f.userId)} — ${f.dias} dias a partir de ${fmtData(f.inicio + "T00:00:00")}`],
       ].map(([titulo, lista, setLista, render]) => (
         <div key={titulo} style={{ ...S.card, marginTop: 14 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>{titulo}</div>
@@ -622,7 +745,10 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
               <span style={{ fontSize: 14 }}>{render(item)}</span>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <Badge st={item.status} />
-                {item.status === "pendente" && <><button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "aprovado", titulo)}>Aprovar</button><button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "recusado", titulo)}>Recusar</button></>}
+                {item.status === "pendente" && <>
+                  <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "aprovado", titulo)}>Aprovar</button>
+                  <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "recusado", titulo)}>Recusar</button>
+                </>}
               </span>
             </div>
           ))}
@@ -633,7 +759,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
         <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 8 }}>
           {logs.map((l, i) => (
             <div key={i} style={{ fontSize: 12, color: "#bbb", borderTop: "1px solid #262626", padding: "5px 0", fontFamily: "monospace" }}>
-              {fmtDataHora(l.ts)} - <span style={{ color: C.amarelo }}>{l.acao}</span> - {nome(l.userId)} - {l.detalhe}
+              {fmtDataHora(l.ts)} · <span style={{ color: C.amarelo }}>{l.acao}</span> · {nome(l.userId)} · {l.detalhe}
             </div>
           ))}
         </div>
@@ -641,9 +767,8 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
     </div>
   );
 }
+    
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<App />);
 </script>
 </body>
 </html>
