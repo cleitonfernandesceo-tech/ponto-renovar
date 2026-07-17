@@ -1,21 +1,24 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ponto Renovar</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
-  <style>html,body{margin:0;padding:0;background:#0D0D0D;}</style>
-  </head>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PONTO RENOVAR · Renovar Tech</title>
+<!-- React 18 + Babel standalone: JSX transpilado no navegador, zero build.
+     Pra produção de verdade, o ideal é pré-compilar (Vite) — mas isso aqui
+     funciona em qualquer hospedagem estática, incluindo abrir o arquivo local. -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>html,body,#root{margin:0;padding:0;background:#0D0D0D}</style>
+</head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useRef, useMemo } = React;
-    
-
-
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+ 
+ 
+ 
 /* ============================================================
    PONTO RENOVAR — Sistema de Ponto Eletrônico (Protótipo)
    Renovar Tech Ltda · arquivo único JSX · sem build pipeline
@@ -23,11 +26,11 @@
    Reais neste protótipo: câmera (selfie na batida), geolocalização,
    regras de férias, banco de horas, feedback engine, auditoria, AFD
    ============================================================ */
-
+ 
 const EMPRESA = { nome: "Renovar Tech Ltda", cnpj: "12.345.678/0001-90", cidade: "Belo Horizonte/MG" };
 const SENHA_GESTOR = "310817";
 const JORNADA_MIN = 8 * 60; // 8h/dia
-
+ 
 /* Configuração fiscal (Portaria 671/2021)
    ⚠ nrInpi é PLACEHOLDER: o nº real sai do registro do programa no INPI.
    ⚠ A assinatura digital real (.p7s, certificado ICP-Brasil) é etapa externa ao protótipo. */
@@ -39,13 +42,63 @@ const CONFIG_FISCAL = {
   ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "12345678000190", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
 };
 const HORARIO_CONTRATUAL = { cod: "H0800", durMin: 480, pares: [["0800", "1200"], ["1300", "1700"]] };
-
+ 
+/* ============================================================
+   SUPABASE — backend real
+   Client leve via REST (PostgREST + GoTrue): mesmas chamadas HTTP
+   que o supabase-js faz por baixo. Pra migrar pro SDK oficial num
+   build próprio: npm i @supabase/supabase-js e troque os helpers.
+   A chave abaixo é a PUBLISHABLE (pública por design) — a segurança
+   vem do RLS já configurado no banco.
+   ============================================================ */
+const SUPA = {
+  url: "https://bdbxjdkjeeobaxulfqkb.supabase.co",
+  anonKey: "sb_publishable_8oqs0Oa4Rk95YzsXvPlFhA_xppfWWim",
+};
+ 
+async function sbFetch(token, path, { method = "GET", body, headers = {} } = {}) {
+  const r = await fetch(`${SUPA.url}${path}`, {
+    method,
+    headers: { apikey: SUPA.anonKey, Authorization: `Bearer ${token || SUPA.anonKey}`, "Content-Type": "application/json", ...headers },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+  return r.status === 204 ? null : r.json();
+}
+const sbSelect = (t, tab, q = "select=*") => sbFetch(t, `/rest/v1/${tab}?${q}`);
+const sbInsert = (t, tab, rows) => sbFetch(t, `/rest/v1/${tab}`, { method: "POST", body: rows, headers: { Prefer: "return=representation" } });
+const sbUpsert = (t, tab, rows, conflict, ignoreDup = false) => sbFetch(t, `/rest/v1/${tab}?on_conflict=${conflict}`, { method: "POST", body: rows, headers: { Prefer: `resolution=${ignoreDup ? "ignore" : "merge"}-duplicates,return=representation` } });
+const sbUpdate = (t, tab, filtro, patch) => sbFetch(t, `/rest/v1/${tab}?${filtro}`, { method: "PATCH", body: patch, headers: { Prefer: "return=representation" } });
+async function sbLogin(email, password) {
+  const r = await fetch(`${SUPA.url}/auth/v1/token?grant_type=password`, {
+    method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error_description || j.msg || "Falha no login");
+  return j; // { access_token, user: { id, email } }
+}
+ 
+/* Mapas linha do banco ↔ formato interno do app */
+const hojeStr = () => new Date().toISOString().slice(0, 10);
+const mapMarc = (r) => ({ nsr: r.nsr, userId: r.usuario_id, tipo: r.tipo, ts: r.ts, lat: r.lat, lng: r.lng, foto: null, facialOk: !!r.facial_ok });
+const mapFalta = (r) => ({ id: r.id, userId: r.usuario_id, data: r.data, justificada: !!r.justificada, motivo: r.motivo });
+const mapJust = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, texto: r.descricao, anexo: r.anexo_url ? { nome: r.anexo_url } : null, status: r.status });
+const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome: r.anexo_url || "atestado", preview: null, obs: r.cid, status: r.status });
+const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
+const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
+const mapUser = (r, consentiu) => ({
+  id: r.id, nome: r.nome, email: r.email, cpf: r.cpf, papel: r.tipo, cargo: r.cargo, matricula: r.matricula, ativo: r.ativo,
+  admissao: r.data_admissao || "2020-01-01",
+  avatar: (r.nome || "?").split(" ").filter(Boolean).map(p => p[0]).slice(0, 2).join("").toUpperCase(),
+  consentimentoLGPD: !!consentiu,
+});
+ 
 const hoje = new Date();
 const d = (offsetDias, h = 8, m = 0) => {
   const x = new Date(hoje); x.setDate(x.getDate() + offsetDias); x.setHours(h, m, 0, 0); return x;
 };
 const iso = (dt) => dt.toISOString();
-
+ 
 // CPFs FICTÍCIOS de teste (dígitos verificadores válidos, não associados a pessoas reais — em produção a empresa cadastra os CPFs reais)
 const USUARIOS_SEED = [
   { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", cpf: "52784193691", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true },
@@ -53,7 +106,7 @@ const USUARIOS_SEED = [
   { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", cpf: "74219563873", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true },
   { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", cpf: "61938475291", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
 ];
-
+ 
 // Histórico seed: Marina pontual, Rafael com atrasos recorrentes
 const REGISTROS_SEED = [];
 let NSR = 1;
@@ -68,9 +121,9 @@ for (let i = 10; i >= 1; i--) {
   pushDia("u2", -i, 7, 58, 17, 5);                       // Marina: sempre pontual, ~9h c/ almoço
   pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : (i % 2 === 0 ? 25 : 2), 17, 0, i === 4); // Rafael: atrasos e 1 falta
 }
-
+ 
 const FALTAS_SEED = [{ userId: "u3", data: iso(d(-4)), motivo: "sem justificativa" }];
-
+ 
 const RECOMENDACOES = {
   pontualidade: {
     livros: ["Os 7 Hábitos das Pessoas Altamente Eficazes — Stephen Covey", "Hábitos Atômicos — James Clear", "A Tríade do Tempo — Christian Barbosa"],
@@ -85,7 +138,7 @@ const RECOMENDACOES = {
     filmes: ["Invictus (2009) — liderança que une", "Fome de Poder (2016) — visão e ambição"],
   },
 };
-
+ 
 const fmtData = (s) => new Date(s).toLocaleDateString("pt-BR");
 const fmtHora = (s) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 const fmtDataHora = (s) => `${fmtData(s)} ${fmtHora(s)}`;
@@ -98,7 +151,7 @@ const minutosDia = (regs) => {
   return Math.round(total);
 };
 const hmm = (min) => `${min < 0 ? "-" : ""}${Math.floor(Math.abs(min) / 60)}h${String(Math.abs(min) % 60).padStart(2, "0")}`;
-
+ 
 function agruparPorDia(registros, userId) {
   const dias = {};
   registros.filter(r => r.userId === userId).forEach(r => {
@@ -107,7 +160,7 @@ function agruparPorDia(registros, userId) {
   });
   return dias;
 }
-
+ 
 function analisarAssiduidade(userId, registros, faltas) {
   const dias = agruparPorDia(registros, userId);
   let atrasos = 0, diasTrab = 0, saldoMin = 0;
@@ -120,10 +173,10 @@ function analisarAssiduidade(userId, registros, faltas) {
     }
     saldoMin += minutosDia(regs) - JORNADA_MIN - 60; // desconta 1h almoço
   });
-  const nFaltas = faltas.filter(f => f.userId === userId).length;
+  const nFaltas = faltas.filter(f => f.userId === userId && !f.justificada).length;
   return { atrasos, faltas: nFaltas, diasTrab, saldoMin };
 }
-
+ 
 function gerarFeedback(user, registros, faltas) {
   const a = analisarAssiduidade(user.id, registros, faltas);
   const fb = [];
@@ -149,7 +202,7 @@ function gerarFeedback(user, registros, faltas) {
   });
   return { analise: a, feedbacks: fb };
 }
-
+ 
 /* ============================================================
    PRÊMIO PERFORMANCE — elegibilidade (CLT art. 457 §4º)
    Prêmio = liberalidade por desempenho superior, condicionada a
@@ -159,7 +212,7 @@ function gerarFeedback(user, registros, faltas) {
    art. 473) NUNCA contam contra o colaborador.
    ============================================================ */
 const PREMIO = { limiteAtrasoMin: 60, limiteFaltas: 2, toleranciaMin: 10, bonusPontualidade: 0.10 };
-
+ 
 const REGRAS_PREMIO = [
   { id: "R1", corte: true, titulo: "Atrasos até 60 min no mês", desc: `Soma dos minutos de atraso na entrada (após tolerância de ${PREMIO.toleranciaMin} min) deve ficar em até ${PREMIO.limiteAtrasoMin} min no mês. Acima disso, o prêmio do mês não é devido, mesmo com meta batida.` },
   { id: "R2", corte: true, titulo: "Menos de 2 faltas injustificadas", desc: "Duas ou mais faltas sem atestado ou documento aceito no mês tornam o prêmio do mês não devido. Faltas com atestado aceito e ausências legais (CLT art. 473) não contam." },
@@ -168,7 +221,7 @@ const REGRAS_PREMIO = [
   { id: "R5", corte: true, titulo: "Espelho de ponto íntegro", desc: "Todas as marcações do mês com pares entrada/saída completos ou regularizados até o fechamento. Marcação pendente sem regularização suspende a apuração até resolver." },
   { id: "R6", corte: false, titulo: "Bônus pontualidade perfeita (+10%)", desc: "Mês sem nenhum atraso (zero minutos acumulados) adiciona 10% ao valor do prêmio. Incentivo positivo — não reduz nada de quem não atingir." },
 ];
-
+ 
 function elegibilidadePremio(userId, registros, faltas) {
   const agora = new Date();
   const mesmoMes = (s) => { const dt = new Date(s); return dt.getMonth() === agora.getMonth() && dt.getFullYear() === agora.getFullYear(); };
@@ -180,7 +233,7 @@ function elegibilidadePremio(userId, registros, faltas) {
     const min = (dt.getHours() - 8) * 60 + dt.getMinutes(); // jornada padrão 08:00
     if (min > PREMIO.toleranciaMin) atrasoMin += min;
   });
-  const faltasInj = faltas.filter(f => f.userId === userId && mesmoMes(f.data)).length;
+  const faltasInj = faltas.filter(f => f.userId === userId && !f.justificada && mesmoMes(f.data)).length;
   const medidores = [
     { id: "R1", label: "Atrasos acumulados no mês", valor: atrasoMin, limite: PREMIO.limiteAtrasoMin, unidade: " min", regraTexto: `perde o prêmio acima de ${PREMIO.limiteAtrasoMin} min`, estourou: atrasoMin > PREMIO.limiteAtrasoMin },
     { id: "R2", label: "Faltas injustificadas no mês", valor: faltasInj, limite: PREMIO.limiteFaltas, unidade: "", regraTexto: `perde o prêmio com ${PREMIO.limiteFaltas} ou mais`, estourou: faltasInj >= PREMIO.limiteFaltas },
@@ -188,9 +241,9 @@ function elegibilidadePremio(userId, registros, faltas) {
   const bonusPontualidade = atrasoMin === 0;
   return { atrasoMin, faltasInj, medidores, elegivel: !medidores.some(m => m.estourou), bonusPontualidade };
 }
-
+ 
 const corMedidor = (pct) => (pct >= 1 ? C.vermelho : pct >= 0.7 ? C.amarelo : C.verde);
-
+ 
 /* ============================================================
    GAMIFICAÇÃO — sistema de pontos
    Regras transparentes e apenas sobre métricas positivas/neutras
@@ -204,14 +257,14 @@ const GAME = {
   ptsMesSemFalta: 50,       // mês corrente sem falta injustificada
   ptsMetaAssiduidade: 200,  // meta de assiduidade do mês = critérios R1+R2 do Prêmio ok no fechamento
 };
-
+ 
 const NIVEIS = [
   { nome: "Bronze",   min: 0,   icone: "🥉", cor: "#CD7F32" },
   { nome: "Prata",    min: 200, icone: "🥈", cor: "#C0C0C0" },
   { nome: "Ouro",     min: 450, icone: "🥇", cor: "#FFD600" },
   { nome: "Diamante", min: 800, icone: "💎", cor: "#7FDBFF" },
 ];
-
+ 
 function nivelDe(pontos) {
   const idx = NIVEIS.map(n => n.min <= pontos).lastIndexOf(true);
   const atual = NIVEIS[idx];
@@ -219,7 +272,7 @@ function nivelDe(pontos) {
   const progresso = proximo ? (pontos - atual.min) / (proximo.min - atual.min) : 1;
   return { atual, proximo, progresso, faltam: proximo ? proximo.min - pontos : 0 };
 }
-
+ 
 function calcularGamificacao(userId, registros, faltas) {
   const eventos = Object.values(agruparPorDia(registros, userId)).map(regs => {
     const ent = regs.find(r => r.tipo === "entrada");
@@ -227,9 +280,9 @@ function calcularGamificacao(userId, registros, faltas) {
     const dt = new Date(ent.ts);
     return { data: dt, pontual: (dt.getHours() - 8) * 60 + dt.getMinutes() <= PREMIO.toleranciaMin };
   }).filter(Boolean);
-  faltas.filter(f => f.userId === userId).forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
+  faltas.filter(f => f.userId === userId && !f.justificada).forEach(f => eventos.push({ data: new Date(f.data), pontual: false, falta: true }));
   eventos.sort((a, b) => a.data - b.data);
-
+ 
   let streak = 0, melhorStreak = 0, ptsPontual = 0, ptsStreak = 0, ptsMarcos = 0;
   const marcosBatidos = [];
   eventos.forEach(e => {
@@ -240,12 +293,12 @@ function calcularGamificacao(userId, registros, faltas) {
     if (streak >= 3) ptsStreak += GAME.ptsBonusStreak;
     if (GAME.marcosStreak[streak]) { ptsMarcos += GAME.marcosStreak[streak]; marcosBatidos.push(streak); }
   });
-
+ 
   const eleg = elegibilidadePremio(userId, registros, faltas);
   const temDias = eventos.some(e => !e.falta);
   const mesSemFalta = temDias && eleg.faltasInj === 0;
   const metaAssiduidade = temDias && eleg.elegivel; // apuração parcial; consolida no fechamento do mês
-
+ 
   const linhas = [
     { label: `Dias com entrada pontual (${GAME.ptsDiaPontual} pts/dia)`, pts: ptsPontual },
     { label: `Bônus de sequência (+${GAME.ptsBonusStreak}/dia a partir do 3º dia seguido)`, pts: ptsStreak },
@@ -257,7 +310,7 @@ function calcularGamificacao(userId, registros, faltas) {
   const diasPontuais = ptsPontual / GAME.ptsDiaPontual;
   return { total: linhas.reduce((s, l) => s + l.pts, 0), linhas, streak, melhorStreak, mesSemFalta, metaAssiduidade, diasTrab, diasPontuais };
 }
-
+ 
 /* ---------- Badges / conquistas ----------
    Cada badge define uma métrica {valor, alvo}; conquistada quando valor >= alvo.
    Só métricas positivas — nada de expor faltas ou atestados. */
@@ -272,7 +325,7 @@ const BADGES = [
   { id: "b8", icone: "🥇", nome: "Clube dos 500", desc: "Acumulou 500 pontos", m: (g) => ({ valor: g.total, alvo: 500 }) },
   { id: "b9", icone: "💎", nome: "Elite Diamante", desc: "Alcançou o nível Diamante", m: (g) => ({ valor: g.total, alvo: NIVEIS[3].min }) },
 ];
-
+ 
 function calcularBadges(g) {
   return BADGES.map(b => {
     const { valor, alvo, progresso } = b.m(g);
@@ -280,8 +333,8 @@ function calcularBadges(g) {
     return { ...b, valor, alvo, pct, conquistada: valor >= alvo };
   });
 }
-
-
+ 
+ 
 /* ============================================================
    GERADOR FISCAL — AFD (leiaute 003) e AEJ (leiaute 001)
    Portaria MTP 671/2021 · transcrito do módulo afd-aej-generator.js
@@ -302,7 +355,7 @@ const fmtDH = (dt) => {
   return `${fmtDfis(x)}T${String(x.getHours()).padStart(2, "0")}:${String(x.getMinutes()).padStart(2, "0")}:00${zz}`;
 };
 const fmtHfis = (hhmm) => soDigitos(hhmm).padStart(4, "0").slice(0, 4);
-
+ 
 // CRC-16/KERMIT (CCITT-TRUE) — registros tipos 1 a 5 do AFD. Vetor oficial: "123456789" → "2189"
 function crc16Kermit(str) {
   let crc = 0x0000;
@@ -316,7 +369,7 @@ async function sha256Hex(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-
+ 
 async function gerarAFDReal(config, marcacoes, eventos = []) {
   const linhas = [];
   const datas = marcacoes.map((m) => new Date(m.tsMarcacao));
@@ -346,7 +399,7 @@ async function gerarAFDReal(config, marcacoes, eventos = []) {
   linhas.push(padA("ASSINATURA_DIGITAL_EM_ARQUIVO_P7S", 100));
   return { conteudo: linhas.join(CRLF) + CRLF, nomeArquivo: `AFD${soDigitos(config.nrInpi)}${soDigitos(config.idtEmpregador)}REP_P.txt` };
 }
-
+ 
 function gerarAEJReal(config, vinculos, horarios, marcacoes, ausencias, periodo) {
   const L = [];
   const j = (...campos) => campos.join("|");
@@ -368,7 +421,7 @@ function gerarAEJReal(config, vinculos, horarios, marcacoes, ausencias, periodo)
   L.push(padA("ASSINATURA_DIGITAL_EM_ARQUIVO_P7S", 100));
   return { conteudo: L.join(CRLF) + CRLF, nomeArquivo: `AEJ_${soDigitos(config.idtEmpregador)}_${fmtDfis(periodo.ini)}_${fmtDfis(periodo.fim)}.txt` };
 }
-
+ 
 // Download em ISO 8859-1, conforme o leiaute (não UTF-8)
 function baixarArquivo(conteudo, nome) {
   const bytes = new Uint8Array([...conteudo].map((c) => Math.min(c.charCodeAt(0), 255)));
@@ -379,8 +432,8 @@ function baixarArquivo(conteudo, nome) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-
-
+ 
+ 
 function MedidorPremio({ m }) {
   const pct = Math.min(1, m.limite ? m.valor / m.limite : 0);
   const cor = m.estourou ? C.vermelho : corMedidor(pct);
@@ -399,7 +452,7 @@ function MedidorPremio({ m }) {
     </div>
   );
 }
-
+ 
 /* ================= UI base ================= */
 const C = { preto: "#0D0D0D", carvao: "#171717", grafite: "#232323", amarelo: "#FFD600", vermelho: "#E53935", verde: "#2E9E5B", cinza: "#9E9E9E", branco: "#F5F5F2" };
 const S = {
@@ -411,13 +464,13 @@ const S = {
   input: { background: C.grafite, border: "1px solid #3a3a3a", borderRadius: 10, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
   tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, display: "inline-block" }),
 };
-
+ 
 const Badge = ({ st }) => {
-  const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, "#fff", "APROVADO"], recusado: [C.vermelho, "#fff", "RECUSADO"] };
+  const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, "#fff", "APROVADO"], aprovada: [C.verde, "#fff", "APROVADA"], recusado: [C.vermelho, "#fff", "RECUSADO"], rejeitado: [C.vermelho, "#fff", "REJEITADO"], rejeitada: [C.vermelho, "#fff", "REJEITADA"] };
   const [bg, fg, tx] = map[st] || map.pendente;
   return <span style={S.tag(bg, fg)}>{tx}</span>;
 };
-
+ 
 function CameraCapture({ onCapture, onSkip }) {
   const videoRef = useRef(null);
   const [erro, setErro] = useState(null);
@@ -450,7 +503,7 @@ function CameraCapture({ onCapture, onSkip }) {
     </div>
   );
 }
-
+ 
 function RecCard({ rec }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
@@ -465,30 +518,114 @@ function RecCard({ rec }) {
     </div>
   );
 }
-
+ 
 /* ================= App ================= */
 function App() {
-  const [usuarios] = useState(USUARIOS_SEED);
+  const [demo, setDemo] = useState(false);
+  const [sessao, setSessao] = useState(null); // { token, uid }
   const [user, setUser] = useState(null);
-  const [tela, setTela] = useState("ponto");
-  const [registros, setRegistros] = useState(REGISTROS_SEED);
-  const [faltas] = useState(FALTAS_SEED);
-  const [justificativas, setJustificativas] = useState([
-    { id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" },
-  ]);
+  const [usuarios, setUsuarios] = useState([]);
+  const [registros, setRegistros] = useState([]);
+  const [faltas, setFaltas] = useState([]);
+  const [justificativas, setJustificativas] = useState([]);
   const [atestados, setAtestados] = useState([]);
   const [ferias, setFerias] = useState([]);
-  const [logs, setLogs] = useState([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Sistema iniciado (protótipo, dados em memória)" }]);
-  const [nsr, setNsr] = useState(NSR);
-  const [fluxoPonto, setFluxoPonto] = useState(null); // null | 'geo' | 'camera' | 'comprovante'
+  const [logs, setLogs] = useState([]);
+  const [tela, setTela] = useState("ponto");
+  const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
   const [gestorLiberado, setGestorLiberado] = useState(false);
   const [relogio, setRelogio] = useState(new Date());
+  const [salvando, setSalvando] = useState(false);
+  const [erroDados, setErroDados] = useState(null);
   useEffect(() => { const t = setInterval(() => setRelogio(new Date()), 1000); return () => clearInterval(t); }, []);
-
-  const log = (acao, detalhe) => setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
-
+ 
+  const log = (acao, detalhe) => {
+    setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
+    if (!demo && sessao) sbInsert(sessao.token, "auditoria", [{ usuario_id: user?.id ?? null, acao, detalhe }]).catch(() => {});
+  };
+ 
+  /* ---------- login ---------- */
+  const entrarSupabase = async (email, senha) => {
+    const auth = await sbLogin(email, senha); // lança erro se credencial inválida
+    const token = auth.access_token, uid = auth.user.id;
+    const [perfis, consents] = await Promise.all([
+      sbSelect(token, "usuarios", `select=*&id=eq.${uid}`),
+      sbSelect(token, "consentimentos_lgpd", `select=*&usuario_id=eq.${uid}`),
+    ]);
+    if (!perfis.length) throw new Error("Perfil não encontrado na tabela usuarios.");
+    if (perfis[0].ativo === false) throw new Error("Usuário inativo. Fale com o RH.");
+    const perfil = mapUser(perfis[0], consents[0]?.aceito);
+    setSessao({ token, uid });
+    setUser(perfil);
+    await carregarDados(token, perfil);
+    setTela("ponto");
+    setGestorLiberado(false);
+  };
+ 
+  const carregarDados = async (token, perfil) => {
+    setErroDados(null);
+    try {
+      const [us, marcs, flts, justs, ates, fers, auds, cons] = await Promise.all([
+        sbSelect(token, "usuarios", "select=*&order=nome"),
+        sbSelect(token, "marcacoes", "select=*&order=nsr"),
+        sbSelect(token, "faltas", "select=*&order=data"),
+        sbSelect(token, "justificativas", "select=*&order=criado_em.desc"),
+        sbSelect(token, "atestados", "select=*&order=criado_em.desc"),
+        sbSelect(token, "ferias", "select=*&order=criado_em.desc"),
+        sbSelect(token, "auditoria", "select=*&order=ts.desc&limit=300"),
+        sbSelect(token, "consentimentos_lgpd", "select=*"),
+      ]);
+      const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
+      setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
+      setRegistros(marcs.map(mapMarc));
+      setFaltas(flts.map(mapFalta));
+      setJustificativas(justs.map(mapJust));
+      setAtestados(ates.map(mapAte));
+      setFerias(fers.map(mapFer));
+      setLogs(auds.map(mapLog));
+    } catch (e) {
+      setErroDados(`Falha ao carregar dados: ${e.message}`);
+    }
+  };
+ 
+  const entrarDemo = (u) => {
+    setDemo(true);
+    setUsuarios(USUARIOS_SEED);
+    setRegistros(REGISTROS_SEED);
+    setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
+    setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
+    setAtestados([]); setFerias([]);
+    setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
+    setUser(u); setTela("ponto"); setGestorLiberado(false);
+  };
+ 
+  const sair = () => {
+    setUser(null); setSessao(null); setDemo(false);
+    setUsuarios([]); setRegistros([]); setFaltas([]); setJustificativas([]); setAtestados([]); setFerias([]); setLogs([]);
+    setFluxoPonto(null); setComprovante(null); setGestorLiberado(false);
+  };
+ 
+  /* ---------- sincronização pós-batida: gamificação + prêmio ---------- */
+  const sincronizarDerivados = async (uid, regs, flts) => {
+    if (demo || !sessao) return;
+    try {
+      const g = calcularGamificacao(uid, regs, flts);
+      await sbUpsert(sessao.token, "gamificacao_estado",
+        [{ usuario_id: uid, pontos_total: g.total, streak_atual: g.streak, streak_recorde: g.melhorStreak, atualizado_em: iso(new Date()) }], "usuario_id");
+      const conquistadas = calcularBadges(g).filter(b => b.conquistada).map(b => ({ usuario_id: uid, badge_id: b.id }));
+      if (conquistadas.length) await sbUpsert(sessao.token, "badges_conquistadas", conquistadas, "usuario_id,badge_id", true);
+      const e = elegibilidadePremio(uid, regs, flts);
+      const mesRef = hojeStr().slice(0, 8) + "01";
+      const motivo = e.elegivel ? null : e.medidores.filter(m => m.estourou).map(m => `${m.label}: ${m.valor}${m.unidade}`).join("; ");
+      const linha = { usuario_id: uid, mes_referencia: mesRef, elegivel: e.elegivel, minutos_atraso_mes: e.atrasoMin, faltas_injustificadas_mes: e.faltasInj, motivo_perda: motivo, atualizado_em: iso(new Date()) };
+      const existente = await sbSelect(sessao.token, "premio_performance", `select=id&usuario_id=eq.${uid}&mes_referencia=eq.${mesRef}`);
+      if (existente.length) await sbUpdate(sessao.token, "premio_performance", `id=eq.${existente[0].id}`, linha);
+      else await sbInsert(sessao.token, "premio_performance", [linha]);
+    } catch (e) { console.error("sync derivados:", e); }
+  };
+ 
   /* ---------- fluxo de batida ---------- */
   const iniciarBatida = () => {
     if (!user.consentimentoLGPD) { alert("Antes da primeira batida é necessário aceitar o Termo de Consentimento LGPD (biometria + geolocalização). Acesse a aba LGPD."); setTela("lgpd"); return; }
@@ -500,31 +637,125 @@ function App() {
     );
     if (!navigator.geolocation) { setGeo({ lat: null, lng: null, erro: "Sem suporte a geolocalização" }); setFluxoPonto("camera"); }
   };
-
-  const concluirBatida = (foto) => {
+ 
+  const concluirBatida = async (foto) => {
     const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
     const tipo = doDia.length % 2 === 0 ? "entrada" : "saida";
-    const reg = { nsr, userId: user.id, tipo, ts: iso(new Date()), lat: geo?.lat, lng: geo?.lng, foto, facialOk: !!foto };
-    setRegistros(r => [...r, reg]);
-    setNsr(n => n + 1);
-    log("batida", `NSR ${nsr} · ${tipo} · geo ${geo?.lat ?? "—"},${geo?.lng ?? "—"} · facial ${foto ? "validado (simulado)" : "sem foto"}`);
-    setComprovante(reg);
-    setFluxoPonto("comprovante");
+    setSalvando(true);
+    try {
+      let reg;
+      if (demo) {
+        const nsr = registros.reduce((m, r) => Math.max(m, r.nsr), 0) + 1;
+        reg = { nsr, userId: user.id, tipo, ts: iso(new Date()), lat: geo?.lat, lng: geo?.lng, foto, facialOk: !!foto };
+      } else {
+        const [row] = await sbInsert(sessao.token, "marcacoes", [{
+          usuario_id: user.id, tipo, ts: iso(new Date()), lat: geo?.lat ?? null, lng: geo?.lng ?? null,
+          precisao_m: geo?.precisao ?? null, facial_ok: !!foto, coletor: "02", offline: false,
+        }]);
+        reg = { ...mapMarc(row), foto }; // foto fica local (comprovante); em produção sobe pro Storage e grava foto_url
+      }
+      const novos = [...registros, reg];
+      setRegistros(novos);
+      log("batida", `NSR ${reg.nsr} · ${tipo} · geo ${geo?.lat ?? "—"},${geo?.lng ?? "—"} · facial ${foto ? "validado (simulado)" : "sem foto"}`);
+      if (!demo && tipo === "entrada") {
+        const dt = new Date(reg.ts);
+        const pontual = (dt.getHours() - 8) * 60 + dt.getMinutes() <= PREMIO.toleranciaMin;
+        if (pontual) {
+          const g = calcularGamificacao(user.id, novos, faltas);
+          const pts = GAME.ptsDiaPontual + (g.streak >= 3 ? GAME.ptsBonusStreak : 0) + (GAME.marcosStreak[g.streak] || 0);
+          sbInsert(sessao.token, "gamificacao_extrato", [{ usuario_id: user.id, data: hojeStr(), pontos: pts, motivo: `Entrada pontual${g.streak >= 3 ? ` · streak ${g.streak} dias` : ""}${GAME.marcosStreak[g.streak] ? " · marco batido" : ""}` }]).catch(() => {});
+        }
+      }
+      sincronizarDerivados(user.id, novos, faltas);
+      setComprovante(reg);
+      setFluxoPonto("comprovante");
+    } catch (e) {
+      alert(`Não foi possível registrar a batida: ${e.message}`);
+      setFluxoPonto(null);
+    } finally { setSalvando(false); }
   };
-
+ 
+  /* ---------- justificativas / atestados / férias ---------- */
+  const enviarJustificativa = async (texto, anexoNome) => {
+    if (demo) {
+      setJustificativas(j => [{ id: Date.now(), userId: user.id, data: iso(new Date()), texto, anexo: anexoNome ? { nome: anexoNome } : null, status: "pendente" }, ...j]);
+    } else {
+      const [row] = await sbInsert(sessao.token, "justificativas", [{ usuario_id: user.id, data: hojeStr(), tipo: "atraso", descricao: texto, anexo_url: anexoNome }]);
+      setJustificativas(j => [mapJust(row), ...j]);
+    }
+    log("justificativa", "Nova justificativa de atraso enviada");
+  };
+ 
+  const enviarAtestado = async (nomeArquivo, obs, preview) => {
+    if (demo) {
+      setAtestados(a => [{ id: Date.now(), userId: user.id, data: iso(new Date()), nome: nomeArquivo, preview, obs, status: "pendente" }, ...a]);
+    } else {
+      const [row] = await sbInsert(sessao.token, "atestados", [{ usuario_id: user.id, data_inicio: hojeStr(), data_fim: hojeStr(), cid: obs || null, anexo_url: nomeArquivo }]);
+      setAtestados(a => [{ ...mapAte(row), preview }, ...a]); // preview local; em produção o arquivo sobe pro Storage
+    }
+    log("atestado", `Atestado enviado: ${nomeArquivo}`);
+  };
+ 
+  const agendarFerias = (inicio, dias) => {
+    const adm = new Date(user.admissao);
+    const agora = new Date();
+    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: `Você completa 12 meses de empresa em ${fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate()))}. Agendamento liberado a partir dessa data (CLT art. 130: período aquisitivo).` };
+    const ini = new Date(inicio + "T00:00:00");
+    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: férias devem ser agendadas com no mínimo 5 meses de antecedência. Escolha uma data mais distante." };
+    (async () => {
+      try {
+        if (demo) {
+          setFerias(x => [{ id: Date.now(), userId: user.id, inicio, dias: +dias, status: "pendente" }, ...x]);
+        } else {
+          const fim = new Date(ini); fim.setDate(fim.getDate() + (+dias) - 1);
+          const [row] = await sbInsert(sessao.token, "ferias", [{ usuario_id: user.id, data_inicio: inicio, data_fim: fim.toISOString().slice(0, 10), dias: +dias }]);
+          setFerias(x => [mapFer(row), ...x]);
+        }
+        log("ferias", `Solicitação: ${dias} dias a partir de ${fmtData(ini)}`);
+      } catch (e) { alert(`Falha ao solicitar férias: ${e.message}`); }
+    })();
+    return { ok: true, msg: "Solicitação enviada pra aprovação do gestor. Lembrete: o aviso legal mínimo ao empregador é de 30 dias (CLT art. 135), a regra de 5 meses é política interna." };
+  };
+ 
+  /* ---------- aprovações do gestor ---------- */
+  const decidir = async (categoria, id, aprovar) => {
+    const mapa = {
+      "Justificativas": { tabela: "justificativas", setLista: setJustificativas, status: aprovar ? "aprovada" : "rejeitada" },
+      "Atestados": { tabela: "atestados", setLista: setAtestados, status: aprovar ? "aprovado" : "rejeitado" },
+      "Férias": { tabela: "ferias", setLista: setFerias, status: aprovar ? "aprovado" : "rejeitado" },
+    };
+    const m = mapa[categoria];
+    if (!m) return;
+    try {
+      if (!demo) await sbUpdate(sessao.token, m.tabela, `id=eq.${id}`, { status: m.status });
+      m.setLista(l => l.map(i => i.id === id ? { ...i, status: m.status } : i));
+      log("aprovacao", `${categoria} #${id} → ${m.status}`);
+    } catch (e) { alert(`Falha ao atualizar: ${e.message}`); }
+  };
+ 
+  /* ---------- LGPD ---------- */
+  const consentir = async (aceito) => {
+    try {
+      if (!demo) await sbUpsert(sessao.token, "consentimentos_lgpd", [{ usuario_id: user.id, aceito, atualizado_em: iso(new Date()) }], "usuario_id");
+      setUser(u => ({ ...u, consentimentoLGPD: aceito }));
+      setUsuarios(us => us.map(u => u.id === user.id ? { ...u, consentimentoLGPD: aceito } : u));
+      log("lgpd", aceito ? "Consentimento registrado" : "Consentimento revogado");
+    } catch (e) { alert(`Falha ao registrar consentimento: ${e.message}`); }
+  };
+ 
+  /* ---------- exportações fiscais ---------- */
   const cpfDe = (userId) => usuarios.find(u => u.id === userId)?.cpf || "";
-
+ 
   const exportarAFD = async () => {
     const marcacoes = registros.map(r => ({ nsr: r.nsr, cpf: cpfDe(r.userId), tsMarcacao: r.ts, tsGravacao: r.ts, coletor: "02", offline: false }));
     const { conteudo, nomeArquivo } = await gerarAFDReal(CONFIG_FISCAL, marcacoes);
     baixarArquivo(conteudo, nomeArquivo);
     log("export", `AFD gerado (leiaute 003): ${nomeArquivo} · ${marcacoes.length} marcações tipo 7 com cadeia SHA-256`);
   };
-
+ 
   const exportarAEJ = () => {
     const vinculos = usuarios.map((u, i) => ({ id: i + 1, cpf: u.cpf, nome: u.nome }));
     const vincDe = (userId) => vinculos[usuarios.findIndex(u => u.id === userId)]?.id;
-    // marcações E/S com sequencial do par por dia
     const marcacoesAej = [];
     usuarios.forEach(u => {
       const dias = agruparPorDia(registros, u.id);
@@ -536,40 +767,22 @@ function App() {
         });
       });
     });
-    const ausencias = faltas.map(f => ({ vinculoId: vincDe(f.userId), tipo: "2", data: f.data }));
+    const ausencias = faltas.filter(f => !f.justificada).map(f => ({ vinculoId: vincDe(f.userId), tipo: "2", data: f.data }));
     const ts = registros.map(r => new Date(r.ts));
     const periodo = { ini: ts.length ? new Date(Math.min(...ts)) : new Date(), fim: ts.length ? new Date(Math.max(...ts)) : new Date() };
     const { conteudo, nomeArquivo } = gerarAEJReal(CONFIG_FISCAL, vinculos, [HORARIO_CONTRATUAL], marcacoesAej, ausencias, periodo);
     baixarArquivo(conteudo, nomeArquivo);
     log("export", `AEJ gerado (leiaute 001): ${nomeArquivo} · ${vinculos.length} vínculos · ${marcacoesAej.length} marcações`);
   };
-
-  /* ---------- férias ---------- */
-  const agendarFerias = (inicio, dias) => {
-    const adm = new Date(user.admissao);
-    const agora = new Date();
-    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: `Você completa 12 meses de empresa em ${fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate()))}. Agendamento liberado a partir dessa data (CLT art. 130: período aquisitivo).` };
-    const ini = new Date(inicio + "T00:00:00");
-    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: férias devem ser agendadas com no mínimo 5 meses de antecedência. Escolha uma data mais distante." };
-    const f = { id: Date.now(), userId: user.id, inicio, dias: +dias, status: "pendente" };
-    setFerias(x => [...x, f]);
-    log("ferias", `Solicitação: ${dias} dias a partir de ${fmtData(ini)}`);
-    return { ok: true, msg: "Solicitação enviada pra aprovação do gestor. Lembrete: o aviso legal mínimo ao empregador é de 30 dias (CLT art. 135), a regra de 5 meses é política interna." };
-  };
-
-  const decidir = (lista, setLista, id, status, tipoLog) => {
-    setLista(l => l.map(i => i.id === id ? { ...i, status } : i));
-    log("aprovacao", `${tipoLog} #${id} → ${status}`);
-  };
-
-  if (!user) return <Login usuarios={usuarios} onEntrar={(u) => { setUser(u); setTela("ponto"); setGestorLiberado(false); }} />;
-
+ 
+  if (!user) return <Login onSupabase={entrarSupabase} onDemo={entrarDemo} />;
+ 
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
     ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
-
+ 
   return (
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
@@ -578,7 +791,12 @@ function App() {
         <aside className="no-print" style={{ width: 230, background: C.carvao, borderRight: "1px solid #2b2b2b", padding: 18, flexShrink: 0 }}>
           <div style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
           <div style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
-          <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ marginTop: 8 }}>
+            {demo
+              ? <span style={S.tag(C.grafite, C.amarelo)}>⚡ demonstração (local)</span>
+              : <span style={S.tag(C.grafite, C.verde)}>● conectado ao Supabase</span>}
+          </div>
+          <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
             {menu.map(([k, label]) => (
               <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#3a3a3a" }}>{label}</button>
             ))}
@@ -588,25 +806,27 @@ function App() {
               <div style={{ width: 36, height: 36, borderRadius: "50%", background: C.amarelo, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{user.avatar}</div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>{user.nome}</div>
-                <div style={{ fontSize: 11, color: C.cinza }}>{user.papel === "gestor" ? "Gestor" : "Colaborador"}</div>
+                <div style={{ fontSize: 11, color: C.cinza }}>{user.papel === "gestor" ? "Gestor" : "Colaborador"}{user.matricula ? ` · ${user.matricula}` : ""}</div>
               </div>
             </div>
-            <button style={{ ...S.btnGhost, marginTop: 12, width: "100%", fontSize: 13 }} onClick={() => setUser(null)}>Sair</button>
+            <button style={{ ...S.btnGhost, marginTop: 12, width: "100%", fontSize: 13 }} onClick={sair}>Sair</button>
           </div>
         </aside>
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
+          {erroDados && <div style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: `4px solid ${C.vermelho}`, fontSize: 13 }}>⚠️ {erroDados} <button style={{ ...S.btnGhost, marginLeft: 10, padding: "4px 10px", fontSize: 12 }} onClick={() => carregarDados(sessao?.token, user)}>Tentar de novo</button></div>}
+          {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
           {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} />}
-          {tela === "justificar" && <TelaJustificar {...{ user, justificativas, setJustificativas, log }} />}
-          {tela === "atestados" && <TelaAtestados {...{ user, atestados, setAtestados, log }} />}
+          {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
+          {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
-          {tela === "lgpd" && <TelaLGPD user={user} log={log} />}
+          {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
             gestorLiberado
-              ? <TelaGestor {...{ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }} />
+              ? <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }} />
               : <GateGestor onOk={() => { setGestorLiberado(true); log("acesso", "Painel do gestor desbloqueado"); }} />
           )}
         </main>
@@ -614,18 +834,40 @@ function App() {
     </div>
   );
 }
-
+ 
 /* ================= Telas ================= */
-function Login({ usuarios, onEntrar }) {
+function Login({ onSupabase, onDemo }) {
+  const CONTAS = [
+    { nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", avatar: "CF", gestor: true },
+    { nome: "Marina Souza", email: "marina@renovartech.com.br", avatar: "MS" },
+    { nome: "Rafael Lima", email: "rafael@renovartech.com.br", avatar: "RL" },
+    { nome: "Juliana Prates", email: "juliana@renovartech.com.br", avatar: "JP" },
+  ];
+  const [sel, setSel] = useState(null);
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState(null);
+  const [carregando, setCarregando] = useState(false);
+  const entrar = async () => {
+    if (!sel || !senha) return;
+    setCarregando(true); setErro(null);
+    try {
+      await onSupabase(sel.email, senha);
+    } catch (e) {
+      const rede = e instanceof TypeError || /fetch|network/i.test(e.message);
+      setErro(rede
+        ? "Não foi possível conectar ao Supabase. Se você está rodando dentro do preview do claude.ai, o sandbox pode bloquear conexões externas — hospede o arquivo (ou teste local) pra usar o backend real, ou entre no modo demonstração abaixo."
+        : e.message);
+    } finally { setCarregando(false); }
+  };
   return (
     <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ ...S.card, width: 420, textAlign: "center", padding: 36 }}>
+      <div style={{ ...S.card, width: 440, textAlign: "center", padding: 36 }}>
         <div style={{ ...S.display, fontSize: 34, color: C.amarelo, lineHeight: 1 }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
-        <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Acesso exclusivo com conta Google corporativa</div>
-        <div style={{ marginTop: 26, display: "flex", flexDirection: "column", gap: 10 }}>
-          {usuarios.map(u => (
-            <button key={u.id} onClick={() => onEntrar(u)} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-              <span style={{ width: 34, height: 34, borderRadius: "50%", background: u.papel === "gestor" ? C.vermelho : C.amarelo, color: u.papel === "gestor" ? "#fff" : "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{u.avatar}</span>
+        <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Entre com sua conta corporativa</div>
+        <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
+          {CONTAS.map(u => (
+            <button key={u.email} onClick={() => { setSel(u); setErro(null); }} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderColor: sel?.email === u.email ? C.amarelo : "#3a3a3a", background: sel?.email === u.email ? C.grafite : "transparent" }}>
+              <span style={{ width: 34, height: 34, borderRadius: "50%", background: u.gestor ? C.vermelho : C.amarelo, color: u.gestor ? "#fff" : "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{u.avatar}</span>
               <span style={{ textAlign: "left" }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{u.nome}</div>
                 <div style={{ fontSize: 12, color: C.cinza }}>{u.email}</div>
@@ -633,12 +875,28 @@ function Login({ usuarios, onEntrar }) {
             </button>
           ))}
         </div>
-        <p style={{ fontSize: 11, color: C.cinza, marginTop: 20 }}>🔒 OAuth Google simulado no protótipo. Em produção: Google Identity Services + verificação de domínio @renovartech.com.br no backend.</p>
+        {sel && (
+          <div style={{ marginTop: 16 }}>
+            <input type="password" style={{ ...S.input, textAlign: "center" }} placeholder={`Senha de ${sel.nome.split(" ")[0]}`} value={senha}
+              onChange={e => { setSenha(e.target.value); setErro(null); }}
+              onKeyDown={e => e.key === "Enter" && entrar()} autoFocus />
+            <button style={{ ...S.btn, marginTop: 10, width: "100%", opacity: carregando ? 0.6 : 1 }} disabled={carregando} onClick={entrar}>
+              {carregando ? "Autenticando…" : "Entrar"}
+            </button>
+          </div>
+        )}
+        {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
+        <div style={{ marginTop: 18, borderTop: "1px solid #2b2b2b", paddingTop: 12 }}>
+          <button style={{ ...S.btnGhost, fontSize: 12, width: "100%" }} onClick={() => onDemo(USUARIOS_SEED.find(u => u.id === (sel ? { "cleiton@renovartech.com.br": "u1", "marina@renovartech.com.br": "u2", "rafael@renovartech.com.br": "u3", "juliana@renovartech.com.br": "u4" }[sel.email] : "u1")))}>
+            ⚡ Entrar em modo demonstração (dados locais, sem backend)
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Autenticação real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable é pública por design — a segurança vem das políticas de acesso.</p>
       </div>
     </div>
   );
 }
-
+ 
 function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }) {
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
@@ -706,7 +964,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
     </div>
   );
 }
-
+ 
 function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
   const dias = agruparPorDia(registros, user.id);
   return (
@@ -744,16 +1002,18 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
     </div>
   );
 }
-
-function TelaJustificar({ user, justificativas, setJustificativas, log }) {
+ 
+function TelaJustificar({ user, justificativas, onEnviar }) {
   const [texto, setTexto] = useState("");
   const [anexo, setAnexo] = useState(null);
+  const [enviando, setEnviando] = useState(false);
   const minhas = justificativas.filter(j => j.userId === user.id);
-  const enviar = () => {
-    if (!texto.trim()) return;
-    setJustificativas(j => [...j, { id: Date.now(), userId: user.id, data: iso(new Date()), texto, anexo, status: "pendente" }]);
-    log("justificativa", "Nova justificativa de atraso enviada");
-    setTexto(""); setAnexo(null);
+  const enviar = async () => {
+    if (!texto.trim() || enviando) return;
+    setEnviando(true);
+    try { await onEnviar(texto, anexo?.nome || null); setTexto(""); setAnexo(null); }
+    catch (e) { alert(`Falha ao enviar: ${e.message}`); }
+    finally { setEnviando(false); }
   };
   return (
     <div>
@@ -764,7 +1024,7 @@ function TelaJustificar({ user, justificativas, setJustificativas, log }) {
           <label style={{ ...S.btnGhost, cursor: "pointer" }}>📎 {anexo ? anexo.nome : "Anexar evidência"}
             <input type="file" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) setAnexo({ nome: f.name, tamanho: f.size }); }} />
           </label>
-          <button style={S.btn} onClick={enviar}>Enviar pra aprovação</button>
+          <button style={{ ...S.btn, opacity: enviando ? 0.6 : 1 }} disabled={enviando} onClick={enviar}>{enviando ? "Enviando…" : "Enviar pra aprovação"}</button>
         </div>
       </div>
       {minhas.map(j => (
@@ -779,17 +1039,19 @@ function TelaJustificar({ user, justificativas, setJustificativas, log }) {
     </div>
   );
 }
-
-function TelaAtestados({ user, atestados, setAtestados, log }) {
+ 
+function TelaAtestados({ user, atestados, onEnviar }) {
   const meus = atestados.filter(a => a.userId === user.id);
   const [obs, setObs] = useState("");
+  const [enviando, setEnviando] = useState(false);
   const anexar = (f) => {
-    if (!f) return;
+    if (!f || enviando) return;
     const r = new FileReader();
-    r.onload = () => {
-      setAtestados(a => [...a, { id: Date.now(), userId: user.id, data: iso(new Date()), nome: f.name, preview: f.type.startsWith("image") ? r.result : null, obs, status: "pendente" }]);
-      log("atestado", `Atestado enviado: ${f.name}`);
-      setObs("");
+    r.onload = async () => {
+      setEnviando(true);
+      try { await onEnviar(f.name, obs, f.type.startsWith("image") ? r.result : null); setObs(""); }
+      catch (e) { alert(`Falha ao enviar: ${e.message}`); }
+      finally { setEnviando(false); }
     };
     r.readAsDataURL(f);
   };
@@ -798,10 +1060,10 @@ function TelaAtestados({ user, atestados, setAtestados, log }) {
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Atestados médicos</h1>
       <div style={{ ...S.card, marginTop: 16 }}>
         <input style={S.input} placeholder="Observação (opcional): CID, dias de afastamento…" value={obs} onChange={e => setObs(e.target.value)} />
-        <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer" }}>📤 Enviar atestado (foto ou PDF)
+        <label style={{ ...S.btn, display: "inline-block", marginTop: 10, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>{enviando ? "⏳ Enviando…" : "📤 Enviar atestado (foto ou PDF)"}
           <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={e => anexar(e.target.files[0])} />
         </label>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). Em produção: armazenamento criptografado, acesso restrito a RH/gestor, retenção conforme prazo legal trabalhista.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). No protótipo apenas o nome do arquivo e a observação vão pro banco — em produção o arquivo sobe pro Supabase Storage (bucket privado, URL assinada) e grava-se o anexo_url.</p>
       </div>
       {meus.map(a => (
         <div key={a.id} style={{ ...S.card, marginTop: 12, display: "flex", gap: 14, alignItems: "center" }}>
@@ -816,7 +1078,7 @@ function TelaAtestados({ user, atestados, setAtestados, log }) {
     </div>
   );
 }
-
+ 
 function TelaFerias({ user, ferias, agendarFerias }) {
   const [inicio, setInicio] = useState("");
   const [dias, setDias] = useState(30);
@@ -847,7 +1109,7 @@ function TelaFerias({ user, ferias, agendarFerias }) {
     </div>
   );
 }
-
+ 
 function TelaGame({ user, registros, faltas }) {
   const g = useMemo(() => calcularGamificacao(user.id, registros, faltas), [user, registros, faltas]);
   const badges = useMemo(() => calcularBadges(g), [g]);
@@ -947,7 +1209,7 @@ function TelaGame({ user, registros, faltas }) {
     </div>
   );
 }
-
+ 
 function TelaPremio({ user, registros, faltas }) {
   const e = useMemo(() => elegibilidadePremio(user.id, registros, faltas), [user, registros, faltas]);
   return (
@@ -981,7 +1243,7 @@ function TelaPremio({ user, registros, faltas }) {
     </div>
   );
 }
-
+ 
 function TelaFeedback({ user, registros, faltas }) {
   const { analise, feedbacks } = useMemo(() => gerarFeedback(user, registros, faltas), [user, registros, faltas]);
   return (
@@ -1005,9 +1267,10 @@ function TelaFeedback({ user, registros, faltas }) {
     </div>
   );
 }
-
-function TelaLGPD({ user, log }) {
+ 
+function TelaLGPD({ user, onConsentir }) {
   const [aceito, setAceito] = useState(user.consentimentoLGPD);
+  useEffect(() => setAceito(user.consentimentoLGPD), [user.consentimentoLGPD]);
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Privacidade e LGPD</h1>
@@ -1015,14 +1278,14 @@ function TelaLGPD({ user, log }) {
         <b style={{ color: C.branco }}>Termo de consentimento — tratamento de dados pessoais</b>
         <p>O PONTO RENOVAR coleta, com a finalidade específica de controle de jornada (Portaria MTP 671/2021): <b>imagem facial</b> (dado biométrico sensível, LGPD art. 11) no momento de cada marcação; <b>geolocalização</b> da marcação; e registros de horários. Os dados são usados exclusivamente pra validação de identidade, apuração de jornada e obrigações legais trabalhistas. Retenção: registros de ponto por no mínimo 5 anos; fotos de validação por 90 dias, depois excluídas. Você pode solicitar acesso, correção ou exclusão (quando não houver obrigação legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
         <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
-          <input type="checkbox" checked={aceito} onChange={e => { setAceito(e.target.checked); user.consentimentoLGPD = e.target.checked; log("lgpd", e.target.checked ? "Consentimento registrado" : "Consentimento revogado"); }} />
+          <input type="checkbox" checked={aceito} onChange={e => { setAceito(e.target.checked); onConsentir(e.target.checked); }} />
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
         </label>
       </div>
     </div>
   );
 }
-
+ 
 function GateGestor({ onOk }) {
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState(false);
@@ -1038,8 +1301,8 @@ function GateGestor({ onOk }) {
     </div>
   );
 }
-
-function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificativas, atestados, setAtestados, ferias, setFerias, logs, decidir }) {
+ 
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
@@ -1092,10 +1355,10 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
         </table>
       </div>
       {[
-        ["Justificativas", justificativas, setJustificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
-        ["Atestados", atestados, setAtestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
-        ["Férias", ferias, setFerias, (f) => `${nome(f.userId)} — ${f.dias} dias a partir de ${fmtData(f.inicio + "T00:00:00")}`],
-      ].map(([titulo, lista, setLista, render]) => (
+        ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
+        ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
+        ["Férias", ferias, (f) => `${nome(f.userId)} — ${f.dias} dias a partir de ${fmtData(f.inicio + "T00:00:00")}`],
+      ].map(([titulo, lista, render]) => (
         <div key={titulo} style={{ ...S.card, marginTop: 14 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>{titulo}</div>
           {lista.length === 0 ? <p style={{ fontSize: 13, color: C.cinza }}>Nada por aqui.</p> : lista.map(item => (
@@ -1104,8 +1367,8 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <Badge st={item.status} />
                 {item.status === "pendente" && <>
-                  <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "aprovado", titulo)}>Aprovar</button>
-                  <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px" }} onClick={() => decidir(lista, setLista, item.id, "recusado", titulo)}>Recusar</button>
+                  <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px" }} onClick={() => decidir(titulo, item.id, true)}>Aprovar</button>
+                  <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px" }} onClick={() => decidir(titulo, item.id, false)}>Recusar</button>
                 </>}
               </span>
             </div>
@@ -1125,9 +1388,10 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, setJustificat
     </div>
   );
 }
-
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-
+ 
+ 
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+ 
