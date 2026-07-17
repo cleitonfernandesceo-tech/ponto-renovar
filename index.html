@@ -98,6 +98,14 @@ const mapJust = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, tex
 const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome: r.anexo_url ? r.anexo_url.split("/").pop().replace(/^\d+_/, "") : "atestado", path: r.anexo_url, preview: null, obs: r.cid, status: r.status });
 const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
 const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
+const mapLocal = (r) => ({ id: r.id, nome: r.nome, latitude: r.latitude, longitude: r.longitude, raio: r.raio_metros, ativo: r.ativo });
+// Distância em metros entre dois pontos (fórmula de Haversine)
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000, rad = (x) => (x * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1), dLon = rad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 const mapUser = (r, consentiu) => ({
   id: r.id, nome: r.nome, email: r.email, cpf: r.cpf, papel: r.tipo, cargo: r.cargo, matricula: r.matricula, ativo: r.ativo,
   admissao: r.data_admissao || "2020-01-01",
@@ -543,6 +551,8 @@ function App() {
   const [atestados, setAtestados] = useState([]);
   const [ferias, setFerias] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [locais, setLocais] = useState([]);
+  const [bloqueioGeo, setBloqueioGeo] = useState(null);
   const [tela, setTela] = useState("ponto");
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
@@ -577,7 +587,7 @@ function App() {
   const carregarDados = async (token, perfil) => {
     setErroDados(null);
     try {
-      const [us, marcs, flts, justs, ates, fers, auds, cons] = await Promise.all([
+      const [us, marcs, flts, justs, ates, fers, auds, cons, locs] = await Promise.all([
         sbSelect(token, "usuarios", "select=*&order=nome"),
         sbSelect(token, "marcacoes", "select=*&order=nsr"),
         sbSelect(token, "faltas", "select=*&order=data"),
@@ -586,6 +596,7 @@ function App() {
         sbSelect(token, "ferias", "select=*&order=criado_em.desc"),
         sbSelect(token, "auditoria", "select=*&order=ts.desc&limit=300"),
         sbSelect(token, "consentimentos_lgpd", "select=*"),
+        sbSelect(token, "locais_trabalho", "select=*&order=criado_em"),
       ]);
       const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
       setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
@@ -595,6 +606,7 @@ function App() {
       setAtestados(ates.map(mapAte));
       setFerias(fers.map(mapFer));
       setLogs(auds.map(mapLog));
+      setLocais(locs.map(mapLocal));
     } catch (e) {
       setErroDados(`Falha ao carregar dados: ${e.message}`);
     }
@@ -606,7 +618,7 @@ function App() {
     setRegistros(REGISTROS_SEED);
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
-    setAtestados([]); setFerias([]);
+    setAtestados([]); setFerias([]); setLocais([]);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
     setUser(u); setTela("ponto");
   };
@@ -639,13 +651,63 @@ function App() {
   /* ---------- fluxo de batida ---------- */
   const iniciarBatida = () => {
     if (!user.consentimentoLGPD) { alert("Antes da primeira batida é necessário aceitar o Termo de Consentimento LGPD (biometria + geolocalização). Acesse a aba LGPD."); setTela("lgpd"); return; }
+    setBloqueioGeo(null);
     setFluxoPonto("geo");
+    const ativos = locais.filter(l => l.ativo);
+    const avaliar = (g) => {
+      setGeo(g);
+      // Sem nenhum local cadastrado: libera a batida (aviso discreto já aparece na tela)
+      if (ativos.length === 0) { setFluxoPonto("camera"); return; }
+      // Há geofence configurado mas sem posição: não dá pra verificar — bloqueia com orientação
+      if (g.lat == null) {
+        setBloqueioGeo({ msg: `Não foi possível obter sua localização (${g.erro}). Como há local de trabalho configurado, o registro exige GPS ativo — verifique a permissão de localização do navegador e tente de novo.` });
+        setFluxoPonto(null);
+        return;
+      }
+      const dists = ativos.map(l => ({ l, d: haversineM(g.lat, g.lng, l.latitude, l.longitude) }));
+      dists.sort((a, b) => a.d - b.d);
+      const maisPerto = dists[0];
+      if (maisPerto.d <= maisPerto.l.raio) {
+        setGeo({ ...g, local: maisPerto.l.nome, dist: Math.round(maisPerto.d), raio: maisPerto.l.raio });
+        setFluxoPonto("camera");
+      } else {
+        setBloqueioGeo({ msg: `Você está a ${Math.round(maisPerto.d)} metros de "${maisPerto.l.nome}" — o máximo permitido é ${maisPerto.l.raio} metros. Aproxime-se do local de trabalho pra registrar o ponto.` });
+        setFluxoPonto(null);
+        log("batida_bloqueada", `Fora do raio: ${Math.round(maisPerto.d)}m de "${maisPerto.l.nome}" (raio ${maisPerto.l.raio}m)`);
+      }
+    };
     navigator.geolocation?.getCurrentPosition(
-      p => { setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), precisao: Math.round(p.coords.accuracy) }); setFluxoPonto("camera"); },
-      () => { setGeo({ lat: null, lng: null, erro: "Geolocalização negada/indisponível" }); setFluxoPonto("camera"); },
-      { timeout: 8000 }
+      p => avaliar({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), precisao: Math.round(p.coords.accuracy) }),
+      () => avaliar({ lat: null, lng: null, erro: "Geolocalização negada/indisponível" }),
+      { timeout: 8000, enableHighAccuracy: true }
     );
-    if (!navigator.geolocation) { setGeo({ lat: null, lng: null, erro: "Sem suporte a geolocalização" }); setFluxoPonto("camera"); }
+    if (!navigator.geolocation) avaliar({ lat: null, lng: null, erro: "Sem suporte a geolocalização" });
+  };
+ 
+  /* ---------- locais de trabalho (gestor) ---------- */
+  const criarLocal = (nome, raio) => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Sem suporte a geolocalização neste navegador."));
+    navigator.geolocation.getCurrentPosition(async (p) => {
+      try {
+        const linha = { nome: nome.trim(), latitude: +p.coords.latitude.toFixed(6), longitude: +p.coords.longitude.toFixed(6), raio_metros: Math.max(10, +raio || 50), ativo: true, criado_por: user.id };
+        if (demo) {
+          setLocais(ls => [...ls, { id: Date.now(), ...linha, raio: linha.raio_metros }]);
+        } else {
+          const [row] = await sbInsert(sessao.token, "locais_trabalho", [linha]);
+          setLocais(ls => [...ls, mapLocal(row)]);
+        }
+        log("local", `Local "${linha.nome}" criado (raio ${linha.raio_metros}m, ±${Math.round(p.coords.accuracy)}m de precisão na captura)`);
+        resolve(Math.round(p.coords.accuracy));
+      } catch (e) { reject(e); }
+    }, (err) => reject(new Error("Não foi possível obter sua posição: " + err.message)), { enableHighAccuracy: true, timeout: 10000 });
+  });
+ 
+  const desativarLocal = async (id) => {
+    try {
+      if (!demo) await sbUpdate(sessao.token, "locais_trabalho", `id=eq.${id}`, { ativo: false }); // update em vez de delete: preserva histórico
+      setLocais(ls => ls.map(l => l.id === id ? { ...l, ativo: false } : l));
+      log("local", `Local #${id} desativado`);
+    } catch (e) { alert(`Falha ao desativar: ${e.message}`); }
   };
  
   const concluirBatida = async (foto) => {
@@ -827,7 +889,7 @@ function App() {
         <main style={{ flex: 1, padding: 28, maxWidth: 980 }}>
           {erroDados && <div style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: `4px solid ${C.vermelho}`, fontSize: 13 }}>⚠️ {erroDados} <button style={{ ...S.btnGhost, marginLeft: 10, padding: "4px 10px", fontSize: 12 }} onClick={() => carregarDados(sessao?.token, user)}>Tentar de novo</button></div>}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -838,7 +900,7 @@ function App() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal }} />
           )}
         </main>
       </div>
@@ -908,7 +970,8 @@ function Login({ onSupabase, onDemo }) {
   );
 }
  
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo }) {
+  const temLocais = locais.some(l => l.ativo);
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
   const a = analisarAssiduidade(user.id, registros, faltas);
@@ -917,6 +980,16 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
+      {!temLocais && (
+        <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
+      )}
+      {bloqueioGeo && (
+        <div style={{ ...S.card, marginTop: 14, padding: 14, borderLeft: `4px solid ${C.vermelho}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 22 }}>📍⛔</span>
+          <div style={{ flex: 1, fontSize: 13 }}><b>Registro bloqueado por localização:</b> {bloqueioGeo.msg}</div>
+          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={iniciarBatida}>Tentar de novo</button>
+        </div>
+      )}
       {emAlerta.length > 0 && (
         <div style={{ ...S.card, marginTop: 14, padding: 14, borderLeft: `4px solid ${eleg.elegivel ? C.amarelo : C.vermelho}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 22 }}>{eleg.elegivel ? "⚠️" : "⛔"}</span>
@@ -936,7 +1009,9 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
           {fluxoPonto === "camera" && (
             <div style={{ marginTop: 20 }}>
               <p style={{ fontSize: 13, color: geo?.erro ? C.vermelho : C.verde }}>
-                {geo?.erro ? `⚠️ ${geo.erro}` : `📍 Localização capturada: ${geo.lat}, ${geo.lng} (±${geo.precisao}m)`}
+                {geo?.erro ? `⚠️ ${geo.erro}` : geo?.local
+                  ? `📍 Dentro do raio de "${geo.local}" — ${geo.dist} m de ${geo.raio} m permitidos (±${geo.precisao}m)`
+                  : `📍 Localização capturada: ${geo.lat}, ${geo.lng} (±${geo.precisao}m)`}
               </p>
               <CameraCapture onCapture={concluirBatida} onSkip={() => concluirBatida(null)} />
             </div>
@@ -949,7 +1024,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
                 {EMPRESA.nome} · CNPJ {EMPRESA.cnpj}<br />
                 Colaborador: {user.nome}<br />
                 Marcação: <b>{comprovante.tipo.toUpperCase()}</b> em {fmtDataHora(comprovante.ts)}<br />
-                Geo: {comprovante.lat ?? "—"}, {comprovante.lng ?? "—"} · Facial: {comprovante.facialOk ? "validado ✔ (simulado)" : "sem foto ⚠️"}
+                Geo: {comprovante.lat ?? "—"}, {comprovante.lng ?? "—"}{geo?.local ? ` · dentro do raio de "${geo.local}"` : ""} · Facial: {comprovante.facialOk ? "validado ✔ (simulado)" : "sem foto ⚠️"}
               </div>
               {comprovante.foto && <img src={comprovante.foto} alt="selfie da batida" style={{ width: 110, borderRadius: 10, marginTop: 10, border: `2px solid ${C.verde}` }} />}
               <div style={{ display: "flex", gap: 10, marginTop: 12 }} className="no-print">
@@ -1297,7 +1372,50 @@ function TelaLGPD({ user, onConsentir }) {
   );
 }
  
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir }) {
+function SecaoLocais({ locais, onCriar, onDesativar }) {
+  const [nome, setNome] = useState("");
+  const [raio, setRaio] = useState(50);
+  const [capturando, setCapturando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const salvar = async () => {
+    if (!nome.trim() || capturando) return;
+    setCapturando(true); setMsg(null);
+    try {
+      const precisao = await onCriar(nome, raio);
+      setMsg({ ok: true, txt: `Local "${nome}" salvo com sua posição atual (precisão do GPS na captura: ±${precisao}m).` });
+      setNome(""); setRaio(50);
+    } catch (e) { setMsg({ ok: false, txt: e.message }); }
+    finally { setCapturando(false); }
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>📍 Local de trabalho (restrição de raio nas batidas)</div>
+      <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...S.input, width: 220 }} placeholder="Nome do local (ex: Oficina BH)" value={nome} onChange={e => setNome(e.target.value)} />
+        <input type="number" min="10" style={{ ...S.input, width: 110 }} value={raio} onChange={e => setRaio(e.target.value)} title="Raio em metros" />
+        <span style={{ fontSize: 12, color: C.cinza }}>metros</span>
+        <button style={{ ...S.btn, opacity: capturando ? 0.6 : 1 }} disabled={capturando} onClick={salvar}>
+          {capturando ? "📡 Capturando posição…" : "📍 Capturar minha posição e salvar"}
+        </button>
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>Sem nenhum local ativo, as batidas ficam liberadas sem verificação. Dica: cadastre estando dentro do local e considere a precisão do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos).</p>
+      {locais.length > 0 && locais.map(l => (
+        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #2b2b2b", padding: "8px 0", gap: 10 }}>
+          <div style={{ fontSize: 14, opacity: l.ativo ? 1 : 0.45 }}>
+            <b>{l.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {(+l.latitude).toFixed(5)}, {(+l.longitude).toFixed(5)} · raio {l.raio} m</span>
+          </div>
+          <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+            {l.ativo ? <span style={S.tag(C.verde, "#fff")}>ATIVO</span> : <span style={S.tag("#3a3a3a", "#ccc")}>INATIVO</span>}
+            {l.ativo && <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onDesativar(l.id)}>Desativar</button>}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+ 
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
@@ -1349,6 +1467,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
           </tbody>
         </table>
       </div>
+      <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
