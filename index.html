@@ -99,7 +99,10 @@ async function sbFetch(token, path, { method = "GET", body, headers = {} } = {})
       signal: ctrl.signal,
     });
     if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
-    return r.status === 204 ? null : r.json();
+    // return=minimal responde 201 com corpo VAZIO (não 204) — corpo vazio é sucesso, nunca erro de parse
+    const texto = await r.text();
+    if (!texto) return null;
+    try { return JSON.parse(texto); } catch { return texto; }
   } catch (e) {
     if (e.name === "AbortError") throw new Error(`Tempo esgotado (12s) em ${method} ${path.split("?")[0]} — o banco pode estar com lock ou a rede instável.`);
     throw e;
