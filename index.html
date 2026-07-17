@@ -634,6 +634,19 @@ function App() {
     if (!demo && sessao) sbInsert(sessao.token, "auditoria", [{ usuario_id: user?.id ?? null, acao, detalhe }]).catch(() => {});
   };
  
+  // Auditoria crítica (confirmação/correção de saída automática e afins): AGUARDADA, com 1 retry.
+  // Diferente do log() comum, aqui a falha não é engolida — quem chamar decide como reagir.
+  const auditar = async (acao, detalhe) => {
+    setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
+    if (demo || !sessao) return;
+    try {
+      await sbInsert(sessao.token, "auditoria", [{ usuario_id: user?.id ?? null, acao, detalhe }]);
+    } catch (e1) {
+      await new Promise(r => setTimeout(r, 800)); // retry único após falha transitória
+      await sbInsert(sessao.token, "auditoria", [{ usuario_id: user?.id ?? null, acao, detalhe }]);
+    }
+  };
+ 
   /* ---------- login ---------- */
   const entrarSupabase = async (email, senha) => {
     const auth = await sbLogin(email, senha); // lança erro se credencial inválida
@@ -929,10 +942,15 @@ function App() {
  
   /* ---------- saída automática: confirmar / corrigir ---------- */
   const confirmarSaida = async (id) => {
+    const pend = saidasPend.find(x => x.id === id);
     try {
       if (!demo) await sbUpdate(sessao.token, "registros_ponto", `id=eq.${id}`, { saida_confirmada: true });
       setSaidasPend(sp => sp.map(x => x.id === id ? { ...x, confirmada: true } : x));
-      log("saida_auto", `Saída automática #${id} confirmada pelo colaborador`);
+      try {
+        await auditar("saida_auto", `Saída automática #${id} (${pend ? fmtData(pend.data + "T12:00:00") + " " + pend.saida : ""}) CONFIRMADA pelo colaborador`);
+      } catch (eAud) {
+        alert(`A confirmação foi salva, mas o registro na trilha de auditoria falhou (${eAud.message}). Avise o gestor pra registrar manualmente.`);
+      }
     } catch (e) { alert(`Falha ao confirmar: ${e.message}`); }
   };
  
@@ -951,7 +969,11 @@ function App() {
       if (ultima) { ultima.tsOriginal = ultima.tsOriginal || ultima.ts; ultima.ts = `${pend.data}T${novaSaida}:00`; ultima.ajustada = true; }
       return copia;
     });
-    log("saida_auto", `Saída automática #${id} corrigida pra ${novaSaida} — justificativa: ${justificativa.trim()}`);
+    try {
+      await auditar("saida_auto_corrigida", `Saída automática #${id} (${pend ? fmtData(pend.data + "T12:00:00") : ""}) — horário automático original: ${pend?.saida || "?"} · horário corrigido: ${novaSaida} · justificativa: ${justificativa.trim()}`);
+    } catch (eAud) {
+      alert(`A correção foi salva, mas o registro na trilha de auditoria falhou (${eAud.message}). Avise o gestor pra registrar manualmente.`);
+    }
   };
  
   /* ---------- lembretes de batida (enquanto o app estiver aberto) ---------- */
