@@ -58,6 +58,14 @@ function expedienteDoDia(dt) {
 const minutosAposEntrada = (dt) => dt.getHours() * 60 + dt.getMinutes() - EXPEDIENTE.entradaMin;
 // Dia sem expediente nunca gera atraso
 const entradaPontual = (dt) => expedienteDoDia(dt).jornadaMin === 0 ? true : minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
+// FONTE ÚNICA do atraso computável (usada pelo Prêmio E pela folha — nunca duplicar essa regra):
+// conta APENAS o excedente da tolerância por ocorrência (8:25 → 15 min). Política da Renovar Tech,
+// mais favorável ao empregado que o desconto integral que a CLT art. 58 §1º permitiria — registrar no regulamento.
+const minutosAtrasoDia = (dt) => {
+  if (expedienteDoDia(dt).jornadaMin === 0) return 0;
+  const min = minutosAposEntrada(dt);
+  return min > EXPEDIENTE.toleranciaMin ? min - EXPEDIENTE.toleranciaMin : 0;
+};
  
 /* Configuração fiscal (Portaria 671/2021)
    ⚠ nrInpi é PLACEHOLDER: o nº real sai do registro do programa no INPI.
@@ -237,15 +245,12 @@ function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos) {
   const diasFaltas = faltasMes.length;
   const semanasComFalta = new Set(faltasMes.map(f => chaveSemana(dataLocal(f.data)))).size;
   const descFaltas = r2((sal / 30) * (diasFaltas + semanasComFalta));
-  // Atrasos: além da tolerância de 10min, desconta o atraso integral (CLT art. 58 §1º) a salário/220 por hora
+  // Atrasos: tolerância de 10min/dia, desconto SÓ sobre o excedente, a salário/220 por hora
+  // (minutosAtrasoDia é a mesma função do Prêmio R1 — módulos nunca divergem)
   let atrasoMin = 0;
   Object.values(agruparPorDia(registros.filter(r => mesmaComp(r.ts, comp)), u.id)).forEach(regs => {
     const ent = regs.find(r => r.tipo === "entrada");
-    if (!ent) return;
-    const dt = new Date(ent.ts);
-    if (expedienteDoDia(dt).jornadaMin === 0) return;
-    const min = minutosAposEntrada(dt);
-    if (min > EXPEDIENTE.toleranciaMin) atrasoMin += min;
+    if (ent) atrasoMin += minutosAtrasoDia(new Date(ent.ts));
   });
   const horasAtraso = r2(atrasoMin / 60);
   const descAtrasos = r2((sal / TABELAS_2026.divisorHoras) * horasAtraso);
@@ -422,10 +427,12 @@ function gerarFeedback(user, registros, faltas) {
    Faltas justificadas (atestado aceito / ausências legais do
    art. 473) NUNCA contam contra o colaborador.
    ============================================================ */
-const PREMIO = { limiteAtrasoMin: 60, limiteFaltas: 2, toleranciaMin: 10, bonusPontualidade: 0.10 };
+// toleranciaMin herdada do EXPEDIENTE: fonte ÚNICA da tolerância de atraso (CLT art. 58 §1º)
+// — mudar em EXPEDIENTE.toleranciaMin propaga pra pontualidade, gamificação, assiduidade, prêmio E folha.
+const PREMIO = { limiteAtrasoMin: 60, limiteFaltas: 2, toleranciaMin: EXPEDIENTE.toleranciaMin, bonusPontualidade: 0.10 };
  
 const REGRAS_PREMIO = [
-  { id: "R1", corte: true, titulo: "Atrasos até 60 min no mês", desc: `Soma dos minutos de atraso na entrada (após tolerância de ${PREMIO.toleranciaMin} min) deve ficar em até ${PREMIO.limiteAtrasoMin} min no mês. Acima disso, o prêmio do mês não é devido, mesmo com meta batida.` },
+  { id: "R1", corte: true, titulo: "Atrasos até 60 min no mês", desc: `Soma dos minutos de atraso na entrada deve ficar em até ${PREMIO.limiteAtrasoMin} min no mês — contando, em cada ocorrência, apenas os minutos que EXCEDEM a tolerância de ${PREMIO.toleranciaMin} min (ex.: chegar 8:25 soma 15 min, não 25). Acima do limite, o prêmio do mês não é devido, mesmo com meta batida.` },
   { id: "R2", corte: true, titulo: "Menos de 2 faltas injustificadas", desc: "Duas ou mais faltas sem atestado ou documento aceito no mês tornam o prêmio do mês não devido. Faltas com atestado aceito e ausências legais (CLT art. 473) não contam." },
   { id: "R3", corte: true, titulo: "Meta individual atingida (≥100%)", desc: "O prêmio é calculado sobre o atingimento da meta do mês: 100% paga o prêmio integral; 110% e 120% destravam multiplicadores de 1,15x e 1,3x." },
   { id: "R4", corte: true, titulo: "Documentação em até 48h", desc: "Justificativas e atestados devem ser enviados no sistema em até 48h da ocorrência. Documento aceito neutraliza a falta pra fins do prêmio." },
@@ -440,10 +447,7 @@ function elegibilidadePremio(userId, registros, faltas) {
   Object.values(agruparPorDia(registros, userId)).forEach(regs => {
     const ent = regs.find(r => r.tipo === "entrada");
     if (!ent || !mesmoMes(ent.ts)) return;
-    const dt = new Date(ent.ts);
-    if (expedienteDoDia(dt).jornadaMin === 0) return; // domingo/feriado: não há atraso a cobrar
-    const min = minutosAposEntrada(dt); // entrada oficial 08:00
-    if (min > PREMIO.toleranciaMin) atrasoMin += min;
+    atrasoMin += minutosAtrasoDia(new Date(ent.ts)); // função compartilhada com a folha — mesma régua por construção
   });
   const faltasInj = faltas.filter(f => f.userId === userId && !f.justificada && mesmoMes(f.data)).length;
   const medidores = [
@@ -1521,28 +1525,24 @@ function TelaConvite({ token, onConcluir, onVoltar }) {
 }
  
 function Login({ onSupabase, onDemo }) {
-  const CONTAS = [
-    { nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", avatar: "CF", gestor: true },
-    { nome: "Marina Souza", email: "marina@renovartech.com.br", avatar: "MS" },
-    { nome: "Rafael Lima", email: "rafael@renovartech.com.br", avatar: "RL" },
-    { nome: "Juliana Prates", email: "juliana@renovartech.com.br", avatar: "JP" },
-  ];
-  const [sel, setSel] = useState(null);
-  const [emailLivre, setEmailLivre] = useState("");
+  /* Modo PRODUÇÃO por padrão: login real por e-mail + senha, sem contas pré-listadas
+     (não expor e-mails da equipe numa página pública). Demonstração fica discreta, opt-in. */
+  const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState(null);
   const [carregando, setCarregando] = useState(false);
-  const emailFinal = () => (sel ? sel.email : emailLivre.trim().toLowerCase());
+  const [mostrarDemo, setMostrarDemo] = useState(false);
   const entrar = async () => {
-    if (!emailFinal() || !senha) return;
+    const e = email.trim().toLowerCase();
+    if (!e || !senha) { setErro("Preencha e-mail e senha."); return; }
     setCarregando(true); setErro(null);
     try {
-      await onSupabase(emailFinal(), senha);
-    } catch (e) {
-      const rede = e instanceof TypeError || /fetch|network/i.test(e.message);
+      await onSupabase(e, senha);
+    } catch (err) {
+      const rede = err instanceof TypeError || /fetch|network/i.test(err.message);
       setErro(rede
-        ? "Não foi possível conectar ao Supabase. Se você está rodando dentro do preview do claude.ai, o sandbox pode bloquear conexões externas — hospede o arquivo (ou teste local) pra usar o backend real, ou entre no modo demonstração abaixo."
-        : e.message);
+        ? "Não foi possível conectar ao Supabase. Se você está rodando dentro do preview do claude.ai, o sandbox pode bloquear conexões externas — hospede o arquivo (ou teste local) pra usar o backend real, ou use a demonstração abaixo."
+        : err.message);
     } finally { setCarregando(false); }
   };
   return (
@@ -1550,38 +1550,35 @@ function Login({ onSupabase, onDemo }) {
       <div style={{ ...S.card, width: 440, textAlign: "center", padding: 36 }}>
         <div style={{ ...S.display, fontSize: 34, color: C.amarelo, lineHeight: 1 }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
         <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Entre com sua conta corporativa</div>
-        <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
-          {CONTAS.map(u => (
-            <button key={u.email} onClick={() => { setSel(u); setErro(null); }} style={{ ...S.btnGhost, display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderColor: sel?.email === u.email ? C.amarelo : "#2A4568", background: sel?.email === u.email ? C.grafite : "transparent" }}>
-              <span style={{ width: 34, height: 34, borderRadius: "50%", background: u.gestor ? C.vermelho : C.amarelo, color: u.gestor ? "#fff" : "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{u.avatar}</span>
-              <span style={{ textAlign: "left" }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{u.nome}</div>
-                <div style={{ fontSize: 12, color: C.cinza }}>{u.email}</div>
-              </span>
-            </button>
-          ))}
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <input style={{ ...S.input, fontSize: 13 }} placeholder="…ou entre com outro e-mail" value={emailLivre}
-            onChange={e => { setEmailLivre(e.target.value); setSel(null); setErro(null); }} />
-        </div>
-        {(sel || emailLivre.trim()) && (
-          <div style={{ marginTop: 12 }}>
-            <input type="password" style={{ ...S.input, textAlign: "center" }} placeholder={sel ? `Senha de ${sel.nome.split(" ")[0]}` : "Senha"} value={senha}
-              onChange={e => { setSenha(e.target.value); setErro(null); }}
-              onKeyDown={e => e.key === "Enter" && entrar()} autoFocus />
-            <button style={{ ...S.btn, marginTop: 10, width: "100%", opacity: carregando ? 0.6 : 1 }} disabled={carregando} onClick={entrar}>
-              {carregando ? "Autenticando…" : "Entrar"}
-            </button>
-          </div>
-        )}
-        {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
-        <div style={{ marginTop: 18, borderTop: "1px solid #1E3450", paddingTop: 12 }}>
-          <button style={{ ...S.btnGhost, fontSize: 12, width: "100%" }} onClick={() => onDemo(USUARIOS_SEED.find(u => u.id === (sel ? { "cleiton@renovartech.com.br": "u1", "marina@renovartech.com.br": "u2", "rafael@renovartech.com.br": "u3", "juliana@renovartech.com.br": "u4" }[sel.email] : "u1")))}>
-            ⚡ Entrar em modo demonstração (dados locais, sem backend)
+        <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
+          <input style={{ ...S.input, fontSize: 14 }} type="email" placeholder="E-mail corporativo" value={email} autoFocus
+            onChange={e => { setEmail(e.target.value); setErro(null); }} onKeyDown={e => e.key === "Enter" && entrar()} />
+          <input type="password" style={{ ...S.input, fontSize: 14 }} placeholder="Senha" value={senha}
+            onChange={e => { setSenha(e.target.value); setErro(null); }} onKeyDown={e => e.key === "Enter" && entrar()} />
+          <button style={{ ...S.btn, width: "100%", opacity: carregando ? 0.6 : 1 }} disabled={carregando} onClick={entrar}>
+            {carregando ? "Autenticando…" : "Entrar"}
           </button>
         </div>
+        {erro && <p style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
         <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Autenticação real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable é pública por design — a segurança vem das políticas de acesso.</p>
+        <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          {!mostrarDemo ? (
+            <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 11, cursor: "pointer", textDecoration: "underline" }} onClick={() => setMostrarDemo(true)}>
+              Conhecer o sistema com dados fictícios (demonstração)
+            </button>
+          ) : (
+            <div>
+              <div style={{ fontSize: 11, color: C.cinza, marginBottom: 8 }}>⚡ Demonstração — dados 100% fictícios, sem backend:</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                {USUARIOS_SEED.map(u => (
+                  <button key={u.id} style={{ ...S.btnGhost, fontSize: 11, padding: "6px 10px" }} onClick={() => onDemo(u)}>
+                    {u.avatar} {u.nome.split(" ")[0]}{u.papel === "gestor" ? " (gestor)" : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <div style={{ fontSize: 10, color: C.cinza, marginTop: 12, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
           <b style={{ color: C.branco }}>{EMPRESA.nome}</b> · CNPJ {EMPRESA.cnpj}<br />
           {EMPRESA.endereco} · CEP {EMPRESA.cep}<br />
