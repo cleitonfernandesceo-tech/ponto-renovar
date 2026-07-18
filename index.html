@@ -762,6 +762,7 @@ function App() {
   const [folhasPg, setFolhasPg] = useState([]);
   const [adiantamentos, setAdiantamentos] = useState([]);
   const [guias, setGuias] = useState([]);
+  const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [lembrete, setLembrete] = useState(null);
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const lembretesDisparados = useRef({});
@@ -813,7 +814,7 @@ function App() {
   const carregarDados = async (token, perfil) => {
     setErroDados(null);
     try {
-      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs, fds, rps, fpgs, adts, gfs] = await Promise.all([
+      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs, fds, rps, fpgs, adts, gfs, rkg] = await Promise.all([
         sbSelect(token, "usuarios", "select=*&order=nome"),
         sbSelect(token, "marcacoes", "select=*&order=nsr"),
         sbSelect(token, "faltas", "select=*&order=data"),
@@ -830,6 +831,7 @@ function App() {
         sbSelect(token, "folha_pagamento", "select=*&order=competencia.desc"),
         sbSelect(token, "adiantamentos_salariais", "select=*&order=criado_em.desc"),
         perfil.papel === "gestor" ? sbSelect(token, "guias_fiscais", "select=*&order=competencia.desc") : Promise.resolve([]),
+        sbSelect(token, "ranking_publico", "select=*"),
       ]);
       const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
       setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
@@ -856,6 +858,7 @@ function App() {
       setFolhasPg(fpgs.map(mapFolhaPg));
       setAdiantamentos(adts.map(mapAdiant));
       setGuias(gfs.map(mapGuia));
+      setRankingUsuarios(rkg.map(r => ({ id: r.id, nome: r.nome, papel: r.tipo, ativo: r.ativo })));
     } catch (e) {
       setErroDados(`Falha ao carregar dados: ${e.message}`);
     }
@@ -919,6 +922,7 @@ function App() {
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
     setFolhasPg([]); setAdiantamentos([]); setGuias([]);
+    setRankingUsuarios(USUARIOS_SEED.map(u => ({ id: u.id, nome: u.nome, papel: u.papel, ativo: true })));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
     setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
@@ -1407,7 +1411,7 @@ function App() {
           {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
-          {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} />}
+          {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -1827,15 +1831,46 @@ function TelaFerias({ user, ferias, agendarFerias }) {
   );
 }
  
-function TelaGame({ user, registros, faltas }) {
+function TelaGame({ user, registros, faltas, rankingUsuarios = [] }) {
   const g = useMemo(() => calcularGamificacao(user.id, registros, faltas), [user, registros, faltas]);
   const badges = useMemo(() => calcularBadges(g), [g]);
   const nv = nivelDe(g.total);
   const proximoMarco = Object.keys(GAME.marcosStreak).map(Number).find(m => m > g.streak);
+  // Ranking da equipe — visível a todos (competição saudável). Só colaboradores entram no ranking.
+  const ranking = useMemo(() => rankingUsuarios
+    .filter(u => u.papel !== "gestor")
+    .map(u => { const gg = calcularGamificacao(u.id, registros, faltas); return { id: u.id, nome: u.nome, g: gg, nv: nivelDe(gg.total) }; })
+    .sort((a, b) => b.g.total - a.g.total), [rankingUsuarios, registros, faltas]);
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Gamificação</h1>
+      {ranking.length > 0 && (
+        <div style={{ ...S.card, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>🏆 Ranking da equipe</div>
+            <div style={{ fontSize: 11, color: C.cinza }}>competição saudável · reconhecimento interno · sem impacto salarial</div>
+          </div>
+          {ranking.map((r, i) => {
+            const eu = r.id === user.id;
+            return (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, borderTop: "1px solid #1E3450", padding: "9px 0", background: eu ? "#12233B" : "transparent", borderRadius: eu ? 8 : 0, paddingLeft: eu ? 8 : 0, paddingRight: eu ? 8 : 0 }}>
+                <div style={{ ...S.display, fontSize: 18, width: 34, color: i === 0 ? C.amarelo : C.cinza }}>{i === 0 ? "🏆" : `${i + 1}º`}</div>
+                <div style={{ fontSize: 22 }}>{r.nv.atual.icone}</div>
+                <div style={{ flex: 1 }}>
+                  <b style={{ fontSize: 14 }}>{r.nome}{eu ? " (você)" : ""}</b>
+                  <div style={{ fontSize: 11, color: C.cinza }}>{r.nv.atual.nome}{r.g.streak >= 3 ? ` · 🔥 ${r.g.streak} dias` : ""}</div>
+                  <div style={{ background: "#1E3450", borderRadius: 999, height: 5, marginTop: 4, maxWidth: 260, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, r.nv.progresso * 100)}%`, background: r.nv.atual.cor, height: "100%" }} />
+                  </div>
+                </div>
+                <b style={{ ...S.display, fontSize: 18, color: C.amarelo }}>{r.g.total} pts</b>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 10, color: C.cinza, marginTop: 10 }}>Todos os colaboradores veem este ranking. É reconhecimento interno e motivacional — não afeta salário, Prêmio Performance ou avaliação formal.</div>
+        </div>
+      )}
         <span style={S.tag(C.grafite, C.cinza)}>🎖 Reconhecimento interno · sem impacto salarial</span>
       </div>
       <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${nv.atual.cor}` }}>
