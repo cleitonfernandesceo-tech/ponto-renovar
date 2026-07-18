@@ -152,7 +152,7 @@ const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome
 const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
 const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
 const mapLocal = (r) => ({ id: r.id, nome: r.nome, latitude: r.latitude, longitude: r.longitude, raio: r.raio_metros, ativo: r.ativo });
-const mapConvite = (r) => ({ id: r.id, token: r.token, nome: r.nome, email: r.email, cargo: r.cargo, tipo: r.tipo, usado: r.usado, expiraEm: r.expira_em });
+const mapConvite = (r) => ({ id: r.id, token: r.token, nome: r.nome, email: r.email, cargo: r.cargo, tipo: r.tipo, usado: r.usado, expiraEm: r.expira_em, dataAdmissao: r.data_admissao });
 const mapFolga = (r) => ({ id: r.id, userId: r.usuario_id, horas: +r.horas_solicitadas, dataFolga: r.data_folga_pretendida, status: r.status, decididoEm: r.decidido_em });
 /* Saldo do banco de horas: apurado nas marcações − debitado em folgas aprovadas */
 function saldoBanco(userId, registros, faltas, folgas) {
@@ -220,10 +220,29 @@ const RECOMENDACOES = {
   },
 };
  
-const fmtData = (s) => new Date(s).toLocaleDateString("pt-BR");
+// Data pura (DATE, sem hora): formata direto da string — new Date("YYYY-MM-DD") é UTC 00:00
+// e retrocede 1 dia no fuso local (UTC-3), o clássico off-by-one.
+const fmtData = (s) => {
+  if (typeof s === "string" && /^\d{4}-\d{2}-\d{2}/.test(s) && s.length === 10) {
+    const [a, m, d] = s.split("-");
+    return `${d}/${m}/${a}`;
+  }
+  return new Date(s).toLocaleDateString("pt-BR");
+};
+// Parsing pra CÁLCULO: data pura vira meio-dia LOCAL (imune a fuso e horário de verão)
+const dataLocal = (s) => (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T12:00:00") : new Date(s));
 const fmtHora = (s) => new Date(s).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 const fmtDataHora = (s) => `${fmtData(s)} ${fmtHora(s)}`;
 const mesesEntre = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+// Soma meses com precisão de DIA (mesesEntre compara só mês do calendário e libera até 29 dias antes do prazo real)
+const addMeses = (dt, n) => {
+  const x = new Date(dt);
+  const dia = x.getDate();
+  x.setMonth(x.getMonth() + n);
+  if (x.getDate() < dia) x.setDate(0); // clamp: 31/jul + 2m vira 30/set, não 01/out
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
 const minutosDia = (regs) => {
   let total = 0;
   const ent = regs.filter(r => r.tipo === "entrada").map(r => new Date(r.ts));
@@ -307,7 +326,7 @@ const REGRAS_PREMIO = [
  
 function elegibilidadePremio(userId, registros, faltas) {
   const agora = new Date();
-  const mesmoMes = (s) => { const dt = new Date(s); return dt.getMonth() === agora.getMonth() && dt.getFullYear() === agora.getFullYear(); };
+  const mesmoMes = (s) => { const dt = dataLocal(s); return dt.getMonth() === agora.getMonth() && dt.getFullYear() === agora.getFullYear(); };
   let atrasoMin = 0;
   Object.values(agruparPorDia(registros, userId)).forEach(regs => {
     const ent = regs.find(r => r.tipo === "entrada");
@@ -754,10 +773,10 @@ function App() {
   /* ---------- CRUD de colaboradores e convites (gestor) ---------- */
   const criarConvite = async (dados) => {
     if (demo) {
-      const c = { id: Date.now(), token: crypto.randomUUID(), ...dados, usado: false, expiraEm: iso(d(7)) };
+      const c = { id: Date.now(), token: crypto.randomUUID(), ...dados, dataAdmissao: dados.dataAdmissao, usado: false, expiraEm: iso(d(7)) };
       setConvites(cs => [c, ...cs]); return c;
     }
-    const [row] = await sbInsert(sessao.token, "convites", [{ nome: dados.nome, email: dados.email.toLowerCase().trim(), cargo: dados.cargo || null, tipo: dados.tipo || "colaborador", criado_por: user.id }]);
+    const [row] = await sbInsert(sessao.token, "convites", [{ nome: dados.nome, email: dados.email.toLowerCase().trim(), cargo: dados.cargo || null, tipo: dados.tipo || "colaborador", data_admissao: dados.dataAdmissao, criado_por: user.id }]);
     const c = mapConvite(row);
     setConvites(cs => [c, ...cs]);
     log("convite", `Convite criado pra ${c.email} (${c.tipo})`);
@@ -766,7 +785,7 @@ function App() {
  
   const salvarUsuario = async (id, patch) => {
     if (!demo) await sbUpdate(sessao.token, "usuarios", `id=eq.${id}`, patch);
-    setUsuarios(us => us.map(u => u.id === id ? { ...u, nome: patch.nome ?? u.nome, cargo: patch.cargo ?? u.cargo, papel: patch.tipo ?? u.papel, ativo: patch.ativo ?? u.ativo } : u));
+    setUsuarios(us => us.map(u => u.id === id ? { ...u, nome: patch.nome ?? u.nome, cargo: patch.cargo ?? u.cargo, papel: patch.tipo ?? u.papel, ativo: patch.ativo ?? u.ativo, admissao: patch.data_admissao ?? u.admissao } : u));
     log("equipe", `Usuário ${id} atualizado: ${Object.keys(patch).join(", ")}`);
   };
  
@@ -931,11 +950,16 @@ function App() {
   };
  
   const agendarFerias = (inicio, dias) => {
-    const adm = new Date(user.admissao);
+    const adm = dataLocal(user.admissao);
     const agora = new Date();
-    if (mesesEntre(adm, agora) < 12) return { ok: false, msg: `Você completa 12 meses de empresa em ${fmtData(new Date(adm.getFullYear() + 1, adm.getMonth(), adm.getDate()))}. Agendamento liberado a partir dessa data (CLT art. 130: período aquisitivo).` };
+    const liberaAquisitivo = addMeses(adm, 12);
+    if (agora < liberaAquisitivo) return { ok: false, msg: `Você completa 12 meses de empresa em ${fmtData(liberaAquisitivo)}. Agendamento liberado a partir dessa data (CLT art. 130: período aquisitivo).` };
     const ini = new Date(inicio + "T00:00:00");
-    if (mesesEntre(agora, ini) < 5) return { ok: false, msg: "Regra da empresa: férias devem ser agendadas com no mínimo 5 meses de antecedência. Escolha uma data mais distante." };
+    const minInicio = addMeses(agora, 5); // 5 meses contados DIA a DIA a partir de hoje
+    if (ini < minInicio) {
+      const diasFaltando = Math.ceil((minInicio - ini) / 86400000);
+      return { ok: false, msg: `Antecedência mínima de 5 meses: a data mais próxima que você pode solicitar é ${fmtData(minInicio)} (a escolhida está ${diasFaltando} dia(s) antes). Contexto: o mínimo legal de aviso é 30 dias (CLT art. 135), mas a política interna da Renovar Tech é mais restritiva e prevalece.` };
+    }
     (async () => {
       try {
         if (demo) {
@@ -1275,6 +1299,7 @@ function TelaConvite({ token, onConcluir, onVoltar }) {
               👤 <b>{conv.nome}</b><br />
               ✉️ {conv.email}<br />
               {conv.cargo && <>💼 {conv.cargo}<br /></>}
+              {conv.dataAdmissao && <>📅 Admissão: {fmtData(conv.dataAdmissao)}<br /></>}
               🏷 {conv.tipo === "gestor" ? "Gestor" : "Colaborador"} · expira em {fmtData(conv.expiraEm)}
             </div>
             <input type="password" style={{ ...S.input, marginTop: 12 }} placeholder="Crie uma senha (mínimo 8 caracteres)" value={senha} onChange={e => { setSenha(e.target.value); setErro(null); }} />
@@ -1575,8 +1600,8 @@ function TelaFerias({ user, ferias, agendarFerias }) {
   const [dias, setDias] = useState(30);
   const [msg, setMsg] = useState(null);
   const minhas = ferias.filter(f => f.userId === user.id);
-  const adm = new Date(user.admissao);
-  const elegivel = mesesEntre(adm, new Date()) >= 12;
+  const adm = dataLocal(user.admissao);
+  const elegivel = new Date() >= addMeses(adm, 12);
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Agendamento de férias</h1>
@@ -1590,7 +1615,7 @@ function TelaFerias({ user, ferias, agendarFerias }) {
           <button style={S.btn} onClick={() => { if (!inicio) return; setMsg(agendarFerias(inicio, dias)); }}>Solicitar</button>
         </div>
         {msg && <p style={{ marginTop: 12, fontSize: 14, color: msg.ok ? C.verde : C.vermelho }}>{msg.msg}</p>}
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + política interna de 5 meses de antecedência. Fracionamento em até 3 períodos, um deles ≥14 dias (CLT art. 134 §1º).</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + antecedência mínima de <b style={{ color: C.branco }}>5 meses</b> contada dia a dia a partir de hoje (política interna da Renovar Tech — o mínimo legal é 30 dias, CLT art. 135, mas a regra interna é mais restritiva e prevalece). Fracionamento em até 3 períodos, um deles ≥14 dias (CLT art. 134 §1º).</p>
       </div>
       {minhas.map(f => (
         <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1826,7 +1851,7 @@ function TelaLGPD({ user, onConsentir }) {
 }
  
 function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gestorId }) {
-  const [form, setForm] = useState({ nome: "", email: "", cargo: "", tipo: "colaborador" });
+  const [form, setForm] = useState({ nome: "", email: "", cargo: "", tipo: "colaborador", dataAdmissao: "" });
   const [linkGerado, setLinkGerado] = useState(null);
   const [msg, setMsg] = useState(null);
   const [criando, setCriando] = useState(false);
@@ -1834,14 +1859,15 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
   const linkDe = (tk) => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
   const copiar = async (txt) => { try { await navigator.clipboard.writeText(txt); setMsg({ ok: true, txt: "Link copiado! Compartilhe com o colaborador." }); } catch { setMsg({ ok: false, txt: "Não deu pra copiar automático — selecione o link e copie manual." }); } };
   const criar = async () => {
-    if (!form.nome.trim() || !/.+@.+\..+/.test(form.email) || criando) { setMsg({ ok: false, txt: "Preencha nome e um e-mail válido." }); return; }
+    if (!form.nome.trim() || !/.+@.+\..+/.test(form.email) || !form.dataAdmissao || criando) { setMsg({ ok: false, txt: "Preencha nome, e-mail válido e a data de admissão (obrigatória)." }); return; }
     setCriando(true); setMsg(null);
-    try { const c = await onCriarConvite(form); setLinkGerado(linkDe(c.token)); setForm({ nome: "", email: "", cargo: "", tipo: "colaborador" }); }
+    try { const c = await onCriarConvite(form); setLinkGerado(linkDe(c.token)); setForm({ nome: "", email: "", cargo: "", tipo: "colaborador", dataAdmissao: "" }); }
     catch (e) { setMsg({ ok: false, txt: e.message }); }
     finally { setCriando(false); }
   };
   const salvarEdicao = async () => {
-    try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo }); setEditando(null); }
+    if (!editando.admissao) { setMsg({ ok: false, txt: "A data de admissão é obrigatória." }); return; }
+    try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo, data_admissao: editando.admissao }); setEditando(null); }
     catch (e) { setMsg({ ok: false, txt: e.message }); }
   };
   const statusConvite = (c) => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, "#fff"] : ["PENDENTE", C.amarelo, "#111"];
@@ -1858,17 +1884,20 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
               <select style={{ ...S.input, width: 140 }} value={editando.tipo} onChange={e => setEditando({ ...editando, tipo: e.target.value })} disabled={u.id === gestorId}>
                 <option value="colaborador">Colaborador</option><option value="gestor">Gestor</option>
               </select>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>Admissão
+                <input type="date" style={{ ...S.input, width: 160 }} value={editando.admissao || ""} onChange={e => setEditando({ ...editando, admissao: e.target.value })} />
+              </label>
               <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }} onClick={salvarEdicao}>Salvar</button>
               <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setEditando(null)}>Cancelar</button>
             </div>
           ) : (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div style={{ fontSize: 14, opacity: u.ativo === false ? 0.45 : 1 }}>
-                <b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {u.email}{u.cargo ? ` · ${u.cargo}` : ""} · {u.papel === "gestor" ? "Gestor" : "Colaborador"}</span>
+                <b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {u.email}{u.cargo ? ` · ${u.cargo}` : ""} · {u.papel === "gestor" ? "Gestor" : "Colaborador"} · admissão {fmtData((u.admissao || "").slice(0, 10)) || "—"}</span>
               </div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, "#fff")}>ATIVO</span>}
-                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel })}>Editar</button>
+                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel, admissao: (u.admissao || "").slice(0, 10) })}>Editar</button>
                 {u.id !== gestorId && (u.ativo === false
                   ? <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: true })}>Reativar</button>
                   : <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: false })}>Desativar</button>)}
@@ -1886,6 +1915,9 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
         <select style={{ ...S.input, width: 140 }} value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })}>
           <option value="colaborador">Colaborador</option><option value="gestor">Gestor</option>
         </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>Admissão*
+          <input type="date" style={{ ...S.input, width: 160 }} value={form.dataAdmissao} onChange={e => setForm({ ...form, dataAdmissao: e.target.value })} />
+        </label>
         <button style={{ ...S.btn, opacity: criando ? 0.6 : 1 }} disabled={criando} onClick={criar}>{criando ? "Gerando…" : "Gerar convite"}</button>
       </div>
       {linkGerado && (
@@ -1901,7 +1933,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
           const [tx, bg, fg] = statusConvite(c);
           return (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "7px 0", gap: 10 }}>
-              <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo} · expira {fmtData(c.expiraEm)}</span></div>
+              <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo}{c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : ""} · expira {fmtData(c.expiraEm)}</span></div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <span style={S.tag(bg, fg)}>{tx}</span>
                 {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}
