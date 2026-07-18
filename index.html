@@ -167,9 +167,118 @@ function haversineM(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
+/* ============================================================
+   FOLHA DE PAGAMENTO 2026 — conferência gerencial
+   Fontes: INSS Portaria Interministerial MPS/MF (vigência jan/2026);
+   IRRF: Art. 3º da Lei 9.250/1995 alterado pela Lei 15.270/2025 (Reforma da Renda).
+   Valores conferidos em fontes contábeis (Contabilizei, CRC) em 17/07/2026.
+   ⚠ Editar aqui quando as tabelas mudarem (reajuste anual).
+   ============================================================ */
+const TABELAS_2026 = {
+  inss: { // progressivo por faixa; teto de desconto R$ 988,09
+    faixas: [
+      { ate: 1621.00, aliq: 0.075 },
+      { ate: 2902.84, aliq: 0.09 },
+      { ate: 4354.27, aliq: 0.12 },
+      { ate: 8475.55, aliq: 0.14 },
+    ],
+  },
+  irrf: { // tabela de incidência mensal (mesma de mai/2025)
+    faixas: [
+      { ate: 2428.80, aliq: 0, deduz: 0 },
+      { ate: 2826.65, aliq: 0.075, deduz: 182.16 },
+      { ate: 3751.05, aliq: 0.15, deduz: 394.16 },
+      { ate: 4664.68, aliq: 0.225, deduz: 675.49 },
+      { ate: Infinity, aliq: 0.275, deduz: 908.73 },
+    ],
+    porDependente: 189.59,
+    // Camada da Lei 15.270/2025 sobre o RENDIMENTO TRIBUTÁVEL mensal:
+    reforma: { isentoAte: 5000.00, reducaoAte: 7350.00, a: 978.62, b: 0.133145 }, // redução = a − b×rendimento
+  },
+  fgtsPatronal: 0.08, // encargo do empregador (não desconta do colaborador; só vai na guia)
+  divisorHoras: 220,  // salário-hora = salário/220 (CLT, jornada 44h semanais)
+};
+const r2 = (v) => Math.round((+v + Number.EPSILON) * 100) / 100;
+const brl = (v) => (+v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+ 
+function calcINSS(base) {
+  let total = 0, piso = 0;
+  for (const f of TABELAS_2026.inss.faixas) {
+    if (base <= piso) break;
+    total += (Math.min(base, f.ate) - piso) * f.aliq;
+    piso = f.ate;
+  }
+  return r2(total);
+}
+ 
+function calcIRRF(rendimentoTributavel, inss, dependentes) {
+  const T = TABELAS_2026.irrf;
+  const base = Math.max(0, rendimentoTributavel - inss - dependentes * T.porDependente);
+  const fx = T.faixas.find(f => base <= f.ate);
+  const tradicional = Math.max(0, base * fx.aliq - fx.deduz);
+  // Reforma da Renda: isenção total até 5 mil; redução linear até 7.350 (sobre o rendimento tributável)
+  const R = T.reforma;
+  if (rendimentoTributavel <= R.isentoAte) return 0;
+  if (rendimentoTributavel <= R.reducaoAte) {
+    const reducao = Math.max(0, R.a - R.b * rendimentoTributavel);
+    return r2(Math.max(0, tradicional - reducao));
+  }
+  return r2(tradicional);
+}
+ 
+const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(0, 7);
+// Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
+const chaveSemana = (dt) => { const d = new Date(dt); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dataISO(d); };
+ 
+function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos) {
+  const sal = +u.salario || 0;
+  // Faltas injustificadas do mês (só dias com expediente): salário/30 por dia + DSR da semana (CLT art. 64/65 + Lei 605/49)
+  const faltasMes = faltas.filter(f => f.userId === u.id && !f.justificada && mesmaComp(f.data, comp) && expedienteDoDia(dataLocal(f.data)).jornadaMin > 0);
+  const diasFaltas = faltasMes.length;
+  const semanasComFalta = new Set(faltasMes.map(f => chaveSemana(dataLocal(f.data)))).size;
+  const descFaltas = r2((sal / 30) * (diasFaltas + semanasComFalta));
+  // Atrasos: além da tolerância de 10min, desconta o atraso integral (CLT art. 58 §1º) a salário/220 por hora
+  let atrasoMin = 0;
+  Object.values(agruparPorDia(registros.filter(r => mesmaComp(r.ts, comp)), u.id)).forEach(regs => {
+    const ent = regs.find(r => r.tipo === "entrada");
+    if (!ent) return;
+    const dt = new Date(ent.ts);
+    if (expedienteDoDia(dt).jornadaMin === 0) return;
+    const min = minutosAposEntrada(dt);
+    if (min > EXPEDIENTE.toleranciaMin) atrasoMin += min;
+  });
+  const horasAtraso = r2(atrasoMin / 60);
+  const descAtrasos = r2((sal / TABELAS_2026.divisorHoras) * horasAtraso);
+  // Rendimento tributável do mês = salário − faltas − atrasos
+  const rendimento = Math.max(0, r2(sal - descFaltas - descAtrasos));
+  const inss = calcINSS(rendimento);
+  const irrf = calcIRRF(rendimento, inss, +u.dependentes || 0);
+  const vt = u.vtAtivo ? r2(Math.min(0.06 * sal, +u.vtValor || 0)) : 0; // min(6% do bruto, custo do VT) — Lei 7.418/85
+  const adiant = r2(adiantamentos.filter(a => a.userId === u.id && a.status === "pendente" && mesmaComp(a.competenciaDesconto, comp)).reduce((s, a) => s + (+a.valor || 0), 0));
+  const liquido = r2(sal - descFaltas - descAtrasos - inss - irrf - vt - adiant);
+  return {
+    row: {
+      salario_bruto: sal, desconto_inss: inss, desconto_irrf: irrf, desconto_vale_transporte: vt,
+      desconto_faltas: descFaltas, desconto_atrasos: descAtrasos, desconto_adiantamento: adiant,
+      valor_liquido: liquido, dias_faltas_nao_justificadas: diasFaltas, horas_atraso_total: horasAtraso, status: "rascunho",
+    },
+  };
+}
+ 
+const mapFolhaPg = (r) => ({
+  id: r.id, userId: r.usuario_id, competencia: (r.competencia || "").slice(0, 10),
+  salario: +r.salario_bruto, inss: +r.desconto_inss, irrf: +r.desconto_irrf, vt: +r.desconto_vale_transporte,
+  faltas: +r.desconto_faltas, atrasos: +r.desconto_atrasos, adiantamento: +r.desconto_adiantamento,
+  liquido: +r.valor_liquido, diasFaltas: r.dias_faltas_nao_justificadas, horasAtraso: +r.horas_atraso_total,
+  status: r.status, fechadoEm: r.fechado_em,
+});
+const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
+const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status });
+ 
 const mapUser = (r, consentiu) => ({
   id: r.id, nome: r.nome, email: r.email, cpf: r.cpf, papel: r.tipo, cargo: r.cargo, matricula: r.matricula, ativo: r.ativo,
   admissao: r.data_admissao || "2020-01-01",
+  salario: +r.salario_bruto || 0, vtAtivo: !!r.vale_transporte_ativo, vtValor: +r.vale_transporte_valor_mensal || 0, dependentes: r.dependentes_irrf || 0,
   avatar: (r.nome || "?").split(" ").filter(Boolean).map(p => p[0]).slice(0, 2).join("").toUpperCase(),
   consentimentoLGPD: !!consentiu,
 });
@@ -182,10 +291,10 @@ const iso = (dt) => dt.toISOString();
  
 // CPFs FICTÍCIOS de teste (dígitos verificadores válidos, não associados a pessoas reais — em produção a empresa cadastra os CPFs reais)
 const USUARIOS_SEED = [
-  { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", cpf: "52784193691", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true },
-  { id: "u2", nome: "Marina Souza", email: "marina@renovartech.com.br", cpf: "31865924709", papel: "colaborador", admissao: "2023-05-10", avatar: "MS", consentimentoLGPD: true },
-  { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", cpf: "74219563873", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true },
-  { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", cpf: "61938475291", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false },
+  { id: "u1", nome: "Cleiton Fernandes", email: "cleiton@renovartech.com.br", cpf: "52784193691", papel: "gestor", admissao: "2019-03-01", avatar: "CF", consentimentoLGPD: true, salario: 8000, vtAtivo: false, vtValor: 0, dependentes: 2 },
+  { id: "u2", nome: "Marina Souza", email: "marina@renovartech.com.br", cpf: "31865924709", papel: "colaborador", admissao: "2023-05-10", avatar: "MS", consentimentoLGPD: true, salario: 3200, vtAtivo: true, vtValor: 240, dependentes: 1 },
+  { id: "u3", nome: "Rafael Lima", email: "rafael@renovartech.com.br", cpf: "74219563873", papel: "colaborador", admissao: "2024-11-01", avatar: "RL", consentimentoLGPD: true, salario: 2400, vtAtivo: true, vtValor: 220, dependentes: 0 },
+  { id: "u4", nome: "Juliana Prates", email: "juliana@renovartech.com.br", cpf: "61938475291", papel: "colaborador", admissao: "2025-12-01", avatar: "JP", consentimentoLGPD: false, salario: 1800, vtAtivo: false, vtValor: 0, dependentes: 0 },
 ];
  
 // Histórico seed: Marina pontual, Rafael com atrasos recorrentes
@@ -646,6 +755,9 @@ function App() {
   const [folgas, setFolgas] = useState([]);
   const [feriados, setFeriados] = useState([]);
   const [saidasPend, setSaidasPend] = useState([]); // registros_ponto com saida_automatica e sem confirmação
+  const [folhasPg, setFolhasPg] = useState([]);
+  const [adiantamentos, setAdiantamentos] = useState([]);
+  const [guias, setGuias] = useState([]);
   const [lembrete, setLembrete] = useState(null);
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const lembretesDisparados = useRef({});
@@ -697,7 +809,7 @@ function App() {
   const carregarDados = async (token, perfil) => {
     setErroDados(null);
     try {
-      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs, fds, rps] = await Promise.all([
+      const [us, marcs, flts, justs, ates, fers, auds, cons, locs, convs, flgs, fds, rps, fpgs, adts, gfs] = await Promise.all([
         sbSelect(token, "usuarios", "select=*&order=nome"),
         sbSelect(token, "marcacoes", "select=*&order=nsr"),
         sbSelect(token, "faltas", "select=*&order=data"),
@@ -711,6 +823,9 @@ function App() {
         sbSelect(token, "solicitacoes_folga", "select=*&order=criado_em.desc"),
         sbSelect(token, "feriados_nacionais", "select=*&order=data"),
         sbSelect(token, "registros_ponto", "select=*&saida_automatica=eq.true&order=data.desc"),
+        sbSelect(token, "folha_pagamento", "select=*&order=competencia.desc"),
+        sbSelect(token, "adiantamentos_salariais", "select=*&order=criado_em.desc"),
+        perfil.papel === "gestor" ? sbSelect(token, "guias_fiscais", "select=*&order=competencia.desc") : Promise.resolve([]),
       ]);
       const consentDe = (uid) => cons.find(c => c.usuario_id === uid)?.aceito;
       setUsuarios(us.map(u => mapUser(u, consentDe(u.id))));
@@ -734,6 +849,9 @@ function App() {
       setLocais(locs.map(mapLocal));
       setConvites(convs.map(mapConvite));
       setFolgas(flgs.map(mapFolga));
+      setFolhasPg(fpgs.map(mapFolhaPg));
+      setAdiantamentos(adts.map(mapAdiant));
+      setGuias(gfs.map(mapGuia));
     } catch (e) {
       setErroDados(`Falha ao carregar dados: ${e.message}`);
     }
@@ -785,7 +903,7 @@ function App() {
  
   const salvarUsuario = async (id, patch) => {
     if (!demo) await sbUpdate(sessao.token, "usuarios", `id=eq.${id}`, patch);
-    setUsuarios(us => us.map(u => u.id === id ? { ...u, nome: patch.nome ?? u.nome, cargo: patch.cargo ?? u.cargo, papel: patch.tipo ?? u.papel, ativo: patch.ativo ?? u.ativo, admissao: patch.data_admissao ?? u.admissao } : u));
+    setUsuarios(us => us.map(u => u.id === id ? { ...u, nome: patch.nome ?? u.nome, cargo: patch.cargo ?? u.cargo, papel: patch.tipo ?? u.papel, ativo: patch.ativo ?? u.ativo, admissao: patch.data_admissao ?? u.admissao, salario: patch.salario_bruto ?? u.salario, vtAtivo: patch.vale_transporte_ativo ?? u.vtAtivo, vtValor: patch.vale_transporte_valor_mensal ?? u.vtValor, dependentes: patch.dependentes_irrf ?? u.dependentes } : u));
     log("equipe", `Usuário ${id} atualizado: ${Object.keys(patch).join(", ")}`);
   };
  
@@ -796,6 +914,7 @@ function App() {
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
+    setFolhasPg([]); setAdiantamentos([]); setGuias([]);
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
     setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
@@ -1074,6 +1193,90 @@ function App() {
     } catch (e) { alert(`Falha ao decidir: ${e.message}`); }
   };
  
+  /* ---------- folha de pagamento (gestor) ---------- */
+  const gerarFolha = async (comp) => {
+    const alvo = usuarios.filter(u => u.ativo !== false && (u.salario || 0) > 0);
+    if (!alvo.length) throw new Error("Nenhum colaborador ativo com salário cadastrado — preencha os salários na seção Equipe.");
+    const jaFechadas = folhasPg.filter(f => f.competencia === comp && f.status === "fechada").map(f => f.userId);
+    const linhas = alvo.filter(u => !jaFechadas.includes(u.id)).map(u => ({ usuario_id: u.id, competencia: comp, ...calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos).row }));
+    if (!linhas.length) throw new Error("Todas as folhas dessa competência já estão fechadas.");
+    if (demo) {
+      setFolhasPg(fs => [...fs.filter(f => !(f.competencia === comp && f.status === "rascunho")), ...linhas.map((l, i) => mapFolhaPg({ id: `d${Date.now()}${i}`, ...l }))]);
+    } else {
+      const rows = await sbUpsert(sessao.token, "folha_pagamento", linhas, "usuario_id,competencia");
+      setFolhasPg(fs => [...fs.filter(f => !(f.competencia === comp && f.status === "rascunho")), ...rows.map(mapFolhaPg)]);
+    }
+    log("folha", `Folha ${comp.slice(0, 7)} gerada (rascunho) pra ${linhas.length} colaborador(es)${jaFechadas.length ? ` · ${jaFechadas.length} já fechada(s), preservada(s)` : ""}`);
+    return linhas.length;
+  };
+ 
+  const editarFolha = async (id, patchNums) => {
+    const f = folhasPg.find(x => x.id === id);
+    if (!f || f.status === "fechada") return;
+    const novo = { ...f, ...patchNums };
+    const liquido = r2(novo.salario - novo.faltas - novo.atrasos - novo.inss - novo.irrf - novo.vt - novo.adiantamento);
+    const patch = {
+      desconto_inss: novo.inss, desconto_irrf: novo.irrf, desconto_vale_transporte: novo.vt,
+      desconto_faltas: novo.faltas, desconto_atrasos: novo.atrasos, desconto_adiantamento: novo.adiantamento,
+      valor_liquido: liquido,
+    };
+    if (!demo) await sbUpdate(sessao.token, "folha_pagamento", `id=eq.${id}`, patch);
+    setFolhasPg(fs => fs.map(x => x.id === id ? { ...novo, liquido } : x));
+    log("folha", `Folha #${id} (${f.competencia.slice(0, 7)}) ajustada manualmente no rascunho`);
+  };
+ 
+  const fecharFolha = async (comp) => {
+    const abertas = folhasPg.filter(f => f.competencia === comp && f.status === "rascunho");
+    if (!abertas.length) throw new Error("Não há rascunho pra fechar nessa competência.");
+    const agora = iso(new Date());
+    if (!demo) {
+      await sbUpdate(sessao.token, "folha_pagamento", `competencia=eq.${comp}&status=eq.rascunho`, { status: "fechada", fechado_em: agora });
+      await sbUpdate(sessao.token, "adiantamentos_salariais", `competencia_desconto=eq.${comp}&status=eq.pendente`, { status: "descontado" });
+    }
+    setFolhasPg(fs => fs.map(f => f.competencia === comp && f.status === "rascunho" ? { ...f, status: "fechada", fechadoEm: agora } : f));
+    setAdiantamentos(as => as.map(a => a.competenciaDesconto === comp && a.status === "pendente" ? { ...a, status: "descontado" } : a));
+    // Guias fiscais automáticas da competência (vencimento dia 20 do mês seguinte)
+    const todas = folhasPg.filter(f => f.competencia === comp).map(f => f.status === "rascunho" ? { ...f, status: "fechada" } : f);
+    const [ano, mes] = comp.split("-").map(Number);
+    const venc = `${mes === 12 ? ano + 1 : ano}-${String(mes === 12 ? 1 : mes + 1).padStart(2, "0")}-20`;
+    const totais = [
+      ["GPS/INSS retido", r2(todas.reduce((s, f) => s + f.inss, 0))],
+      ["DARF IRRF retido", r2(todas.reduce((s, f) => s + f.irrf, 0))],
+      ["FGTS (8% patronal)", r2(todas.reduce((s, f) => s + f.salario * TABELAS_2026.fgtsPatronal, 0))],
+    ].filter(([, v]) => v > 0);
+    const novas = totais.filter(([tipo]) => !guias.some(g => g.competencia === comp && g.tipo === tipo))
+      .map(([tipo, valor]) => ({ competencia: comp, tipo, valor_total: valor, vencimento: venc }));
+    if (novas.length) {
+      if (demo) setGuias(gs => [...gs, ...novas.map((g, i) => mapGuia({ id: `g${Date.now()}${i}`, ...g, status: "gerada" }))]);
+      else { const rows = await sbInsert(sessao.token, "guias_fiscais", novas); setGuias(gs => [...gs, ...rows.map(mapGuia)]); }
+    }
+    try { await auditar("folha_fechada", `Folha ${comp.slice(0, 7)} FECHADA (${abertas.length} colaborador(es)) · guias geradas: ${novas.map(n => `${n.tipo} ${brl(n.valor_total)}`).join(" · ") || "nenhuma nova"}`); }
+    catch (e) { setErroDados(`Folha fechada, mas o registro na auditoria falhou: ${e.message}`); }
+  };
+ 
+  const marcarGuiaPaga = async (id) => {
+    if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, { status: "paga" });
+    setGuias(gs => gs.map(g => g.id === id ? { ...g, status: "paga" } : g));
+    log("folha", `Guia fiscal #${id} marcada como paga`);
+  };
+ 
+  const criarAdiantamento = async (dados) => {
+    if (!(+dados.valor > 0)) throw new Error("Informe um valor maior que zero.");
+    if (!dados.competenciaDesconto) throw new Error("Informe a competência do desconto.");
+    const linha = { usuario_id: dados.userId, valor: +dados.valor, competencia_desconto: dados.competenciaDesconto, observacao: dados.observacao || null };
+    if (demo) setAdiantamentos(as => [mapAdiant({ id: `a${Date.now()}`, ...linha, status: "pendente", data_solicitacao: hojeStr() }), ...as]);
+    else { const [row] = await sbInsert(sessao.token, "adiantamentos_salariais", [linha]); setAdiantamentos(as => [mapAdiant(row), ...as]); }
+    log("folha", `Adiantamento de ${brl(dados.valor)} criado pra desconto em ${dados.competenciaDesconto.slice(0, 7)}`);
+  };
+ 
+  const cancelarAdiantamento = async (id) => {
+    const a = adiantamentos.find(x => x.id === id);
+    if (!a || a.status !== "pendente") return;
+    if (!demo) await sbUpdate(sessao.token, "adiantamentos_salariais", `id=eq.${id}`, { status: "cancelado" });
+    setAdiantamentos(as => as.map(x => x.id === id ? { ...x, status: "cancelado" } : x));
+    log("folha", `Adiantamento #${id} cancelado`);
+  };
+ 
   /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
     const mapa = {
@@ -1140,7 +1343,7 @@ function App() {
  
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
  
@@ -1198,13 +1401,14 @@ function App() {
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
+          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento }} />
           )}
         </main>
       </div>
@@ -1867,7 +2071,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
   };
   const salvarEdicao = async () => {
     if (!editando.admissao) { setMsg({ ok: false, txt: "A data de admissão é obrigatória." }); return; }
-    try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo, data_admissao: editando.admissao }); setEditando(null); }
+    try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo, data_admissao: editando.admissao, salario_bruto: +editando.salario || 0, vale_transporte_ativo: !!editando.vtAtivo, vale_transporte_valor_mensal: +editando.vtValor || 0, dependentes_irrf: +editando.dependentes || 0 }); setEditando(null); }
     catch (e) { setMsg({ ok: false, txt: e.message }); }
   };
   const statusConvite = (c) => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, "#fff"] : ["PENDENTE", C.amarelo, "#111"];
@@ -1887,6 +2091,18 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>Admissão
                 <input type="date" style={{ ...S.input, width: 160 }} value={editando.admissao || ""} onChange={e => setEditando({ ...editando, admissao: e.target.value })} />
               </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>Salário bruto R$
+                <input type="number" min="0" step="0.01" style={{ ...S.input, width: 130 }} value={editando.salario} onChange={e => setEditando({ ...editando, salario: e.target.value })} />
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>
+                <input type="checkbox" checked={!!editando.vtAtivo} onChange={e => setEditando({ ...editando, vtAtivo: e.target.checked })} /> VT
+              </label>
+              {editando.vtAtivo && <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>VT mensal R$
+                <input type="number" min="0" step="0.01" style={{ ...S.input, width: 110 }} value={editando.vtValor} onChange={e => setEditando({ ...editando, vtValor: e.target.value })} />
+              </label>}
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.cinza }}>Dep. IRRF
+                <input type="number" min="0" step="1" style={{ ...S.input, width: 70 }} value={editando.dependentes} onChange={e => setEditando({ ...editando, dependentes: e.target.value })} />
+              </label>
               <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }} onClick={salvarEdicao}>Salvar</button>
               <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setEditando(null)}>Cancelar</button>
             </div>
@@ -1897,7 +2113,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
               </div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, "#fff")}>ATIVO</span>}
-                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel, admissao: (u.admissao || "").slice(0, 10) })}>Editar</button>
+                <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel, admissao: (u.admissao || "").slice(0, 10), salario: u.salario || 0, vtAtivo: !!u.vtAtivo, vtValor: u.vtValor || 0, dependentes: u.dependentes || 0 })}>Editar</button>
                 {u.id !== gestorId && (u.ativo === false
                   ? <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: true })}>Reativar</button>
                   : <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: false })}>Desativar</button>)}
@@ -1981,6 +2197,171 @@ function SecaoFolgas({ folgas, usuarios, registros, faltas, onDecidir }) {
   );
 }
  
+const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
+ 
+function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant }) {
+  const hoje = new Date();
+  const [comp, setComp] = useState(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
+  const compData = comp + "-01";
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [editRow, setEditRow] = useState(null); // { id, faltas, atrasos, inss, irrf, vt, adiantamento }
+  const [adForm, setAdForm] = useState({ userId: "", valor: "", competenciaDesconto: "", observacao: "" });
+  const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
+  const doMes = folhasPg.filter(f => f.competencia === compData).sort((a, b) => nome(a.userId).localeCompare(nome(b.userId)));
+  const temRascunho = doMes.some(f => f.status === "rascunho");
+  const guiasMes = guias.filter(g => g.competencia === compData);
+  const rodar = async (fn, okMsg) => {
+    if (ocupado) return;
+    setOcupado(true); setMsg(null);
+    try { const r = await fn(); setMsg({ ok: true, txt: typeof okMsg === "function" ? okMsg(r) : okMsg }); }
+    catch (e) { setMsg({ ok: false, txt: e.message }); }
+    finally { setOcupado(false); }
+  };
+  const salvarEdit = () => rodar(async () => {
+    await onEditarFolha(editRow.id, { faltas: +editRow.faltas || 0, atrasos: +editRow.atrasos || 0, inss: +editRow.inss || 0, irrf: +editRow.irrf || 0, vt: +editRow.vt || 0, adiantamento: +editRow.adiantamento || 0 });
+    setEditRow(null);
+  }, "Rascunho ajustado.");
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>💰 Folha de pagamento</div>
+      <p style={{ fontSize: 11, color: C.cinza, margin: "6px 0 0" }}>{AVISO_FOLHA}</p>
+      <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input type="month" style={{ ...S.input, width: 170 }} value={comp} onChange={e => setComp(e.target.value)} />
+        <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(() => onGerarFolha(compData), n => `Rascunho gerado pra ${n} colaborador(es). Confira e feche quando estiver certo.`)}>{ocupado ? "⏳…" : "Gerar folha (rascunho)"}</button>
+        {temRascunho && <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "8px 14px", fontSize: 13 }} disabled={ocupado} onClick={() => { if (window.confirm(`Fechar a folha de ${comp}? Isso trava os valores, marca os adiantamentos como descontados e gera as guias fiscais.`)) rodar(() => onFecharFolha(compData), "Folha fechada e guias geradas."); }}>Fechar folha ✓</button>}
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      {doMes.length > 0 && (
+        <div style={{ overflowX: "auto", marginTop: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ color: C.cinza, textAlign: "right" }}>
+              <th style={{ textAlign: "left", padding: 6 }}>Colaborador</th><th>Bruto</th><th>Faltas</th><th>Atrasos</th><th>INSS</th><th>IRRF</th><th>VT</th><th>Adiant.</th><th>Líquido</th><th></th>
+            </tr></thead>
+            <tbody>
+              {doMes.map(f => (
+                <tr key={f.id} style={{ borderTop: "1px solid #1E3450", textAlign: "right" }}>
+                  <td style={{ textAlign: "left", padding: 6, fontWeight: 700 }}>{nome(f.userId)} {f.status === "fechada" ? <span style={S.tag("#123B24", C.verde)}>FECHADA</span> : <span style={S.tag("#3A2A08", C.amarelo)}>RASCUNHO</span>}</td>
+                  {editRow?.id === f.id ? (
+                    <>
+                      <td>{brl(f.salario)}</td>
+                      {["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].map(k => (
+                        <td key={k}><input type="number" step="0.01" style={{ ...S.input, width: 84, padding: 6, fontSize: 12 }} value={editRow[k]} onChange={e => setEditRow({ ...editRow, [k]: e.target.value })} /></td>
+                      ))}
+                      <td style={{ fontWeight: 700 }}>{brl((f.salario) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
+                      <td style={{ whiteSpace: "nowrap" }}><button style={{ ...S.btn, padding: "4px 10px", fontSize: 11 }} onClick={salvarEdit}>Salvar</button> <button style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow(null)}>✕</button></td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{brl(f.salario)}</td>
+                      <td title={`${f.diasFaltas} dia(s) + DSR`}>{brl(f.faltas)}</td>
+                      <td title={`${f.horasAtraso}h além da tolerância`}>{brl(f.atrasos)}</td>
+                      <td>{brl(f.inss)}</td><td>{brl(f.irrf)}</td><td>{brl(f.vt)}</td><td>{brl(f.adiantamento)}</td>
+                      <td style={{ fontWeight: 700, color: C.verde }}>{brl(f.liquido)}</td>
+                      <td>{f.status === "rascunho" && <button style={{ ...S.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setEditRow({ id: f.id, faltas: f.faltas, atrasos: f.atrasos, inss: f.inss, irrf: f.irrf, vt: f.vt, adiantamento: f.adiantamento })}>✎</button>}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+              <tr style={{ borderTop: "2px solid #2A4568", textAlign: "right", fontWeight: 700 }}>
+                <td style={{ textAlign: "left", padding: 6 }}>TOTAIS</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.salario, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.faltas, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.atrasos, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.inss, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.irrf, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.vt, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + f.adiantamento, 0))}</td>
+                <td style={{ color: C.verde }}>{brl(doMes.reduce((s, f) => s + f.liquido, 0))}</td><td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      {guiasMes.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Guias fiscais de {comp}</div>
+          {guiasMes.map(g => (
+            <div key={g.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "7px 0", fontSize: 13 }}>
+              <span><b>{g.tipo}</b> · {brl(g.valor)} · vence {fmtData(g.vencimento)}</span>
+              {g.status === "paga" ? <span style={S.tag("#123B24", C.verde)}>PAGA</span> : <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onMarcarGuiaPaga(g.id), "Guia marcada como paga.")}>Marcar paga</button>}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+        <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Adiantamentos salariais</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select style={{ ...S.input, width: 180 }} value={adForm.userId} onChange={e => setAdForm({ ...adForm, userId: e.target.value })}>
+            <option value="">Colaborador…</option>
+            {usuarios.filter(u => u.ativo !== false).map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+          </select>
+          <input type="number" min="0" step="0.01" placeholder="Valor R$" style={{ ...S.input, width: 110 }} value={adForm.valor} onChange={e => setAdForm({ ...adForm, valor: e.target.value })} />
+          <input type="month" style={{ ...S.input, width: 160 }} value={adForm.competenciaDesconto} onChange={e => setAdForm({ ...adForm, competenciaDesconto: e.target.value })} title="Competência do desconto" />
+          <input placeholder="Observação" style={{ ...S.input, width: 180 }} value={adForm.observacao} onChange={e => setAdForm({ ...adForm, observacao: e.target.value })} />
+          <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }} disabled={ocupado} onClick={() => rodar(async () => { if (!adForm.userId) throw new Error("Escolha o colaborador."); await onCriarAdiant({ ...adForm, competenciaDesconto: adForm.competenciaDesconto ? adForm.competenciaDesconto + "-01" : "" }); setAdForm({ userId: "", valor: "", competenciaDesconto: "", observacao: "" }); }, "Adiantamento registrado — será descontado na folha da competência.")}>Registrar</button>
+        </div>
+        {adiantamentos.slice(0, 8).map(a => (
+          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "6px 0", fontSize: 12 }}>
+            <span>{nome(a.userId)} · {brl(a.valor)} · desconto em {a.competenciaDesconto.slice(0, 7)}{a.observacao ? ` · ${a.observacao}` : ""}</span>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Badge st={a.status} />
+              {a.status === "pendente" && <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "4px 10px", fontSize: 11 }} onClick={() => rodar(() => onCancelarAdiant(a.id), "Adiantamento cancelado.")}>Cancelar</button>}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+ 
+function TelaHolerite({ user, folhasPg, adiantamentos }) {
+  const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Holerite</h1>
+      <p style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{AVISO_FOLHA}</p>
+      {minhas.length === 0 && <div style={{ ...S.card, marginTop: 14, fontSize: 13, color: C.cinza }}>Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada mês.</div>}
+      {minhas.map(f => (
+        <div key={f.id} style={{ ...S.card, marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ ...S.display, fontSize: 16, color: C.amarelo }}>{EMPRESA.nome} · competência {f.competencia.slice(0, 7)}</div>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {f.status === "fechada" ? <span style={S.tag("#123B24", C.verde)}>FECHADA</span> : <span style={S.tag("#3A2A08", C.amarelo)}>RASCUNHO — sujeito a ajustes</span>}
+              <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => window.print()}>🖨 Imprimir</button>
+            </span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+            <tbody>
+              {[["Salário bruto", f.salario, C.branco],
+                [`Desconto faltas (${f.diasFaltas} dia(s) + DSR)`, -f.faltas],
+                [`Desconto atrasos (${f.horasAtraso}h)`, -f.atrasos],
+                ["INSS", -f.inss], ["IRRF", -f.irrf], ["Vale-transporte", -f.vt], ["Adiantamento", -f.adiantamento]]
+                .filter(([, v]) => v !== 0)
+                .map(([l, v, cor]) => (
+                  <tr key={l} style={{ borderTop: "1px solid #1A2F4A" }}>
+                    <td style={{ padding: 6 }}>{l}</td>
+                    <td style={{ padding: 6, textAlign: "right", color: cor || (v < 0 ? C.vermelho : C.branco) }}>{brl(v)}</td>
+                  </tr>
+                ))}
+              <tr style={{ borderTop: "2px solid #2A4568", fontWeight: 700 }}>
+                <td style={{ padding: 6 }}>LÍQUIDO A RECEBER</td>
+                <td style={{ padding: 6, textAlign: "right", color: C.verde, fontSize: 16 }}>{brl(f.liquido)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={{ fontSize: 10, color: C.cinza, marginTop: 8 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>
+        </div>
+      ))}
+      {adiantamentos.some(a => a.status === "pendente") && (
+        <div style={{ ...S.card, marginTop: 14, fontSize: 13 }}>
+          <b>Adiantamentos pendentes:</b> {adiantamentos.filter(a => a.status === "pendente").map(a => `${brl(a.valor)} (desconto em ${a.competenciaDesconto.slice(0, 7)})`).join(" · ")}
+        </div>
+      )}
+    </div>
+  );
+}
+ 
 function SecaoLocais({ locais, onCriar, onDesativar }) {
   const [nome, setNome] = useState("");
   const [raio, setRaio] = useState(50);
@@ -2024,7 +2405,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
  
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant }) {
   const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
@@ -2078,6 +2459,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
       </div>
       <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} />
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
+      <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant }} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
