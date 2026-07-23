@@ -50,8 +50,8 @@
      Código-fonte legível (JSX) fica no ponto-renovar.jsx pra revisão. -->
 <link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link rel="preconnect" href="https://bdbxjdkjeeobaxulfqkb.supabase.co" crossorigin>
-<script crossorigin defer src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin defer src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <style>html,body,#root{margin:0;padding:0;background:#0D1B2A}</style>
 <script>
 /* Anti-clickjacking possível numa página estática: X-Frame-Options e CSP frame-ancestors
@@ -66,7 +66,7 @@ try { if (window.top !== window.self) { window.top.location = window.self.locati
 <body>
 <div id="root"></div>
 <noscript><p style="color:#F5F7FA;background:#0D1B2A;font:16px system-ui;padding:24px">O Ponto Renovar precisa de JavaScript ativado.</p></noscript>
-<script defer>
+<script>
 const { useState, useEffect, useRef, useMemo } = React;
 const EMPRESA = {
   nome: "Renovar Tech Ltda",
