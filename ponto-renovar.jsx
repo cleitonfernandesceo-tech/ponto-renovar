@@ -22,14 +22,18 @@ const EMPRESA = {
    sábado  8:00→13:00 (turno único de 5h, sem intervalo)
    domingo e feriado nacional: empresa fechada (sem cobrança de atraso/falta; trabalho vira crédito integral no banco)
    Feriados vêm da tabela feriados_nacionais no login (FERIADOS_SET, módulo-level pra não replumbar todos os motores). */
-/* Intervalo intrajornada REAL da empresa: 1 hora (corrigido em 23/07/2026 — o sistema
-   assumia 2h). Consequência aritmética: com presença das 8h às 18h e 1h de intervalo,
-   a jornada efetiva é de 9h/dia, enquanto a jornada normal (CLT art. 58) é de 8h —
-   a diferença vira crédito no banco de horas, como manda a lei. */
+/* Jornada contratual da Renovar Tech (confirmada pela gestão em 23/07/2026):
+     seg-sex  8:00 → 18:00 com 1 hora de intervalo = 9h de trabalho por dia
+     sábado   8:00 → 13:00, turno único = 5h
+   Total contratual: 50h por semana.
+   ⚠ NOTA JURÍDICA (para o regulamento e o advogado trabalhista): a CF/88 art. 7º XIII
+   fixa o limite de 44h semanais. As 6h que excedem devem estar amparadas por acordo de
+   compensação/banco de horas ou pagas como extraordinárias. O sistema apenas reflete a
+   jornada informada; a validação jurídica do arranjo é externa a ele. */
 const EXPEDIENTE = { entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: 60, toleranciaMin: 10 };
 // Marco da correção: usado pra sinalizar ao gestor que saldos históricos foram recalculados.
-const MUDANCA_INTERVALO = { data: "2026-07-23", de: 120, para: 60 };
-const JORNADA_MIN = 8 * 60; // referência de dia cheio (usada na conversão de folga: 1 dia = 8h)
+const MUDANCA_INTERVALO = { data: "2026-07-23", de: 120, para: 60, jornadaAntiga: 8 * 60, jornadaNova: 9 * 60 };
+const JORNADA_MIN = 9 * 60; // dia cheio de trabalho (usado na conversão de folga: 1 dia = 9h)
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = (lista) => { FERIADOS_SET = new Set(lista.map(f => f.data)); FERIADOS_NOMES = Object.fromEntries(lista.map(f => [f.data, f.nome])); };
@@ -40,7 +44,9 @@ function expedienteDoDia(dt) {
   const feriado = FERIADOS_NOMES[dataISO(dt)];
   if (feriado) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, rotulo: `feriado — ${feriado}` };
   if (dow === 6) return { jornadaMin: 5 * 60, entradaMin: 8 * 60, saidaMin: 13 * 60, intervaloMin: 0, rotulo: "sábado 8:00–13:00" };
-  return { jornadaMin: 8 * 60, entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, rotulo: "8:00–18:00 (1h de intervalo)" };
+  // Jornada contratual de 9h/dia (decisão da empresa): presença 8h→18h menos 1h de intervalo.
+  // Fechando em zero o dia normal — sem crédito nem débito automático no banco de horas.
+  return { jornadaMin: 9 * 60, entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, rotulo: "8:00–18:00 (9h + 1h de intervalo)" };
 }
 // Minutos após o horário de entrada (negativo = chegou antes)
 const minutosAposEntrada = (dt) => dt.getHours() * 60 + dt.getMinutes() - EXPEDIENTE.entradaMin;
@@ -66,7 +72,7 @@ const CONFIG_FISCAL = {
   ptrp: { nome: "PONTO RENOVAR", versao: "1.0.0", tpIdtDesenv: "1", idtDesenv: "41206506000139", razaoNome: "Renovar Tech Ltda", email: "dev@renovartech.com.br" },
 };
 const HORARIOS_CONTRATUAIS = [
-  { cod: "H0818", durMin: 480, pares: [["0800", "1200"], ["1400", "1800"]] }, // seg-sex: 8h produtivas, intervalo 12-14
+  { cod: "H0818", durMin: 540, pares: [["0800", "1200"], ["1300", "1800"]] }, // seg-sex: 9h de jornada, intervalo 12-13
   { cod: "H0813", durMin: 300, pares: [["0800", "1300"]] },                    // sábado: turno único de 5h
 ];
 const codHorarioDe = (dt) => (new Date(dt).getDay() === 6 ? "H0813" : "H0818");
@@ -126,23 +132,29 @@ function validarFracionamento(periodosExistentes, novoDias, totalJaUsado) {
   return { ok: true, aviso: !todos.some(d => d >= FRAC.minMaior) ? `Atenção: nenhum período tem ${FRAC.minMaior}+ dias ainda — um dos próximos precisará ter, por exigência da CLT.` : null };
 }
 
-/* Impacto histórico da correção do intervalo: dias ANTERIORES à mudança em que o
-   colaborador bateu só um par (entrada/saída) tinham 2h descontadas em vez de 1h,
-   então o saldo daqueles dias estava 60 min menor do que o correto. Dias com batida
-   de almoço (4 marcações) não eram afetados. Aqui quantificamos pra revisão do gestor. */
+/* Impacto histórico da correção (intervalo 2h→1h E jornada 8h→9h, aplicadas juntas):
+     • dias com UM par de marcações: 600−120−480 = 0 antes; 600−60−540 = 0 agora → nada muda;
+     • dias com o almoço batido (4 marcações): 540−0−480 = +60 antes; 540−0−540 = 0 agora
+       → o crédito de 1h/dia que existia era indevido (a jornada real sempre foi de 9h).
+   Quantificamos aqui pra o gestor revisar decisões tomadas com o saldo inflado. */
 function impactoMudancaIntervalo(userId, registros) {
   const corte = new Date(MUDANCA_INTERVALO.data + "T00:00:00");
-  let diasAfetados = 0;
+  let diasAfetados = 0, minutosDiferenca = 0;
   Object.values(agruparPorDia(registros, userId)).forEach(regs => {
     const dt = new Date(regs[0].ts);
     if (dt >= corte) return;
     const exp = expedienteDoDia(dt);
-    if (exp.intervaloMin === 0) return; // sábado/domingo/feriado não tinham intervalo
+    if (exp.jornadaMin === 0 || exp.intervaloMin === 0) return; // sábado/domingo/feriado não mudaram
+    const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    if (pares <= 1) diasAfetados++; // só nesses dias o desconto de intervalo era aplicado
+    const saldoAntigo = min - (pares <= 1 ? MUDANCA_INTERVALO.de : 0) - MUDANCA_INTERVALO.jornadaAntiga;
+    const saldoNovo = min - (pares <= 1 ? MUDANCA_INTERVALO.para : 0) - exp.jornadaMin;
+    const dif = saldoNovo - saldoAntigo;
+    if (dif !== 0) { diasAfetados++; minutosDiferenca += dif; }
   });
-  return { diasAfetados, minutosDiferenca: diasAfetados * (MUDANCA_INTERVALO.de - MUDANCA_INTERVALO.para) };
+  return { diasAfetados, minutosDiferenca };
 }
+
 
 /* ============================================================
    MENSAGENS DE ERRO AMIGÁVEIS
@@ -1354,7 +1366,7 @@ export default function App() {
             perfil.papel === "gestor" ? sbSelect(token, "auditoria", "select=*&order=ts.desc&limit=300") : Promise.resolve([]),
             perfil.papel === "gestor" ? sbSelect(token, "convites", "select=*&order=criado_em.desc") : Promise.resolve([]),
             sbSelect(token, "solicitacoes_folga", "select=*&order=criado_em.desc"),
-            perfil.papel === "gestor" ? sbSelect(token, "folha_pagamento", "select=*&order=competencia.desc") : Promise.resolve([]),
+            sbSelect(token, "folha_pagamento", "select=*&order=competencia.desc"), // RLS entrega só a própria folha ao colaborador
             sbSelect(token, "adiantamentos_salariais", "select=*&order=criado_em.desc"),
             perfil.papel === "gestor" ? sbSelect(token, "guias_fiscais", "select=*&order=competencia.desc") : Promise.resolve([]),
             sbSelect(token, "ranking_pontos_publico", "select=*"),
@@ -2130,8 +2142,7 @@ export default function App() {
 
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"],
-    ...(user.papel === "gestor" ? [["holerite", "💰 Holerite"]] : []), ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
 
@@ -2987,7 +2998,7 @@ function TelaBanco({ user, registros, faltas, folgas, onSolicitar }) {
         </div>
         {pendentesMin > 0 && <p style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Você já tem {hmm(pendentesMin)} em solicitações pendentes — elas contam contra o disponível pra novas solicitações.</p>}
         {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
-        <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>A conversão só é efetivada com a aprovação do gestor — aí as horas são debitadas do seu banco. Dica: um dia inteiro de folga = 8 horas (a jornada produtiva). Base legal: compensação do banco de horas por acordo individual escrito, CLT art. 59 §§ 5º-6º.</p>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>A conversão só é efetivada com a aprovação do gestor — aí as horas são debitadas do seu banco. Dica: um dia inteiro de folga = 9 horas (a jornada de seg a sex); um sábado = 5 horas. Base legal: compensação do banco de horas por acordo individual escrito, CLT art. 59 §§ 5º-6º.</p>
       </div>
       {minhas.map(f => (
         <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -3565,22 +3576,25 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         if (!afetados.length) return null;
         return (
           <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${C.vermelho}`, padding: 14 }}>
-            <div style={{ ...S.display, fontSize: 14, color: C.vermelho }}>📌 Revisão necessária: regra de intervalo corrigida</div>
+            <div style={{ ...S.display, fontSize: 14, color: C.vermelho }}>📌 Revisão necessária: jornada e intervalo corrigidos</div>
             <p style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", lineHeight: 1.6 }}>
-              Até {fmtData(MUDANCA_INTERVALO.data)} o sistema descontava <b>2 horas</b> de intervalo por dia; o intervalo real da empresa é de <b>1 hora</b>.
-              O banco de horas é recalculado ao vivo, então os saldos <b>já estão corrigidos</b> — mas isso significa que os valores exibidos antes dessa data estavam <b>menores</b> que o devido.
-              Confira se alguma decisão tomada com o saldo antigo (folga negada, hora extra não paga) precisa ser revista.
+              Até {fmtData(MUDANCA_INTERVALO.data)} o sistema usava intervalo de <b>2 horas</b> e jornada de <b>8 horas</b>. Os valores reais da empresa são
+              <b> 1 hora de intervalo e 9 horas de jornada</b> (8h às 18h). O banco de horas é recalculado ao vivo, então os saldos <b>já estão corretos</b> —
+              mas quem registrava a saída e a volta do almoço vinha acumulando <b>1 hora de crédito indevida por dia</b>, que deixou de existir.
+              Confira se alguma folga aprovada ou hora extra paga com base no saldo antigo precisa ser acertada.
             </p>
             <div style={{ marginTop: 10 }}>
               {afetados.map(({ u, imp }) => (
                 <div key={u.id} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #1E3450", padding: "6px 0", fontSize: 13, gap: 10, flexWrap: "wrap" }}>
                   <span><b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {imp.diasAfetados} dia(s) afetado(s)</span></span>
-                  <span style={{ color: C.verde, fontWeight: 700 }}>+{hmm(imp.minutosDiferenca)} a mais no saldo</span>
+                  <span style={{ color: imp.minutosDiferenca < 0 ? C.vermelho : C.verde, fontWeight: 700 }}>
+                    {imp.minutosDiferenca < 0 ? "−" : "+"}{hmm(Math.abs(imp.minutosDiferenca))} no saldo
+                  </span>
                 </div>
               ))}
             </div>
             <p style={{ fontSize: 11, color: C.cinza, marginTop: 10, lineHeight: 1.5 }}>
-              Só entram nesta conta os dias em que o colaborador bateu <b>um único par</b> de marcações (sem registrar a saída/volta do almoço) — nos demais o desconto de intervalo não era aplicado, então nada muda.
+              Só entram nesta conta os dias em que o colaborador registrou <b>saída e volta do almoço</b> (4 marcações). Em dias com um único par de marcações o resultado é o mesmo nas duas regras — a correção do intervalo e a da jornada se anulam.
             </p>
           </div>
         );
@@ -3591,7 +3605,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
           Este app roda 100% no navegador do colaborador, <b>sem servidor próprio rodando o tempo todo</b>. Por isso:
         </p>
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
-          <li><b>Jornada efetiva de 9h/dia:</b> com presença das 8h às 18h e 1 hora de intervalo, sobram <b>9 horas trabalhadas</b>, enquanto a jornada normal da CLT é de 8h. A diferença vira crédito no banco de horas todo dia útil. Se a intenção for jornada de 8h, o expediente precisaria terminar às 17h — fale comigo pra ajustar.</li>
+          <li><b>Jornada contratual de 9h/dia:</b> 8h às 18h com 1 hora de intervalo (seg-sex) + sábado de 5h = <b>50h semanais</b>. O dia normal fecha em zero no banco de horas; só sobra saldo quem sai depois das 18h. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h semanais — as 6h excedentes precisam estar cobertas por acordo de compensação/banco de horas ou pagas como extraordinárias. Vale confirmar o enquadramento com o advogado trabalhista.</li>
           <li><b>Lembretes de bater ponto (8h/9h e almoço):</b> só disparam <b>enquanto o colaborador estiver com o app aberto</b> no navegador. Se o app estiver fechado no horário, o lembrete daquele momento não aparece (e não vira notificação push de celular).</li>
           <li><b>Batida automática de saída (fecha o dia às 18h/13h se esqueceram de bater):</b> depende de uma rotina agendada <b>no banco de dados (Supabase/pg_cron)</b>, que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se não, a saída não será preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h está ligado.</li>
         </ul>
