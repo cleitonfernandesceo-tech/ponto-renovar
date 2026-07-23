@@ -54,14 +54,20 @@ console.log(`\n🧪 PONTO RENOVAR — testes sobre ${ARQUIVO}`);
 
 // ============================================================
 secao("Calendário e expediente");
-m.setFeriadosGlobal([{ data: "2026-07-09", nome: "Feriado" }, { data: "2026-08-15", nome: "Assunção (BH)" }, { data: "2026-12-08", nome: "Imaculada (BH)" }]);
-t("seg-sex: jornada 8h", m.expedienteDoDia(new Date("2026-07-01T10:00:00")).jornadaMin === 480);
+m.setFeriadosGlobal([{ data: "2026-07-09", nome: "Feriado" }, { data: "2026-08-15", nome: "Assunção (BH)" }, { data: "2026-12-08", nome: "Imaculada (BH)" },
+  { data: "2026-02-16", nome: "Carnaval (segunda)" }, { data: "2026-02-17", nome: "Carnaval (terça)" },
+  { data: "2026-06-04", nome: "Corpus Christi" }, { data: "2026-12-12", nome: "Aniversário de BH" }]);
+t("seg-sex: jornada de 9h (8h-18h com 1h de intervalo)", m.expedienteDoDia(new Date("2026-07-01T10:00:00")).jornadaMin === 540);
 t("intervalo de 1 hora", m.expedienteDoDia(new Date("2026-07-01T10:00:00")).intervaloMin === 60, `${m.EXPEDIENTE.intervaloMin} min`);
 t("sábado: 5h, sem intervalo", m.expedienteDoDia(new Date("2026-07-04T10:00:00")).jornadaMin === 300 && m.expedienteDoDia(new Date("2026-07-04T10:00:00")).intervaloMin === 0);
 t("domingo fechado", m.expedienteDoDia(new Date("2026-07-05T10:00:00")).jornadaMin === 0);
 t("feriado nacional fechado", m.expedienteDoDia(new Date("2026-07-09T10:00:00")).jornadaMin === 0);
 t("feriado municipal BH 15/08 fechado", m.expedienteDoDia(new Date("2026-08-15T10:00:00")).jornadaMin === 0);
 t("feriado municipal BH 08/12 fechado", m.expedienteDoDia(new Date("2026-12-08T10:00:00")).jornadaMin === 0);
+t("Carnaval (segunda) fechado", m.expedienteDoDia(new Date("2026-02-16T10:00:00")).jornadaMin === 0);
+t("Carnaval (terça) fechado", m.expedienteDoDia(new Date("2026-02-17T10:00:00")).jornadaMin === 0);
+t("Corpus Christi fechado", m.expedienteDoDia(new Date("2026-06-04T10:00:00")).jornadaMin === 0);
+t("Aniversário de BH (12/12) fechado", m.expedienteDoDia(new Date("2026-12-12T10:00:00")).jornadaMin === 0);
 
 // ============================================================
 secao("Tolerância de atraso (fonte única, 10 min)");
@@ -88,12 +94,14 @@ t("ordem embaralhada dá o mesmo resultado", resumo(comAlmoco) === resumo([comAl
 t("colaborador pontual não acumula atraso", m.elegibilidadePremio("u", comAlmoco, []).atrasoMin === 0);
 
 // ============================================================
-secao("Banco de horas com intervalo de 1 hora");
-t("dia 8-18 com par único: +60 min", m.analisarAssiduidade("u", dia(1, 8, 0, 18, 0), []).saldoMin === 60);
-t("dia 8-12/13-18 (almoço batido): +60 min", m.analisarAssiduidade("u", comAlmoco, []).saldoMin === 60);
+secao("Banco de horas — jornada de 9h e intervalo de 1h");
+t("dia 8-18 com par único fecha em ZERO", m.analisarAssiduidade("u", dia(1, 8, 0, 18, 0), []).saldoMin === 0);
+t("dia 8-12/13-18 (almoço batido) fecha em ZERO", m.analisarAssiduidade("u", comAlmoco, []).saldoMin === 0);
 t("os dois padrões de batida convergem", m.analisarAssiduidade("u", dia(1, 8, 0, 18, 0), []).saldoMin === m.analisarAssiduidade("u", comAlmoco, []).saldoMin);
 t("sábado 8-13 fecha em zero", m.analisarAssiduidade("u", dia(4, 8, 0, 13, 0), []).saldoMin === 0);
 t("trabalho em feriado vira crédito integral", m.analisarAssiduidade("u", dia(9, 9, 0, 15, 0), []).saldoMin === 360);
+t("saída às 19h gera +60 min de extra", m.analisarAssiduidade("u", dia(1, 8, 0, 19, 0), []).saldoMin === 60);
+t("saída às 17h gera −60 min", m.analisarAssiduidade("u", dia(1, 8, 0, 17, 0), []).saldoMin === -60);
 
 // ============================================================
 secao("Folha de pagamento (tabelas 2026)");
@@ -183,7 +191,8 @@ secao("Casos extremos");
 t("colaborador sem batidas: assiduidade zerada", m.analisarAssiduidade("u", [], []).saldoMin === 0);
 t("colaborador sem batidas: folha só com INSS", fo({}).valor_liquido === m.r2(3000 - m.calcINSS(3000)));
 t("batida ímpar não gera NaN", Number.isFinite(m.analisarAssiduidade("u", [comAlmoco[0]], []).saldoMin));
-t("impacto da mudança de intervalo é quantificado", m.impactoMudancaIntervalo("u", dia(1, 8, 0, 18, 0)).minutosDiferenca >= 0);
+t("mudança de regra: dia com par único não muda", m.impactoMudancaIntervalo("u", dia(1, 8, 0, 18, 0)).minutosDiferenca === 0);
+t("mudança de regra: dia com almoço batido perde o crédito indevido de 1h", m.impactoMudancaIntervalo("u", comAlmoco).minutosDiferenca === -60);
 
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
