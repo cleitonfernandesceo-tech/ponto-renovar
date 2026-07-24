@@ -535,8 +535,9 @@ async function bioVerificar(credenciais, token, demo) {
     });
     if (!resp.aprovado) {
       throw Object.assign(new Error(resp.erro || "O servidor n\xE3o aprovou a verifica\xE7\xE3o biom\xE9trica."), { motivo: resp.alertaClone ? "clone" : "servidor_rejeitou" });
-    }
-  } catch (e) {
+}
+return { credentialId, metodo: "webauthn_servidor", origemFixada: !!resp.origemFixada };
+} catch (e) {
     if (e.name === "NotAllowedError") throw Object.assign(new Error("Biometria n\xE3o confirmada (cancelada ou tempo esgotado). Tente de novo."), { motivo: "cancelado" });
     if (e.motivo) throw e;
     throw Object.assign(new Error(`A verifica\xE7\xE3o biom\xE9trica n\xE3o p\xF4de ser conclu\xEDda. ${mensagemAmigavel(e)} [ref: ${e && e.name} - ${String((e && e.message) || e || "").slice(0,140)}]`), { motivo: "erro" });
