@@ -502,7 +502,7 @@ async function bioVerificar(credenciais, token, demo) {
      if (/failed to fetch|load failed|network ?error|ERR_INTERNET_DISCONNECTED|networkrequest/i.test(bruto)) {
         throw Object.assign(new Error("Sem conexão com o servidor. Verifique sua internet e tente de novo."), { motivo: "rede" });
      }
-     throw Object.assign(new Error(`A verificação biométrica não pôde ser concluída. ${mensagemAmigavel(e)}`), { motivo: "erro" });
+     throw Object.assign(new Error(`A verificação biométrica não pôde ser concluída. ${mensagemAmigavel(e)} [ref: ${e && e.name} - ${bruto.slice(0,140)}]`), { motivo: "erro" });
   }
 }
 
