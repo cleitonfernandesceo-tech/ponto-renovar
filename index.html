@@ -540,6 +540,10 @@ return { credentialId, metodo: "webauthn_servidor", origemFixada: !!resp.origemF
 } catch (e) {
     if (e.name === "NotAllowedError") throw Object.assign(new Error("Biometria n\xE3o confirmada (cancelada ou tempo esgotado). Tente de novo."), { motivo: "cancelado" });
     if (e.motivo) throw e;
+const bruto = String((e && e.message) || e || "");
+if (/failed to fetch|load failed|network ?error|ERR_INTERNET_DISCONNECTED|networkrequest/i.test(bruto)) {
+throw Object.assign(new Error("Sem conexão com o servidor. Verifique sua internet e tente de novo."), { motivo: "rede" });
+}
     throw Object.assign(new Error(`A verifica\xE7\xE3o biom\xE9trica n\xE3o p\xF4de ser conclu\xEDda. ${mensagemAmigavel(e)} [ref: ${e && e.name} - ${String((e && e.message) || e || "").slice(0,140)}]`), { motivo: "erro" });
   }
 }
