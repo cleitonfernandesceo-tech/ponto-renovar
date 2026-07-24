@@ -47,11 +47,16 @@
 
 <!-- React 18. O JSX vem PRÉ-COMPILADO neste arquivo: sem Babel no navegador.
      Isso remove 2,34 MB de download e vários segundos de tela travada no celular.
-     Código-fonte legível (JSX) fica no ponto-renovar.jsx pra revisão. -->
+     Código-fonte legível (JSX) fica no ponto-renovar.jsx pra revisão.
+
+     ⚠️ NÃO adicionar "defer" nestes dois scripts: o bloco principal do app é INLINE,
+     e o atributo defer é IGNORADO em script sem src (regra do HTML). Com defer aqui,
+     o React carregaria DEPOIS do código do app e a página abriria em branco com
+     "React is not defined". Já aconteceu — manter síncrono. -->
 <link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link rel="preconnect" href="https://bdbxjdkjeeobaxulfqkb.supabase.co" crossorigin>
-<script crossorigin defer src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin defer src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <style>html,body,#root{margin:0;padding:0;background:#0D1B2A}</style>
 <script>
 /* Anti-clickjacking possível numa página estática: X-Frame-Options e CSP frame-ancestors
@@ -65,8 +70,22 @@ try { if (window.top !== window.self) { window.top.location = window.self.locati
 </head>
 <body>
 <div id="root"></div>
+<script>
+/* Rede corporativa bloqueando o CDN, unpkg fora do ar ou script barrado: sem isto,
+   o usuário via apenas uma tela escura vazia, sem nenhuma pista do que houve. */
+if (typeof React === "undefined" || typeof ReactDOM === "undefined") {
+  document.getElementById("root").innerHTML =
+    '<div style="color:#F5F7FA;background:#0D1B2A;font:15px/1.6 system-ui;padding:28px;max-width:560px;margin:40px auto">' +
+    '<h1 style="font-size:20px;color:#FF7A1A;margin:0 0 10px">Não foi possível carregar o Ponto Renovar</h1>' +
+    '<p>Os componentes do aplicativo (React, hospedados em unpkg.com) não foram carregados. Isso costuma acontecer por:</p>' +
+    '<ul><li>internet instável ou sem conexão;</li>' +
+    '<li>rede da empresa ou antivírus bloqueando o endereço <b>unpkg.com</b>;</li>' +
+    '<li>indisponibilidade momentânea do serviço.</li></ul>' +
+    '<p>Tente recarregar a página. Se continuar, avise o gestor — pode ser necessário liberar o endereço unpkg.com na rede.</p></div>';
+}
+</script>
 <noscript><p style="color:#F5F7FA;background:#0D1B2A;font:16px system-ui;padding:24px">O Ponto Renovar precisa de JavaScript ativado.</p></noscript>
-<script defer>
+<script>
 const { useState, useEffect, useRef, useMemo } = React;
 const EMPRESA = {
   nome: "Renovar Tech Ltda",
