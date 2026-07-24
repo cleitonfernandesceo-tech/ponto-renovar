@@ -544,6 +544,32 @@ async function bioVerificar(credenciais, token, demo) {
   }
 }
 const mapCred = (r) => ({ id: r.id, userId: r.usuario_id, credentialId: r.credential_id, dispositivo: r.dispositivo, criadoEm: r.criado_em, ultimoUso: r.ultimo_uso });
+async function sbVerificarTokenHash(tokenHash, tipo = "recovery") {
+  const r = await fetch(`${SUPA.url}/auth/v1/verify`, {
+    method: "POST",
+    headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ type: tipo, token_hash: tokenHash })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) {
+    const bruto = j.error_description || j.msg || j.error || `HTTP ${r.status}`;
+    if (/expired|invalid|otp_expired|not found/i.test(bruto)) {
+      throw new Error("Este link de redefini\xE7\xE3o expirou ou j\xE1 foi utilizado. Pe\xE7a um novo na tela de login, em 'Esqueci minha senha'.");
+    }
+    throw new Error(bruto);
+  }
+  return { token: j.access_token, refresh: j.refresh_token, usuario: j.user };
+}
+async function sbDefinirNovaSenha(accessToken, novaSenha) {
+  const r = await fetch(`${SUPA.url}/auth/v1/user`, {
+    method: "PUT",
+    headers: { apikey: SUPA.anonKey, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ password: novaSenha })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error_description || j.msg || j.error || "N\xE3o foi poss\xEDvel salvar a nova senha.");
+  return j;
+}
 async function sbResetSenha(email) {
   const r = await fetch(`${SUPA.url}/auth/v1/recover`, {
     method: "POST",
@@ -1207,6 +1233,17 @@ function App() {
   const [conviteToken] = useState(() => {
     try {
       return new URLSearchParams(window.location.search).get("convite");
+    } catch {
+      return null;
+    }
+  });
+  const [resetToken] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+      const th = q.get("token_hash") || h.get("token_hash");
+      const tipo = q.get("type") || h.get("type") || "recovery";
+      return th && tipo === "recovery" ? th : null;
     } catch {
       return null;
     }
@@ -2174,6 +2211,13 @@ function App() {
     baixarArquivo(conteudo, nomeArquivo);
     log("export", `AEJ gerado (leiaute 001): ${nomeArquivo} \xB7 ${vinculos.length} v\xEDnculos \xB7 ${marcacoesAej.length} marca\xE7\xF5es`);
   };
+  if (!user && resetToken) return /* @__PURE__ */ React.createElement(TelaRedefinirSenha, { tokenHash: resetToken, onVoltar: () => {
+    try {
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch {
+    }
+    window.location.reload();
+  } });
   if (!user && conviteToken) return /* @__PURE__ */ React.createElement(TelaConvite, { token: conviteToken, onConcluir: concluirConvite, onVoltar: () => {
     try {
       window.history.replaceState({}, "", window.location.pathname);
@@ -2269,6 +2313,86 @@ function BannerSaidasAuto({ pendencias, onConfirmar, onCorrigir }) {
     setErro(null);
   } }, "Cancelar")) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13 } }, /* @__PURE__ */ React.createElement("b", null, fmtData(p.data + "T12:00:00")), " \u2014 sa\xEDda autom\xE1tica registrada \xE0s ", /* @__PURE__ */ React.createElement("b", null, p.saida)), /* @__PURE__ */ React.createElement("span", { style: { display: "flex", gap: 8, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("button", { style: { ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12, opacity: salvandoId ? 0.6 : 1 }, disabled: !!salvandoId, onClick: () => confirmar(p.id) }, salvandoId === p.id ? "\u23F3 Salvando\u2026" : "\u2714 Confirmar hor\xE1rio"), /* @__PURE__ */ React.createElement("button", { style: { ...S.btnGhost, padding: "6px 12px", fontSize: 12 }, "aria-label": "Corrigir hor\xE1rio da sa\xEDda autom\xE1tica", onClick: () => setCorrigindo({ id: p.id, hora: p.saida, just: "" }) }, "\u270E Corrigir"))))), erro && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12, color: C.vermelho, marginTop: 6 } }, erro));
 }
+function TelaRedefinirSenha({ tokenHash, onVoltar }) {
+  var _a;
+  const [etapa, setEtapa] = useState("confirmar");
+  const [sessaoTemp, setSessaoTemp] = useState(null);
+  const [senha, setSenha] = useState("");
+  const [senha2, setSenha2] = useState("");
+  const [erro, setErro] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const confirmar = async () => {
+    if (ocupado) return;
+    setOcupado(true);
+    setErro(null);
+    try {
+      const s = await sbVerificarTokenHash(tokenHash, "recovery");
+      setSessaoTemp(s);
+      setEtapa("senha");
+      try {
+        window.history.replaceState({}, "", window.location.pathname);
+      } catch {
+      }
+    } catch (e) {
+      setErro(mensagemAmigavel(e));
+    } finally {
+      setOcupado(false);
+    }
+  };
+  const salvar = async () => {
+    if (ocupado) return;
+    if (senha.length < 8) {
+      setErro("A nova senha precisa ter pelo menos 8 caracteres.");
+      return;
+    }
+    if (senha !== senha2) {
+      setErro("As duas senhas n\xE3o s\xE3o iguais. Confira e tente de novo.");
+      return;
+    }
+    setOcupado(true);
+    setErro(null);
+    try {
+      await sbDefinirNovaSenha(sessaoTemp.token, senha);
+      setEtapa("pronto");
+    } catch (e) {
+      setErro(mensagemAmigavel(e));
+    } finally {
+      setOcupado(false);
+    }
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { ...S.app, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { ...S.card, maxWidth: 460, width: "100%", padding: 30 } }, /* @__PURE__ */ React.createElement("div", { style: { ...S.display, fontSize: 26, color: C.amarelo, lineHeight: 1 } }, "PONTO", /* @__PURE__ */ React.createElement("span", { style: { color: C.branco } }, "RENOVAR")), etapa === "confirmar" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.display, fontSize: 17, marginTop: 16 } }, "Redefinir sua senha"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13.5, color: C.branco, marginTop: 10, lineHeight: 1.6 } }, "Voc\xEA chegou aqui pelo link enviado ao seu e-mail. Por seguran\xE7a, o link s\xF3 \xE9 validado quando", /* @__PURE__ */ React.createElement("b", null, " voc\xEA confirma"), " \u2014 assim ele n\xE3o \xE9 consumido por verificadores autom\xE1ticos de e-mail."), /* @__PURE__ */ React.createElement("button", { style: { ...S.btn, width: "100%", marginTop: 18, opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: confirmar }, ocupado ? "Validando\u2026" : "Confirmar e criar nova senha")), etapa === "senha" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.display, fontSize: 17, marginTop: 16 } }, "Escolha a nova senha"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 12.5, color: C.cinza, marginTop: 8 } }, ((_a = sessaoTemp == null ? void 0 : sessaoTemp.usuario) == null ? void 0 : _a.email) ? `Conta: ${sessaoTemp.usuario.email}` : "", " \xB7 m\xEDnimo de 8 caracteres."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10, marginTop: 14 } }, /* @__PURE__ */ React.createElement("label", { htmlFor: "nova-senha", style: { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" } }, "Nova senha"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      id: "nova-senha",
+      type: "password",
+      autoComplete: "new-password",
+      "aria-label": "Nova senha",
+      placeholder: "Nova senha",
+      style: { ...S.input, fontSize: 14 },
+      value: senha,
+      onChange: (e) => {
+        setSenha(e.target.value);
+        setErro(null);
+      }
+    }
+  ), /* @__PURE__ */ React.createElement("label", { htmlFor: "repetir-senha", style: { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" } }, "Repetir a nova senha"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      id: "repetir-senha",
+      type: "password",
+      autoComplete: "new-password",
+      "aria-label": "Repetir a nova senha",
+      placeholder: "Repita a nova senha",
+      style: { ...S.input, fontSize: 14 },
+      value: senha2,
+      onChange: (e) => {
+        setSenha2(e.target.value);
+        setErro(null);
+      },
+      onKeyDown: (e) => e.key === "Enter" && salvar()
+    }
+  ), /* @__PURE__ */ React.createElement("button", { style: { ...S.btn, width: "100%", opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: salvar }, ocupado ? "Salvando\u2026" : "Salvar nova senha"))), etapa === "pronto" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, marginTop: 14 }, "aria-hidden": "true" }, "\u2705"), /* @__PURE__ */ React.createElement("div", { style: { ...S.display, fontSize: 17, marginTop: 6, color: C.verde } }, "Senha alterada"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13.5, color: C.branco, marginTop: 10, lineHeight: 1.6 } }, "Sua senha foi atualizada. Entre com o e-mail e a nova senha."), /* @__PURE__ */ React.createElement("button", { style: { ...S.btn, width: "100%", marginTop: 18 }, onClick: onVoltar }, "Ir para o login")), erro && /* @__PURE__ */ React.createElement("p", { role: "alert", style: { color: C.vermelho, fontSize: 13, marginTop: 14, lineHeight: 1.55 } }, erro), etapa !== "pronto" && /* @__PURE__ */ React.createElement("button", { style: { background: "none", border: "none", color: C.cinza, fontSize: 12, cursor: "pointer", textDecoration: "underline", marginTop: 14 }, onClick: onVoltar }, "Voltar ao login"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: C.cinza, marginTop: 16, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 } }, /* @__PURE__ */ React.createElement("b", { style: { color: C.branco } }, EMPRESA.nome), " \xB7 CNPJ ", EMPRESA.cnpj)));
+}
 function TelaConvite({ token, onConcluir, onVoltar }) {
   const [conv, setConv] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -2343,7 +2467,7 @@ function Login({ onSupabase, onDemo, onReset }) {
     setMsgReset(null);
     try {
       await onReset(e);
-      setMsgReset({ ok: true, txt: `Se houver conta para ${e}, enviamos um link de redefini\xE7\xE3o. Confira seu e-mail (inclusive spam).` });
+      setMsgReset({ ok: true, txt: `Se houver conta para ${e}, enviamos um link de redefini\xE7\xE3o. Confira seu e-mail (inclusive o spam). Ao abrir o link, voc\xEA ver\xE1 uma tela pedindo confirma\xE7\xE3o \u2014 \xE9 s\xF3 clicar no bot\xE3o pra criar a nova senha.` });
     } catch (err) {
       setMsgReset({ ok: false, txt: mensagemAmigavel(err) });
     } finally {
