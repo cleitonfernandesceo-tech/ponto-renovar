@@ -498,7 +498,11 @@ async function bioVerificar(credenciais, token, demo) {
   } catch (e) {
     if (e.name === "NotAllowedError") throw Object.assign(new Error("Biometria não confirmada (cancelada ou tempo esgotado). Tente de novo."), { motivo: "cancelado" });
     if (e.motivo) throw e;
-    throw Object.assign(new Error(`A verificação biométrica não pôde ser concluída. ${mensagemAmigavel(e)}`), { motivo: "erro" });
+    const bruto = String(e?.message || e || "");
+     if (/failed to fetch|load failed|network ?error|ERR_INTERNET_DISCONNECTED|networkrequest/i.test(bruto)) {
+        throw Object.assign(new Error("Sem conexão com o servidor. Verifique sua internet e tente de novo."), { motivo: "rede" });
+     }
+     throw Object.assign(new Error(`A verificação biométrica não pôde ser concluída. ${mensagemAmigavel(e)}`), { motivo: "erro" });
   }
 }
 
