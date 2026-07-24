@@ -539,7 +539,7 @@ async function bioVerificar(credenciais, token, demo) {
 limparSenha  } catch (e) {
     if (e.name === "NotAllowedError") throw Object.assign(new Error("Biometria n\xE3o confirmada (cancelada ou tempo esgotado). Tente de novo."), { motivo: "cancelado" });
     if (e.motivo) throw e;
-    throw Object.assign(new Error(`A verifica\xE7\xE3o biom\xE9trica n\xE3o p\xF4de ser conclu\xEDda. ${mensagemAmigavel(e)}`), { motivo: "erro" });
+    throw Object.assign(new Error(`A verifica\xE7\xE3o biom\xE9trica n\xE3o p\xF4de ser conclu\xEDda. ${mensagemAmigavel(e)} [ref: ${e && e.name} - ${String((e && e.message) || e || "").slice(0,140)}]`), { motivo: "erro" });
   }
 }
 const mapCred = (r) => ({ id: r.id, userId: r.usuario_id, credentialId: r.credential_id, dispositivo: r.dispositivo, criadoEm: r.criado_em, ultimoUso: r.ultimo_uso });
