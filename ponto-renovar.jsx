@@ -647,6 +647,68 @@ function calcIRRF(rendimentoTributavel, inss, dependentes) {
   return r2(tradicional);
 }
 
+/* ============================================================
+RESCISAO - calculo de verbas trabalhistas (conferencia gerencial)
+Base: CLT arts. 477, 478, 487; Lei 12.506/2011 (aviso proporcional);
+Lei 8.036/90 art. 18 par.1 (multa FGTS 40%); CLT art. 484-A (acordo).
+Aviso: calculo simplificado de apoio a decisao do gestor - nao substitui
+o TRCT oficial, a homologacao (quando exigida) nem o calculo definitivo
+do contador, que tem acesso ao extrato real de depositos do FGTS.
+============================================================ */
+const MOTIVOS_RESCISAO = {
+   dispensa_sem_justa_causa: { label: "Dispensa sem justa causa", avisoDevido: true, multaFgts: 1, direitoFeriasProp: true, direito13Prop: true, saqueFgts: true, saqueFgtsPct: 1, seguroDesemprego: true },
+   dispensa_com_justa_causa: { label: "Dispensa por justa causa", avisoDevido: false, multaFgts: 0, direitoFeriasProp: false, direito13Prop: false, saqueFgts: false, saqueFgtsPct: 0, seguroDesemprego: false },
+   pedido_demissao: { label: "Pedido de demissao (a pedido do colaborador)", avisoDevido: false, multaFgts: 0, direitoFeriasProp: true, direito13Prop: true, saqueFgts: false, saqueFgtsPct: 0, seguroDesemprego: false },
+   acordo_484a: { label: "Acordo (CLT art. 484-A)", avisoDevido: true, multaFgts: 0.5, direitoFeriasProp: true, direito13Prop: true, saqueFgts: true, saqueFgtsPct: 0.8, seguroDesemprego: false },
+   termino_experiencia: { label: "Termino de contrato de experiencia", avisoDevido: false, multaFgts: 0, direitoFeriasProp: true, direito13Prop: true, saqueFgts: true, saqueFgtsPct: 1, seguroDesemprego: false },
+};
+function diasAvisoPrevio(mesesServico) {
+   const anosCompletos = Math.floor(mesesServico / 12);
+   return Math.min(90, 30 + anosCompletos * 3);
+}
+function mesesProporcionais(dataInicio, dataFim) {
+   let meses = mesesEntre(dataInicio, dataFim);
+   if (dataFim.getDate() >= 15) meses += 1;
+   return Math.max(0, Math.min(12, meses));
+}
+function calcRescisao(u, dataDesligStr, motivoKey, avisoTipo) {
+   const motivo = MOTIVOS_RESCISAO[motivoKey];
+   if (!motivo) throw new Error("Motivo de desligamento invalido.");
+   const sal = +u.salario || 0;
+   const dataDeslig = dataLocal(dataDesligStr);
+   const adm = dataLocal(u.admissao);
+   const diaDeslig = dataDeslig.getDate();
+   const saldoSalario = r2((sal / 30) * diaDeslig);
+   const mesesServico = mesesEntre(adm, dataDeslig);
+   const diasAviso = motivo.avisoDevido ? diasAvisoPrevio(mesesServico) : 0;
+   const avisoIndenizado = motivo.avisoDevido && avisoTipo === "indenizado";
+   const valorAviso = avisoIndenizado ? r2((sal / 30) * diasAviso) : 0;
+   const mesesAnoCorrente = motivo.direito13Prop ? Math.min(12, dataDeslig.getMonth() + (diaDeslig >= 15 ? 1 : 0)) : 0;
+   const decimoProp = r2((sal / 12) * mesesAnoCorrente);
+   const aq = periodoAquisitivo(u.admissao, dataDesligStr);
+   const mesesPeriodoAtual = motivo.direitoFeriasProp ? mesesProporcionais(aq.inicio, dataDeslig) : 0;
+   const feriasProp = r2((sal / 12) * mesesPeriodoAtual);
+   const tercoFeriasProp = r2(feriasProp / 3);
+   const feriasVencidas = 0, tercoFeriasVencidas = 0;
+   const fgtsEstimado = r2(sal * TABELAS_2026.fgtsPatronal * mesesServico);
+   const multaFgts = r2(fgtsEstimado * (motivo.multaFgts || 0));
+   const baseInssRescisao = r2(saldoSalario + decimoProp);
+   const inssRescisao = calcINSS(baseInssRescisao);
+   const irrfRescisao = calcIRRF(baseInssRescisao, inssRescisao, +u.dependentes || 0);
+   const totalProventos = r2(saldoSalario + valorAviso + decimoProp + feriasProp + tercoFeriasProp + feriasVencidas + tercoFeriasVencidas + multaFgts);
+   const totalDescontos = r2(inssRescisao + irrfRescisao);
+   const liquido = r2(totalProventos - totalDescontos);
+   return {
+      motivo: motivoKey, motivoLabel: motivo.label, mesesServico, diasAviso, avisoIndenizado,
+      verbas: { saldoSalario, valorAviso, decimoProp, feriasProp, tercoFeriasProp, feriasVencidas, tercoFeriasVencidas, fgtsEstimado, multaFgts, inssRescisao, irrfRescisao },
+      totalProventos, totalDescontos, liquido,
+      direitos: { saqueFgts: !!motivo.saqueFgts, saqueFgtsPct: motivo.saqueFgtsPct ?? (motivo.saqueFgts ? 1 : 0), seguroDesemprego: !!motivo.seguroDesemprego },
+   };
+}
+const AVISO_RESCISAO = "Calculo de apoio a decisao gerencial (CLT arts. 477/478/487, Lei 12.506/2011, Lei 8.036/90 art. 18 par.1). Ferias vencidas nao gozadas devem ser confirmadas manualmente pelo gestor. Nao substitui o TRCT oficial, a homologacao (quando exigida) nem o calculo definitivo do contador com o extrato real do FGTS.";
+const TIPOS_EXAME = { admissional: "Admissional", periodico: "Periodico", retorno_trabalho: "Retorno ao trabalho", mudanca_funcao: "Mudanca de funcao", demissional: "Demissional" };
+const RESULTADOS_EXAME = { apto: "Apto", apto_com_restricao: "Apto com restricao", inapto: "Inapto" };
+
 const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(0, 7);
 // Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
 const chaveSemana = (dt) => { const d = new Date(dt); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dataISO(d); };
