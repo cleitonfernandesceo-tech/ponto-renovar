@@ -2776,12 +2776,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
           <button style={S.btn} onClick={() => window.print()}>🖨 Exportar PDF</button>
         </div>
       </div>
-      {user.papel === "gestor" && (
-      <div className="no-print" style={{ ...S.card, marginTop: 14, padding: 12, fontSize: 12, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
-        ⚠️ <b style={{ color: C.branco }}>Arquivos fiscais no formato oficial da Portaria 671/2021</b> — AFD com marcações tipo 7 (cadeia de hash SHA-256) e AEJ delimitado por pipe, ambos em ISO 8859-1 com CR+LF. Dois itens são <b style={{ color: C.branco }}>placeholders pendentes de etapas externas ao protótipo</b>: (1) o nº de registro no INPI (campo 7 do cabeçalho do AFD e nrRep do AEJ) está zerado até o registro do programa ser feito; (2) a linha "ASSINATURA_DIGITAL_EM_ARQUIVO_P7S" é o texto literal previsto no leiaute — a assinatura real exige arquivo .p7s gerado com certificado ICP-Brasil do desenvolvedor. Sem esses dois itens, os arquivos ainda não têm valor fiscal.
-      </div>
-      )}
-      <div style={{ ...S.card, marginTop: 16 }}>
+            <div style={{ ...S.card, marginTop: 16 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
           <tbody>
@@ -2801,7 +2796,23 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
             })}
           </tbody>
         </table>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Legenda: ᴬ = saída preenchida automaticamente pelo sistema · * = horário corrigido com justificativa · ⚠ = batida sem verificação biométrica · ⏳ = aguardando envio ao servidor · ᶠ = registrada sem rede (horário do aparelho) · 📍 = registrada sem localização, com justificativa. Expediente oficial: seg-sex 8:00 às 18:00; sábado 8:00 às 13:00 (turno único); domingos e feriados nacionais a empresa não abre (9h produtivas + 1h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, a 1h de intervalo é descontada da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+        {(() => {
+          const todosRegs = Object.values(dias).reduce((ac, v) => ac.concat(v), []);
+          const marcas = [
+            { s: "ᴬ", d: "saída preenchida automaticamente pelo sistema", tem: todosRegs.some(r => r && r.automatica) },
+            { s: "*", d: "horário corrigido com justificativa", tem: todosRegs.some(r => r && r.ajustada) },
+            { s: "⚠", d: "batida sem verificação biométrica", tem: todosRegs.some(r => r && r.metodo === "sem_verificacao") },
+            { s: "⏳", d: "aguardando envio ao servidor", tem: todosRegs.some(r => r && r.pendente) },
+            { s: "ᶠ", d: "registrada sem rede (horário do aparelho)", tem: todosRegs.some(r => r && r.offline) },
+            { s: "📍", d: "registrada sem localização, com justificativa", tem: todosRegs.some(r => r && r.geoStatus === "dispensado_por_falha") },
+          ].filter(m => m.tem);
+          return (
+            <div style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>
+              {marcas.length > 0 && <p style={{ margin: "0 0 6px" }}>Legenda: {marcas.map(m => m.s + " = " + m.d).join(" · ")}</p>}
+              <p style={{ margin: 0 }}>Expediente: seg-sex 8:00 às 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) · sábado 8:00 às 13:00 · domingos e feriados nacionais fechado. Com um único par entrada/saída no dia, a 1h de intervalo é descontada da presença. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -3283,6 +3294,12 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
         </label>
       </div>
       <SecaoCodigoConduta />
+      {user.papel === "gestor" && (
+      <div style={{ ...S.card, marginTop: 16, fontSize: 13, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
+        <div style={{ ...S.display, fontSize: 16, color: C.branco, marginBottom: 6 }}>⚠️ Situação fiscal dos arquivos AFD/AEJ</div>
+        <p style={{ margin: 0 }}>Os arquivos do espelho de ponto são gerados no leiaute oficial da Portaria 671/2021 (AFD com marcações tipo 7 e cadeia de hash SHA-256; AEJ delimitado por pipe; ambos em ISO 8859-1 com CR+LF). Dois itens ainda são placeholders que dependem de etapas externas ao sistema: o nº de registro do programa no INPI (campo 7 do cabeçalho do AFD e nrRep do AEJ), hoje zerado, e a assinatura digital, que exige arquivo .p7s gerado com certificado ICP-Brasil. Enquanto esses dois itens não existirem, os arquivos servem para conferência interna, mas não têm valor fiscal perante a fiscalização.</p>
+      </div>
+      )}
       <SecaoBiometria credenciais={credenciais} onCadastrar={onCadastrarBio} onRemover={onRemoverBio} />
     </div>
   );
