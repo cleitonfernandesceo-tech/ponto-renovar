@@ -5120,7 +5120,7 @@ function Login({
       color: C.cinza,
       marginTop: 14
     }
-  }, "\uD83D\uDD12 Autentica\xE7\xE3o real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable \xE9 p\xFAblica por design \u2014 a seguran\xE7a vem das pol\xEDticas de acesso."), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDD12 Acesso protegido: autentica\xE7\xE3o no servidor e permiss\xF5es por usu\xE1rio."), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14,
       borderTop: "1px solid #1E3450",
@@ -5269,7 +5269,7 @@ function TelaPonto({
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "\u23F0 Lembretes de batida (8h/9h entrada; 12h/13h almo\xE7o em dias de semana) funcionam ", /*#__PURE__*/React.createElement("b", null, "enquanto o app estiver aberto no navegador"), " \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push de celular.", notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
+  }, "\u23F0 Os lembretes de batida (entrada e almo\xE7o) s\xF3 funcionam ", /*#__PURE__*/React.createElement("b", null, "com o app aberto no navegador"), " \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push.", notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
     role: "alert",
     style: {
       ...S.card,
@@ -5916,7 +5916,7 @@ function TelaAtestados({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Dado de sa\xFAde = dado sens\xEDvel (LGPD art. 5\xBA, II). O arquivo sobe pro bucket privado \"anexos\" do Supabase Storage \u2014 leitura restrita ao dono e ao gestor pelas policies; o caminho fica gravado no registro.")), meus.map(a => /*#__PURE__*/React.createElement("div", {
+  }, "Atestado \xE9 dado sens\xEDvel de sa\xFAde (LGPD art. 5\xBA, II): o arquivo fica em armazenamento privado, vis\xEDvel s\xF3 para voc\xEA e o gestor.")), meus.map(a => /*#__PURE__*/React.createElement("div", {
     key: a.id,
     style: {
       ...S.card,
@@ -6651,7 +6651,7 @@ function TelaBanco({
       color: C.cinza,
       marginTop: 8
     }
-  }, "A convers\xE3o s\xF3 \xE9 efetivada com a aprova\xE7\xE3o do gestor \u2014 a\xED as horas s\xE3o debitadas do seu banco. Dica: um dia inteiro de folga = 9 horas (a jornada de seg a sex); um s\xE1bado = 5 horas. Base legal: compensa\xE7\xE3o do banco de horas por acordo individual escrito, CLT art. 59 \xA7\xA7 5\xBA-6\xBA.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "As horas s\xF3 s\xE3o debitadas depois da aprova\xE7\xE3o do gestor. 1 folga = 9h (seg-sex) ou 5h (s\xE1bado). Base legal: CLT art. 59 \xA7\xA7 5\xBA-6\xBA (acordo individual escrito).")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -8935,7 +8935,7 @@ function SecaoLocais({
       color: C.cinza,
       marginTop: 8
     }
-  }, "Sem nenhum local ativo, as batidas ficam liberadas sem verifica\xE7\xE3o. Dica: cadastre estando dentro do local e considere a precis\xE3o do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos)."), locais.length > 0 && locais.map(l => /*#__PURE__*/React.createElement("div", {
+  }, locais.filter(l => l.ativo).length === 0 ? "Sem nenhum local ativo, as batidas ficam liberadas sem verificação de raio. " : "", "Cadastre estando dentro do local \u2014 50 m cobre a maioria dos casos urbanos."), locais.length > 0 && locais.map(l => /*#__PURE__*/React.createElement("div", {
     key: l.id,
     style: {
       display: "flex",
@@ -9132,7 +9132,7 @@ function TelaGestor({
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "Recomenda\xE7\xE3o: oriente a equipe a manter o app aberto durante o expediente pra receber os lembretes, e trate-os como apoio \u2014 a responsabilidade de bater o ponto \xE9 sempre do colaborador.")), /*#__PURE__*/React.createElement("div", {
+  }, "Recomenda\xE7\xE3o: oriente a equipe a manter o app aberto no expediente \u2014 os lembretes s\xE3o apoio, a responsabilidade de bater o ponto \xE9 do colaborador.")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14,
