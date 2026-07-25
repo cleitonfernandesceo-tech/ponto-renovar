@@ -2574,7 +2574,7 @@ function Login({ onSupabase, onDemo, onReset }) {
           )}
         </div>
         {erro && <p role="alert" style={{ color: C.vermelho, fontSize: 13, marginTop: 12, lineHeight: 1.5 }}>{erro}</p>}
-        <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Autenticação real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable é pública por design — a segurança vem das políticas de acesso.</p>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Acesso protegido: autenticação no servidor e permissões por usuário.</p>
         <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
           {!mostrarDemo ? (
             <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 11, cursor: "pointer", textDecoration: "underline" }} onClick={() => setMostrarDemo(true)}>
@@ -2642,7 +2642,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
         </div>
       )}
       <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0" }}>
-        ⏰ Lembretes de batida (8h/9h entrada; 12h/13h almoço em dias de semana) funcionam <b>enquanto o app estiver aberto no navegador</b> — não são notificações push de celular.{notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""}
+        ⏰ Os lembretes de batida (entrada e almoço) só funcionam <b>com o app aberto no navegador</b> — não são notificações push.{notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""}
       </p>
       {bloqueioGeo && (
         <div role="alert" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: `4px solid ${C.vermelho}`, textAlign: "left" }}>
@@ -2886,7 +2886,7 @@ function TelaAtestados({ user, atestados, onEnviar }) {
           <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={e => anexar(e.target.files[0])} />
           {erroEnvio && <p role="alert" style={{ fontSize: 13, color: C.vermelho, marginTop: 8 }}>{erroEnvio}</p>}
         </label>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Dado de saúde = dado sensível (LGPD art. 5º, II). O arquivo sobe pro bucket privado "anexos" do Supabase Storage — leitura restrita ao dono e ao gestor pelas policies; o caminho fica gravado no registro.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Atestado é dado sensível de saúde (LGPD art. 5º, II): o arquivo fica em armazenamento privado, visível só para você e o gestor.</p>
       </div>
       {meus.map(a => (
         <div key={a.id} style={{ ...S.card, marginTop: 12, display: "flex", gap: 14, alignItems: "center" }}>
@@ -3106,7 +3106,7 @@ function TelaBanco({ user, registros, faltas, folgas, onSolicitar }) {
         </div>
         {pendentesMin > 0 && <p style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Você já tem {hmm(pendentesMin)} em solicitações pendentes — elas contam contra o disponível pra novas solicitações.</p>}
         {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
-        <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>A conversão só é efetivada com a aprovação do gestor — aí as horas são debitadas do seu banco. Dica: um dia inteiro de folga = 9 horas (a jornada de seg a sex); um sábado = 5 horas. Base legal: compensação do banco de horas por acordo individual escrito, CLT art. 59 §§ 5º-6º.</p>
+        <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>As horas só são debitadas depois da aprovação do gestor. 1 folga = 9h (seg-sex) ou 5h (sábado). Base legal: CLT art. 59 §§ 5º-6º (acordo individual escrito).</p>
       </div>
       {minhas.map(f => (
         <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -3672,7 +3672,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
         </button>
       </div>
       {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
-      <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>Sem nenhum local ativo, as batidas ficam liberadas sem verificação. Dica: cadastre estando dentro do local e considere a precisão do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos).</p>
+      <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>{locais.filter(l => l.ativo).length === 0 ? "Sem nenhum local ativo, as batidas ficam liberadas sem verificação de raio. " : ""}Cadastre estando dentro do local — 50 m cobre a maioria dos casos urbanos.</p>
       {locais.length > 0 && locais.map(l => (
         <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "8px 0", gap: 10 }}>
           <div style={{ fontSize: 14, opacity: l.ativo ? 1 : 0.45 }}>
@@ -3747,7 +3747,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
           <li><b>Lembretes de bater ponto (8h/9h e almoço):</b> só disparam <b>enquanto o colaborador estiver com o app aberto</b> no navegador. Se o app estiver fechado no horário, o lembrete daquele momento não aparece (e não vira notificação push de celular).</li>
           <li><b>Batida automática de saída (fecha o dia às 18h/13h se esqueceram de bater):</b> depende de uma rotina agendada <b>no banco de dados (Supabase/pg_cron)</b>, que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se não, a saída não será preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h está ligado.</li>
         </ul>
-        <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0" }}>Recomendação: oriente a equipe a manter o app aberto durante o expediente pra receber os lembretes, e trate-os como apoio — a responsabilidade de bater o ponto é sempre do colaborador.</p>
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0" }}>Recomendação: oriente a equipe a manter o app aberto no expediente — os lembretes são apoio, a responsabilidade de bater o ponto é do colaborador.</p>
       </div>
       <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${C.amarelo}`, padding: 14 }}>
         <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ O que a biometria do celular comprova (e o que NÃO comprova)</div>
