@@ -810,21 +810,6 @@ for (let i = 10; i >= 1; i--) {
 
 const FALTAS_SEED = [{ userId: "u3", data: iso(d(-4)), motivo: "sem justificativa" }];
 
-const RECOMENDACOES = {
-  pontualidade: {
-    livros: ["Os 7 Hábitos das Pessoas Altamente Eficazes — Stephen Covey", "Hábitos Atômicos — James Clear", "A Tríade do Tempo — Christian Barbosa"],
-    filmes: ["Whiplash (2014) — disciplina e excelência", "À Procura da Felicidade (2006) — constância sob pressão"],
-  },
-  produtividade: {
-    livros: ["Trabalho Focado (Deep Work) — Cal Newport", "Essencialismo — Greg McKeown", "A Única Coisa — Gary Keller"],
-    filmes: ["Moneyball (2011) — foco no que gera resultado", "O Fundador (2016) — execução implacável"],
-  },
-  lideranca: {
-    livros: ["Líderes se Servem por Último — Simon Sinek", "Pipeline de Liderança — Ram Charan", "Extreme Ownership — Jocko Willink"],
-    filmes: ["Invictus (2009) — liderança que une", "Fome de Poder (2016) — visão e ambição"],
-  },
-};
-
 // Data pura (DATE, sem hora): formata direto da string — new Date("YYYY-MM-DD") é UTC 00:00
 // e retrocede 1 dia no fuso local (UTC-3), o clássico off-by-one.
 const fmtData = (s) => {
@@ -896,22 +881,18 @@ function gerarFeedback(user, registros, faltas) {
   if (a.atrasos >= 3) fb.push({
     tipo: "alerta", tema: "pontualidade", titulo: `${a.atrasos} atrasos nos últimos ${a.diasTrab} dias trabalhados`,
     msg: `${user.nome.split(" ")[0]}, notamos atrasos recorrentes. Pequenos ajustes na rotina da manhã têm impacto direto no seu banco de horas e na operação da equipe. Que tal definir um horário-âncora 30min antes da entrada?`,
-    rec: RECOMENDACOES.pontualidade,
   });
   if (a.faltas >= 1) fb.push({
     tipo: "alerta", tema: "produtividade", titulo: `${a.faltas} falta(s) sem justificativa no período`,
     msg: "Faltas sem justificativa impactam banco de horas e podem gerar desconto (CLT art. 473 lista as ausências legais). Se houve imprevisto, registre a justificativa ou envie atestado — o fluxo leva 2 minutos.",
-    rec: RECOMENDACOES.produtividade,
   });
   if (a.atrasos === 0 && a.faltas === 0 && a.diasTrab >= 5) fb.push({
     tipo: "elogio", tema: "lideranca", titulo: "Assiduidade exemplar 🏆",
-    msg: `${user.nome.split(" ")[0]}, ${a.diasTrab} dias sem nenhum atraso ou falta e saldo positivo de ${hmm(a.saldoMin)} no banco de horas. Consistência é o que separa profissionais fora da curva — continue assim. Preparamos recomendações pra sua próxima etapa: liderança.`,
-    rec: RECOMENDACOES.lideranca,
+    msg: `${user.nome.split(" ")[0]}, ${a.diasTrab} dias sem nenhum atraso ou falta e saldo positivo de ${hmm(a.saldoMin)} no banco de horas. Consistência é o que separa profissionais fora da curva — continue assim.`,
   });
   if (fb.length === 0) fb.push({
     tipo: "neutro", tema: "produtividade", titulo: "Tudo em dia",
-    msg: "Sem pendências relevantes no período. Recomendações pra manter o ritmo:",
-    rec: RECOMENDACOES.produtividade,
+    msg: "Sem pendências relevantes no período. Continue mantendo o ritmo.",
   });
   return { analise: a, feedbacks: fb };
 }
@@ -1287,21 +1268,6 @@ function CameraCapture({ onCapture, onSkip }) {
         <button style={S.btnGhost} onClick={onSkip}>Registrar sem foto</button>
       </div>
       <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Reconhecimento facial: neste protótipo a validação é simulada — a foto fica vinculada ao registro. Em produção: AWS Rekognition / FaceIO.</p>
-    </div>
-  );
-}
-
-function RecCard({ rec }) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
-      <div>
-        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>📚 Livros</div>
-        {rec.livros.map((l, i) => <div key={i} style={{ fontSize: 13, color: "#C7D2E4", marginTop: 4 }}>• {l}</div>)}
-      </div>
-      <div>
-        <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>🎬 Filmes</div>
-        {rec.filmes.map((f, i) => <div key={i} style={{ fontSize: 13, color: "#C7D2E4", marginTop: 4 }}>• {f}</div>)}
-      </div>
     </div>
   );
 }
@@ -2810,9 +2776,11 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
           <button style={S.btn} onClick={() => window.print()}>🖨 Exportar PDF</button>
         </div>
       </div>
+      {user.papel === "gestor" && (
       <div className="no-print" style={{ ...S.card, marginTop: 14, padding: 12, fontSize: 12, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
         ⚠️ <b style={{ color: C.branco }}>Arquivos fiscais no formato oficial da Portaria 671/2021</b> — AFD com marcações tipo 7 (cadeia de hash SHA-256) e AEJ delimitado por pipe, ambos em ISO 8859-1 com CR+LF. Dois itens são <b style={{ color: C.branco }}>placeholders pendentes de etapas externas ao protótipo</b>: (1) o nº de registro no INPI (campo 7 do cabeçalho do AFD e nrRep do AEJ) está zerado até o registro do programa ser feito; (2) a linha "ASSINATURA_DIGITAL_EM_ARQUIVO_P7S" é o texto literal previsto no leiaute — a assinatura real exige arquivo .p7s gerado com certificado ICP-Brasil do desenvolvedor. Sem esses dois itens, os arquivos ainda não têm valor fiscal.
       </div>
+      )}
       <div style={{ ...S.card, marginTop: 16 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th></tr></thead>
@@ -2833,7 +2801,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
             })}
           </tbody>
         </table>
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Legenda: ᴬ = saída preenchida automaticamente pelo sistema · * = horário corrigido com justificativa · ⚠ = batida sem verificação biométrica · ⏳ = aguardando envio ao servidor · ᶠ = registrada sem rede (horário do aparelho) · 📍 = registrada sem localização, com justificativa. Expediente oficial: seg-sex 8:00 às 18:00; sábado 8:00 às 13:00 (turno único); domingos e feriados nacionais a empresa não abre (8h produtivas + 2h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, as 2h de intervalo são descontadas da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 8h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Legenda: ᴬ = saída preenchida automaticamente pelo sistema · * = horário corrigido com justificativa · ⚠ = batida sem verificação biométrica · ⏳ = aguardando envio ao servidor · ᶠ = registrada sem rede (horário do aparelho) · 📍 = registrada sem localização, com justificativa. Expediente oficial: seg-sex 8:00 às 18:00; sábado 8:00 às 13:00 (turno único); domingos e feriados nacionais a empresa não abre (9h produtivas + 1h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, a 1h de intervalo é descontada da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
       </div>
     </div>
   );
@@ -3190,7 +3158,6 @@ function TelaFeedback({ user, registros, faltas }) {
         <div key={i} style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${f.tipo === "elogio" ? C.verde : f.tipo === "alerta" ? C.vermelho : C.amarelo}` }}>
           <div style={{ ...S.display, fontSize: 16 }}>{f.titulo}</div>
           <p style={{ fontSize: 14, color: "#C7D2E4", marginTop: 6 }}>{f.msg}</p>
-          <RecCard rec={f.rec} />
         </div>
       ))}
     </div>
@@ -3231,6 +3198,29 @@ function GateConsentimentoLGPD({ user, onAceitar, onSair }) {
         </div>
         <p style={{ fontSize: 11, color: C.cinza, marginTop: 10 }}>Ao clicar em "Li e concordo", seu aceite é registrado com data e hora no sistema. Sem o consentimento não é possível bater ponto pelo app.</p>
       </div>
+    </div>
+  );
+}
+
+const CODIGO_CONDUTA = [
+  { titulo: "Uso obrigatório do uniforme", texto: "O uso do uniforme fornecido pela empresa é obrigatório durante toda a jornada de trabalho, devendo ser mantido limpo, conservado e completo (incluindo crachá de identificação, quando aplicável). O fornecimento do uniforme pela Renovar Tech não integra o salário (CLT art. 458 §2º, II) e sua devolução em bom estado pode ser exigida ao término do contrato." },
+  { titulo: "Respeito e boa convivência entre colegas", texto: "É exigido tratamento respeitoso e cordial entre todos os colaboradores, gestores e clientes. Não são tolerados assédio moral ou sexual, discriminação de qualquer natureza (raça, gênero, orientação sexual, religião, idade, deficiência ou origem) nem qualquer forma de violência no ambiente de trabalho (CF art. 5º; CLT art. 483; Lei 14.457/2022 — canal de denúncia). Situações identificadas podem ser reportadas ao gestor ou ao encarregado de dados (DPO), com sigilo garantido." },
+  { titulo: "Zelo pelo patrimônio e ferramentas de trabalho", texto: "Equipamentos, ferramentas, peças e demais bens da empresa devem ser utilizados com cuidado e exclusivamente para fins profissionais, evitando danos por mau uso ou negligência." },
+  { titulo: "Sigilo de informações", texto: "Dados de clientes, valores, processos internos e informações comerciais da Renovar Tech são confidenciais e não devem ser compartilhados com terceiros, inclusive após o desligamento." },
+  { titulo: "Pontualidade e assiduidade", texto: "O cumprimento dos horários contratuais e o registro correto do ponto são deveres de todos os colaboradores, conforme detalhado nas seções de Ponto, Prêmio Performance e Gamificação deste sistema." },
+];
+
+function SecaoCodigoConduta() {
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📜 Código de conduta — regras internas</div>
+      <p style={{ fontSize: 12.5, color: C.branco, marginTop: 8, lineHeight: 1.6 }}>Além das políticas de dados acima, todo colaborador da {EMPRESA.nome} deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita às medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade).</p>
+      {CODIGO_CONDUTA.map((c, i) => (
+        <div key={i} style={{ borderTop: "1px solid #1E3450", padding: "10px 0" }}>
+          <b style={{ fontSize: 13.5, color: C.branco }}>{c.titulo}</b>
+          <p style={{ fontSize: 12.5, color: "#C7D2E4", margin: "4px 0 0", lineHeight: 1.6 }}>{c.texto}</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3292,6 +3282,7 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
         </label>
       </div>
+      <SecaoCodigoConduta />
       <SecaoBiometria credenciais={credenciais} onCadastrar={onCadastrarBio} onRemover={onRemoverBio} />
     </div>
   );
@@ -3681,8 +3672,9 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
 }
 
 function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame }) {
-  const equipe = usuarios.map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
+  const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
+    .filter(u => u.papel !== "gestor")
     .map(u => ({ u, g: calcularGamificacao(u.id, registros, faltas) }))
     .map(x => ({ ...x, nv: nivelDe(x.g.total) }))
     .sort((a, b) => b.g.total - a.g.total);
