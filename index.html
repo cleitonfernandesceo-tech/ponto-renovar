@@ -2235,7 +2235,7 @@ function BiometriaCheck({
         fontSize: 14,
         color: C.amarelo
       }
-    }, "🔐 Verificação de identidade indisponível"), /*#__PURE__*/React.createElement("p", {
+    }, "\uD83D\uDD10 Verifica\xE7\xE3o de identidade indispon\xEDvel"), /*#__PURE__*/React.createElement("p", {
       style: {
         fontSize: 13,
         color: C.branco,
@@ -2263,18 +2263,18 @@ function BiometriaCheck({
         fontSize: 13
       },
       onClick: () => onSemVerificacao(semCredencial ? "sem_credencial" : diag.motivo)
-    }, "Registrar ponto sem verificação")), /*#__PURE__*/React.createElement("p", {
+    }, "Registrar ponto sem verifica\xE7\xE3o")), /*#__PURE__*/React.createElement("p", {
       style: {
         fontSize: 11.5,
         color: C.cinza,
         marginTop: 10,
         lineHeight: 1.5
       }
-    }, "⚠️ A batida sem verificação ", /*#__PURE__*/React.createElement("b", null, "é registrada normalmente"), " (sua jornada não fica prejudicada), mas fica ", /*#__PURE__*/React.createElement("b", null, "sinalizada pro gestor"), " no espelho e na trilha de auditoria como \"sem verificação biométrica\"."));
+    }, "\u26A0\uFE0F A batida sem verifica\xE7\xE3o ", /*#__PURE__*/React.createElement("b", null, "\xE9 registrada normalmente"), " (sua jornada n\xE3o fica prejudicada), mas fica ", /*#__PURE__*/React.createElement("b", null, "sinalizada pro gestor"), " no espelho e na trilha de auditoria como \"sem verifica\xE7\xE3o biom\xE9trica\"."));
   }
   return /*#__PURE__*/React.createElement("div", {
     role: "group",
-    "aria-label": "Verificação de identidade",
+    "aria-label": "Verifica\xE7\xE3o de identidade",
     style: {
       marginTop: 16,
       textAlign: "center"
@@ -2284,7 +2284,7 @@ function BiometriaCheck({
       fontSize: 46
     },
     "aria-hidden": "true"
-  }, "🔒"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD12"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 14,
       color: C.branco,
@@ -2297,7 +2297,7 @@ function BiometriaCheck({
       marginTop: 4,
       lineHeight: 1.5
     }
-  }, "A checagem acontece no próprio celular — a empresa não recebe nem guarda sua face ou digital. ", demo ? "(modo demonstração: sem validação no servidor)" : "A assinatura é validada no servidor antes do ponto ser gravado."), /*#__PURE__*/React.createElement("button", {
+  }, "A checagem acontece no pr\xF3prio celular \u2014 a empresa n\xE3o recebe nem guarda sua face ou digital. ", demo ? "(modo demonstração: sem validação no servidor)" : "A assinatura é validada no servidor antes do ponto ser gravado."), /*#__PURE__*/React.createElement("button", {
     "aria-label": "Confirmar identidade com a biometria do aparelho e registrar o ponto",
     style: {
       ...S.btn,
@@ -2343,13 +2343,13 @@ function BiometriaCheck({
       fontSize: 12
     },
     onClick: () => onSemVerificacao(motivo)
-  }, "Registrar sem verificação")), /*#__PURE__*/React.createElement("p", {
+  }, "Registrar sem verifica\xE7\xE3o")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
       marginTop: 8
     }
-  }, "Registrar sem verificação não bloqueia sua jornada, mas fica sinalizado pro gestor.")));
+  }, "Registrar sem verifica\xE7\xE3o n\xE3o bloqueia sua jornada, mas fica sinalizado pro gestor.")));
 }
 function CameraCapture({
   onCapture,
@@ -2410,7 +2410,7 @@ function CameraCapture({
   }, !erro && /*#__PURE__*/React.createElement("button", {
     style: S.btn,
     onClick: capturar
-  }, "📸 Capturar e validar"), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDCF8 Capturar e validar"), /*#__PURE__*/React.createElement("button", {
     style: S.btnGhost,
     onClick: onSkip
   }, "Registrar sem foto")), /*#__PURE__*/React.createElement("p", {
@@ -2419,7 +2419,7 @@ function CameraCapture({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Reconhecimento facial: neste protótipo a validação é simulada — a foto fica vinculada ao registro. Em produção: AWS Rekognition / FaceIO."));
+  }, "Reconhecimento facial: neste prot\xF3tipo a valida\xE7\xE3o \xE9 simulada \u2014 a foto fica vinculada ao registro. Em produ\xE7\xE3o: AWS Rekognition / FaceIO."));
 }
 
 /* ================= App ================= */
@@ -4082,21 +4082,21 @@ function App() {
     style: {
       fontSize: 40
     }
-  }, "🔒"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDD12"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 20,
       color: C.amarelo,
       marginTop: 8
     }
-  }, "Sessão expirada"), /*#__PURE__*/React.createElement("p", {
+  }, "Sess\xE3o expirada"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13.5,
       color: C.branco,
       marginTop: 10,
       lineHeight: 1.6
     }
-  }, "Por segurança, o acesso expira depois de um tempo de inatividade. Entre de novo pra continuar — nada do que você registrou foi perdido."), /*#__PURE__*/React.createElement("button", {
+  }, "Por seguran\xE7a, o acesso expira depois de um tempo de inatividade. Entre de novo pra continuar \u2014 nada do que voc\xEA registrou foi perdido."), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
       width: "100%",
@@ -4184,9 +4184,9 @@ function App() {
     }
   }, demo ? /*#__PURE__*/React.createElement("span", {
     style: S.tag(C.grafite, C.amarelo)
-  }, "⚡ demonstração (local)") : /*#__PURE__*/React.createElement("span", {
+  }, "\u26A1 demonstra\xE7\xE3o (local)") : /*#__PURE__*/React.createElement("span", {
     style: S.tag(C.grafite, C.verde)
-  }, "● conectado ao Supabase")), /*#__PURE__*/React.createElement("div", {
+  }, "\u25CF conectado ao Supabase")), /*#__PURE__*/React.createElement("div", {
     className: "menu",
     role: "navigation",
     "aria-label": "Menu principal",
@@ -4279,7 +4279,7 @@ function App() {
       borderLeft: `4px solid ${C.vermelho}`,
       fontSize: 13
     }
-  }, "⚠️ ", erroDados, " ", /*#__PURE__*/React.createElement("button", {
+  }, "\u26A0\uFE0F ", erroDados, " ", /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       marginLeft: 10,
@@ -4343,7 +4343,7 @@ function App() {
       background: C.amarelo,
       opacity: 0.8
     }
-  }), "Carregando relatórios, folha e histórico em segundo plano — você já pode bater o ponto normalmente."), (fila.length > 0 || !online) && /*#__PURE__*/React.createElement("div", {
+  }), "Carregando relat\xF3rios, folha e hist\xF3rico em segundo plano \u2014 voc\xEA j\xE1 pode bater o ponto normalmente."), (fila.length > 0 || !online) && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginBottom: 14,
@@ -4368,18 +4368,18 @@ function App() {
       color: C.amarelo,
       fontWeight: 700
     }
-  }, "📴 Sem conexão no momento"), fila.length > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("b", null, fila.length, " batida(s) aguardando envio."), " Elas ", /*#__PURE__*/React.createElement("b", null, "já estão registradas"), " com o horário do momento em que você bateu — vão pro servidor sozinhas assim que a rede voltar.", !storageDisponivel() && /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCF4 Sem conex\xE3o no momento"), fila.length > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("b", null, fila.length, " batida(s) aguardando envio."), " Elas ", /*#__PURE__*/React.createElement("b", null, "j\xE1 est\xE3o registradas"), " com o hor\xE1rio do momento em que voc\xEA bateu \u2014 v\xE3o pro servidor sozinhas assim que a rede voltar.", !storageDisponivel() && /*#__PURE__*/React.createElement("div", {
     style: {
       color: C.vermelho,
       marginTop: 4
     }
-  }, "⚠️ Este navegador bloqueia o armazenamento local: mantenha o app aberto até a fila esvaziar, senão as batidas pendentes se perdem."), fila.some(i => i.tentativas > 2) && /*#__PURE__*/React.createElement("div", {
+  }, "\u26A0\uFE0F Este navegador bloqueia o armazenamento local: mantenha o app aberto at\xE9 a fila esvaziar, sen\xE3o as batidas pendentes se perdem."), fila.some(i => i.tentativas > 2) && /*#__PURE__*/React.createElement("div", {
     style: {
       color: C.cinza,
       marginTop: 4,
       fontSize: 12
     }
-  }, "Última falha: ", fila.find(i => i.ultimoErro)?.ultimoErro)) : /*#__PURE__*/React.createElement("span", {
+  }, "\xDAltima falha: ", fila.find(i => i.ultimoErro)?.ultimoErro)) : /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.cinza
     }
@@ -4405,7 +4405,7 @@ function App() {
       color: C.cinza,
       padding: "3px 0"
     }
-  }, "⏳ ", i.tipo === "entrada" ? "Entrada" : "Saída", " · ", fmtData(i.ts), " às ", fmtHora(i.ts), i.tentativas ? ` · ${i.tentativas} tentativa(s)` : "")), fila.length > 4 && /*#__PURE__*/React.createElement("div", {
+  }, "\u23F3 ", i.tipo === "entrada" ? "Entrada" : "Saída", " \xB7 ", fmtData(i.ts), " \xE0s ", fmtHora(i.ts), i.tentativas ? ` · ${i.tentativas} tentativa(s)` : "")), fila.length > 4 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: C.cinza
@@ -4426,7 +4426,7 @@ function App() {
       flex: 1,
       fontSize: 13
     }
-  }, /*#__PURE__*/React.createElement("b", null, lembrete.titulo), " — ", lembrete.corpo), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("b", null, lembrete.titulo), " \u2014 ", lembrete.corpo), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
       padding: "6px 14px",
@@ -4455,7 +4455,7 @@ function App() {
       fontSize: 13,
       color: C.cinza
     }
-  }, "⏳ Salvando no banco…"), tela === "ponto" && /*#__PURE__*/React.createElement(TelaPonto, {
+  }, "\u23F3 Salvando no banco\u2026"), tela === "ponto" && /*#__PURE__*/React.createElement(TelaPonto, {
     user,
     relogio,
     registros,
@@ -4605,13 +4605,13 @@ function BannerSaidasAuto({
       fontSize: 14,
       color: C.amarelo
     }
-  }, "⚠️ Saída preenchida automaticamente — confirme ou corrija"), /*#__PURE__*/React.createElement("p", {
+  }, "\u26A0\uFE0F Sa\xEDda preenchida automaticamente \u2014 confirme ou corrija"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.cinza,
       margin: "6px 0 0"
     }
-  }, "Você não registrou a saída nesses dias e o sistema preencheu o horário oficial de fechamento. Confirmar (ou corrigir com justificativa) evita disputa sobre um horário que foi apenas estimado."), pendencias.map(p => /*#__PURE__*/React.createElement("div", {
+  }, "Voc\xEA n\xE3o registrou a sa\xEDda nesses dias e o sistema preencheu o hor\xE1rio oficial de fechamento. Confirmar (ou corrigir com justificativa) evita disputa sobre um hor\xE1rio que foi apenas estimado."), pendencias.map(p => /*#__PURE__*/React.createElement("div", {
     key: p.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -4628,7 +4628,7 @@ function BannerSaidasAuto({
     style: {
       fontSize: 13
     }
-  }, /*#__PURE__*/React.createElement("b", null, fmtData(p.data + "T12:00:00")), " — saía real:"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("b", null, fmtData(p.data + "T12:00:00")), " \u2014 sa\xEDa real:"), /*#__PURE__*/React.createElement("input", {
     type: "time",
     style: {
       ...S.input,
@@ -4644,7 +4644,7 @@ function BannerSaidasAuto({
       ...S.input,
       width: 260
     },
-    placeholder: "Justificativa (obrigatória)",
+    placeholder: "Justificativa (obrigat\xF3ria)",
     value: corrigindo.just,
     onChange: e => setCorrigindo({
       ...corrigindo,
@@ -4681,7 +4681,7 @@ function BannerSaidasAuto({
     style: {
       fontSize: 13
     }
-  }, /*#__PURE__*/React.createElement("b", null, fmtData(p.data + "T12:00:00")), " — saída automática registrada às ", /*#__PURE__*/React.createElement("b", null, p.saida)), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("b", null, fmtData(p.data + "T12:00:00")), " \u2014 sa\xEDda autom\xE1tica registrada \xE0s ", /*#__PURE__*/React.createElement("b", null, p.saida)), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
       gap: 8,
@@ -4704,13 +4704,13 @@ function BannerSaidasAuto({
       padding: "6px 12px",
       fontSize: 12
     },
-    "aria-label": "Corrigir horário da saída automática",
+    "aria-label": "Corrigir hor\xE1rio da sa\xEDda autom\xE1tica",
     onClick: () => setCorrigindo({
       id: p.id,
       hora: p.saida,
       just: ""
     })
-  }, "✎ Corrigir"))))), erro && /*#__PURE__*/React.createElement("p", {
+  }, "\u270E Corrigir"))))), erro && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.vermelho,
@@ -4804,7 +4804,7 @@ function TelaConvite({
       color: C.cinza,
       marginTop: 24
     }
-  }, "Verificando convite…"), !carregando && conv && /*#__PURE__*/React.createElement("div", {
+  }, "Verificando convite\u2026"), !carregando && conv && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 20
     }
@@ -4816,13 +4816,13 @@ function TelaConvite({
       fontSize: 14,
       lineHeight: 1.8
     }
-  }, "👤 ", /*#__PURE__*/React.createElement("b", null, conv.nome), /*#__PURE__*/React.createElement("br", null), "✉️ ", conv.email, /*#__PURE__*/React.createElement("br", null), conv.cargo && /*#__PURE__*/React.createElement(React.Fragment, null, "💼 ", conv.cargo, /*#__PURE__*/React.createElement("br", null)), conv.dataAdmissao && /*#__PURE__*/React.createElement(React.Fragment, null, "📅 Admissão: ", fmtData(conv.dataAdmissao), /*#__PURE__*/React.createElement("br", null)), "🏷 ", conv.tipo === "gestor" ? "Gestor" : "Colaborador", " · expira em ", fmtData(conv.expiraEm)), /*#__PURE__*/React.createElement("input", {
+  }, "\uD83D\uDC64 ", /*#__PURE__*/React.createElement("b", null, conv.nome), /*#__PURE__*/React.createElement("br", null), "\u2709\uFE0F ", conv.email, /*#__PURE__*/React.createElement("br", null), conv.cargo && /*#__PURE__*/React.createElement(React.Fragment, null, "\uD83D\uDCBC ", conv.cargo, /*#__PURE__*/React.createElement("br", null)), conv.dataAdmissao && /*#__PURE__*/React.createElement(React.Fragment, null, "\uD83D\uDCC5 Admiss\xE3o: ", fmtData(conv.dataAdmissao), /*#__PURE__*/React.createElement("br", null)), "\uD83C\uDFF7 ", conv.tipo === "gestor" ? "Gestor" : "Colaborador", " \xB7 expira em ", fmtData(conv.expiraEm)), /*#__PURE__*/React.createElement("input", {
     type: "password",
     style: {
       ...S.input,
       marginTop: 12
     },
-    placeholder: "Crie uma senha (mínimo 8 caracteres)",
+    placeholder: "Crie uma senha (m\xEDnimo 8 caracteres)",
     value: senha,
     onChange: e => {
       setSenha(e.target.value);
@@ -4866,7 +4866,7 @@ function TelaConvite({
       marginTop: 16
     },
     onClick: onVoltar
-  }, "← Ir pro login normal")));
+  }, "\u2190 Ir pro login normal")));
 }
 
 /* Backoff local de login. IMPORTANTE (honestidade): isto é uma barreira de USABILIDADE
@@ -5047,7 +5047,7 @@ function Login({
       textAlign: "center",
       lineHeight: 1.5
     }
-  }, "Muitas tentativas seguidas. Espere o contador zerar — se esqueceu a senha, use o link abaixo."), !modoReset ? /*#__PURE__*/React.createElement("button", {
+  }, "Muitas tentativas seguidas. Espere o contador zerar \u2014 se esqueceu a senha, use o link abaixo."), !modoReset ? /*#__PURE__*/React.createElement("button", {
     style: {
       background: "none",
       border: "none",
@@ -5074,7 +5074,7 @@ function Login({
       color: C.cinza,
       marginBottom: 6
     }
-  }, "Digite seu e-mail no campo acima e receba um link de redefinição por e-mail (Supabase Auth)."), /*#__PURE__*/React.createElement("div", {
+  }, "Digite seu e-mail no campo acima e receba um link de redefini\xE7\xE3o por e-mail (Supabase Auth)."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8
@@ -5120,7 +5120,7 @@ function Login({
       color: C.cinza,
       marginTop: 14
     }
-  }, "🔒 Autenticação real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable é pública por design — a segurança vem das políticas de acesso."), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDD12 Autentica\xE7\xE3o real via Supabase Auth (e-mail + senha) com RLS no banco. A chave publishable \xE9 p\xFAblica por design \u2014 a seguran\xE7a vem das pol\xEDticas de acesso."), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14,
       borderTop: "1px solid #1E3450",
@@ -5136,13 +5136,13 @@ function Login({
       textDecoration: "underline"
     },
     onClick: () => setMostrarDemo(true)
-  }, "Conhecer o sistema com dados fictícios (demonstração)") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "Conhecer o sistema com dados fict\xEDcios (demonstra\xE7\xE3o)") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: C.cinza,
       marginBottom: 8
     }
-  }, "⚡ Demonstração — dados 100% fictícios, sem backend:"), /*#__PURE__*/React.createElement("div", {
+  }, "\u26A1 Demonstra\xE7\xE3o \u2014 dados 100% fict\xEDcios, sem backend:"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -5170,7 +5170,7 @@ function Login({
     style: {
       color: C.branco
     }
-  }, EMPRESA.nome), " · CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), EMPRESA.endereco, " · CEP ", EMPRESA.cep, /*#__PURE__*/React.createElement("br", null), EMPRESA.ramo)));
+  }, EMPRESA.nome), " \xB7 CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), EMPRESA.endereco, " \xB7 CEP ", EMPRESA.cep, /*#__PURE__*/React.createElement("br", null), EMPRESA.ramo)));
 }
 function TelaPonto({
   user,
@@ -5227,7 +5227,7 @@ function TelaPonto({
       color: C.cinza,
       margin: "10px 0 0"
     }
-  }, "📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio."), permGeo === "denied" && /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCCD Local de trabalho ainda n\xE3o configurado pelo gestor \u2014 batida liberada sem verifica\xE7\xE3o de raio."), permGeo === "denied" && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 12,
@@ -5241,7 +5241,7 @@ function TelaPonto({
       color: C.amarelo,
       fontWeight: 700
     }
-  }, "📍 Localização bloqueada neste navegador"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCCD Localiza\xE7\xE3o bloqueada neste navegador"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.branco,
@@ -5263,13 +5263,13 @@ function TelaPonto({
       padding: "8px 14px"
     },
     onClick: onPedirNotif
-  }, "🔔 Ativar notificações do navegador (lembretes de ponto)")), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD14 Ativar notifica\xE7\xF5es do navegador (lembretes de ponto)")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "⏰ Lembretes de batida (8h/9h entrada; 12h/13h almoço em dias de semana) funcionam ", /*#__PURE__*/React.createElement("b", null, "enquanto o app estiver aberto no navegador"), " — não são notificações push de celular.", notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
+  }, "\u23F0 Lembretes de batida (8h/9h entrada; 12h/13h almo\xE7o em dias de semana) funcionam ", /*#__PURE__*/React.createElement("b", null, "enquanto o app estiver aberto no navegador"), " \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push de celular.", notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
     role: "alert",
     style: {
       ...S.card,
@@ -5284,7 +5284,7 @@ function TelaPonto({
       fontSize: 15,
       color: C.vermelho
     }
-  }, "📍 ", bloqueioGeo.titulo || "Localização indisponível"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCCD ", bloqueioGeo.titulo || "Localização indisponível"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13.5,
       color: C.branco,
@@ -5319,14 +5319,14 @@ function TelaPonto({
       fontSize: 13
     },
     onClick: iniciarBatida
-  }, "🔄 Tentar de novo"), bloqueioGeo.permiteDispensa && !dispensando && /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDD04 Tentar de novo"), bloqueioGeo.permiteDispensa && !dispensando && /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       padding: "9px 16px",
       fontSize: 13
     },
     onClick: () => setDispensando(true)
-  }, "Registrar sem localização")), dispensando && /*#__PURE__*/React.createElement("div", {
+  }, "Registrar sem localiza\xE7\xE3o")), dispensando && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 12,
       borderTop: "1px solid #1E3450",
@@ -5338,7 +5338,7 @@ function TelaPonto({
       color: C.branco,
       lineHeight: 1.6
     }
-  }, "Sua jornada não pode ficar sem registro por falha de GPS. Explique rapidamente o motivo — a batida será registrada", /*#__PURE__*/React.createElement("b", null, " sem localização e sinalizada pro gestor"), ", com sua justificativa na trilha de auditoria."), /*#__PURE__*/React.createElement("div", {
+  }, "Sua jornada n\xE3o pode ficar sem registro por falha de GPS. Explique rapidamente o motivo \u2014 a batida ser\xE1 registrada", /*#__PURE__*/React.createElement("b", null, " sem localiza\xE7\xE3o e sinalizada pro gestor"), ", com sua justificativa na trilha de auditoria."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -5354,7 +5354,7 @@ function TelaPonto({
     placeholder: "Ex: estou na oficina, sem sinal de GPS",
     value: justGeo,
     onChange: e => setJustGeo(e.target.value),
-    "aria-label": "Justificativa para registrar sem localização"
+    "aria-label": "Justificativa para registrar sem localiza\xE7\xE3o"
   }), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
@@ -5453,7 +5453,7 @@ function TelaPonto({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Você acabou de registrar um ponto. A pausa evita batida duplicada por toque acidental."), fluxoPonto === "geo" && /*#__PURE__*/React.createElement("div", {
+  }, "Voc\xEA acabou de registrar um ponto. A pausa evita batida duplicada por toque acidental."), fluxoPonto === "geo" && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 20
     }
@@ -5462,13 +5462,13 @@ function TelaPonto({
       color: C.cinza,
       fontSize: 14
     }
-  }, "📍 Obtendo sua localização…"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCCD Obtendo sua localiza\xE7\xE3o\u2026"), /*#__PURE__*/React.createElement("p", {
     style: {
       color: C.cinza,
       fontSize: 11.5,
       marginTop: 4
     }
-  }, "Se o aparelho perguntar, toque em \"Permitir\". Dentro de prédios pode levar alguns segundos.")), fluxoPonto === "biometria" && /*#__PURE__*/React.createElement("div", {
+  }, "Se o aparelho perguntar, toque em \"Permitir\". Dentro de pr\xE9dios pode levar alguns segundos.")), fluxoPonto === "biometria" && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 20
     }
@@ -5519,13 +5519,13 @@ function TelaPonto({
       marginTop: 8,
       lineHeight: 1.55
     }
-  }, "Sua batida foi salva ", /*#__PURE__*/React.createElement("b", null, "neste aparelho"), " com o horário de agora e será enviada automaticamente quando a rede voltar. O NSR (número sequencial oficial) é gerado no envio."), /*#__PURE__*/React.createElement("div", {
+  }, "Sua batida foi salva ", /*#__PURE__*/React.createElement("b", null, "neste aparelho"), " com o hor\xE1rio de agora e ser\xE1 enviada automaticamente quando a rede voltar. O NSR (n\xFAmero sequencial oficial) \xE9 gerado no envio."), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       marginTop: 8,
       lineHeight: 1.7
     }
-  }, "NSR: ", /*#__PURE__*/React.createElement("b", null, String(comprovante.nsr).padStart(9, "0")), /*#__PURE__*/React.createElement("br", null), EMPRESA.nome, " · CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), "Colaborador: ", user.nome, /*#__PURE__*/React.createElement("br", null), "Marcação: ", /*#__PURE__*/React.createElement("b", null, comprovante.tipo.toUpperCase()), " em ", fmtDataHora(comprovante.ts), /*#__PURE__*/React.createElement("br", null), "Geo: ", comprovante.lat != null ? `${comprovante.lat}, ${comprovante.lng}` : comprovante.geoStatus === "dispensado_por_falha" ? "sem localização (justificada) ⚠️" : comprovante.geoStatus === "sem_geofence" ? "não exigida" : "indisponível", geo?.local ? ` · dentro do raio de "${geo.local}"` : "", " · Identidade: ", comprovante.metodo === "webauthn_servidor" ? "biometria validada no servidor ✔" : comprovante.metodo === "webauthn_local" ? "biometria conferida localmente (demo) ✔" : "sem verificação biométrica ⚠️"), /*#__PURE__*/React.createElement("div", {
+  }, "NSR: ", /*#__PURE__*/React.createElement("b", null, String(comprovante.nsr).padStart(9, "0")), /*#__PURE__*/React.createElement("br", null), EMPRESA.nome, " \xB7 CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), "Colaborador: ", user.nome, /*#__PURE__*/React.createElement("br", null), "Marca\xE7\xE3o: ", /*#__PURE__*/React.createElement("b", null, comprovante.tipo.toUpperCase()), " em ", fmtDataHora(comprovante.ts), /*#__PURE__*/React.createElement("br", null), "Geo: ", comprovante.lat != null ? `${comprovante.lat}, ${comprovante.lng}` : comprovante.geoStatus === "dispensado_por_falha" ? "sem localização (justificada) ⚠️" : comprovante.geoStatus === "sem_geofence" ? "não exigida" : "indisponível", geo?.local ? ` · dentro do raio de "${geo.local}"` : "", " \xB7 Identidade: ", comprovante.metodo === "webauthn_servidor" ? "biometria validada no servidor ✔" : comprovante.metodo === "webauthn_local" ? "biometria conferida localmente (demo) ✔" : "sem verificação biométrica ⚠️"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -5536,7 +5536,7 @@ function TelaPonto({
     style: S.btnGhost,
     "aria-label": "Imprimir holerite",
     onClick: () => window.print()
-  }, "🖨 Imprimir comprovante"), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDDA8 Imprimir comprovante"), /*#__PURE__*/React.createElement("button", {
     style: S.btn,
     onClick: () => setFluxoPonto(null)
   }, "OK")))), /*#__PURE__*/React.createElement("div", {
@@ -5564,13 +5564,13 @@ function TelaPonto({
       fontSize: 14,
       color: C.cinza
     }
-  }, "Nenhuma marcação ainda.") : doDia.map(r => /*#__PURE__*/React.createElement("div", {
+  }, "Nenhuma marca\xE7\xE3o ainda.") : doDia.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.nsr,
     style: {
       fontSize: 14,
       marginTop: 6
     }
-  }, r.tipo === "entrada" ? "🟢" : "🔴", " ", r.tipo, " — ", fmtHora(r.ts)))), /*#__PURE__*/React.createElement("div", {
+  }, r.tipo === "entrada" ? "🟢" : "🔴", " ", r.tipo, " \u2014 ", fmtHora(r.ts)))), /*#__PURE__*/React.createElement("div", {
     style: S.card
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5589,7 +5589,7 @@ function TelaPonto({
       fontSize: 13,
       color: C.cinza
     }
-  }, a.atrasos, " atraso(s) · ", a.faltas, " falta(s)")))));
+  }, a.atrasos, " atraso(s) \xB7 ", a.faltas, " falta(s)")))));
 }
 function TelaEspelho({
   user,
@@ -5622,31 +5622,13 @@ function TelaEspelho({
   }, /*#__PURE__*/React.createElement("button", {
     style: S.btnGhost,
     onClick: exportarAFD
-  }, "⬇ Exportar AFD (leiaute 003)"), /*#__PURE__*/React.createElement("button", {
+  }, "\u2B07 Exportar AFD (leiaute 003)"), /*#__PURE__*/React.createElement("button", {
     style: S.btnGhost,
     onClick: exportarAEJ
-  }, "⬇ Exportar AEJ (leiaute 001)"), /*#__PURE__*/React.createElement("button", {
+  }, "\u2B07 Exportar AEJ (leiaute 001)"), /*#__PURE__*/React.createElement("button", {
     style: S.btn,
     onClick: () => window.print()
-  }, "🖨 Exportar PDF"))), user.papel === "gestor" && /*#__PURE__*/React.createElement("div", {
-    className: "no-print",
-    style: {
-      ...S.card,
-      marginTop: 14,
-      padding: 12,
-      fontSize: 12,
-      color: C.cinza,
-      borderLeft: `4px solid ${C.amarelo}`
-    }
-  }, "⚠️ ", /*#__PURE__*/React.createElement("b", {
-    style: {
-      color: C.branco
-    }
-  }, "Arquivos fiscais no formato oficial da Portaria 671/2021"), " — AFD com marcações tipo 7 (cadeia de hash SHA-256) e AEJ delimitado por pipe, ambos em ISO 8859-1 com CR+LF. Dois itens são ", /*#__PURE__*/React.createElement("b", {
-    style: {
-      color: C.branco
-    }
-  }, "placeholders pendentes de etapas externas ao protótipo"), ": (1) o nº de registro no INPI (campo 7 do cabeçalho do AFD e nrRep do AEJ) está zerado até o registro do programa ser feito; (2) a linha \"ASSINATURA_DIGITAL_EM_ARQUIVO_P7S\" é o texto literal previsto no leiaute — a assinatura real exige arquivo .p7s gerado com certificado ICP-Brasil do desenvolvedor. Sem esses dois itens, os arquivos ainda não têm valor fiscal."), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDDA8 Exportar PDF"))), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
@@ -5666,7 +5648,7 @@ function TelaEspelho({
     style: {
       padding: 8
     }
-  }, "Data"), /*#__PURE__*/React.createElement("th", null, "Marcações"), /*#__PURE__*/React.createElement("th", null, "Trabalhado"), /*#__PURE__*/React.createElement("th", null, "Saldo do dia"))), /*#__PURE__*/React.createElement("tbody", null, Object.entries(dias).map(([dia, regs]) => {
+  }, "Data"), /*#__PURE__*/React.createElement("th", null, "Marca\xE7\xF5es"), /*#__PURE__*/React.createElement("th", null, "Trabalhado"), /*#__PURE__*/React.createElement("th", null, "Saldo do dia"))), /*#__PURE__*/React.createElement("tbody", null, Object.entries(dias).map(([dia, regs]) => {
     const exp = expedienteDoDia(new Date(regs[0].ts));
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
@@ -5693,13 +5675,49 @@ function TelaEspelho({
         fontWeight: 700
       }
     }, hmm(saldo)));
-  }))), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12,
-      color: C.cinza,
-      marginTop: 10
-    }
-  }, "Legenda: ᴬ = saída preenchida automaticamente pelo sistema · * = horário corrigido com justificativa · ⚠ = batida sem verificação biométrica · ⏳ = aguardando envio ao servidor · ᶠ = registrada sem rede (horário do aparelho) · 📍 = registrada sem localização, com justificativa. Expediente oficial: seg-sex 8:00 às 18:00; sábado 8:00 às 13:00 (turno único); domingos e feriados nacionais a empresa não abre (9h produtivas + 1h de intervalo intrajornada). Se o dia tiver um único par entrada/saída, a 1h de intervalo é descontada da presença; batendo o ponto na saída e volta do intervalo, a apuração usa os pares reais. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.")));
+  }))), (() => {
+    const todosRegs = Object.values(dias).reduce((ac, v) => ac.concat(v), []);
+    const marcas = [{
+      s: "ᴬ",
+      d: "saída preenchida automaticamente pelo sistema",
+      tem: todosRegs.some(r => r && r.automatica)
+    }, {
+      s: "*",
+      d: "horário corrigido com justificativa",
+      tem: todosRegs.some(r => r && r.ajustada)
+    }, {
+      s: "⚠",
+      d: "batida sem verificação biométrica",
+      tem: todosRegs.some(r => r && r.metodo === "sem_verificacao")
+    }, {
+      s: "⏳",
+      d: "aguardando envio ao servidor",
+      tem: todosRegs.some(r => r && r.pendente)
+    }, {
+      s: "ᶠ",
+      d: "registrada sem rede (horário do aparelho)",
+      tem: todosRegs.some(r => r && r.offline)
+    }, {
+      s: "📍",
+      d: "registrada sem localização, com justificativa",
+      tem: todosRegs.some(r => r && r.geoStatus === "dispensado_por_falha")
+    }].filter(m => m.tem);
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: C.cinza,
+        marginTop: 10
+      }
+    }, marcas.length > 0 && /*#__PURE__*/React.createElement("p", {
+      style: {
+        margin: "0 0 6px"
+      }
+    }, "Legenda: ", marcas.map(m => m.s + " = " + m.d).join(" · ")), /*#__PURE__*/React.createElement("p", {
+      style: {
+        margin: 0
+      }
+    }, "Expediente: seg-sex 8:00 \xE0s 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) \xB7 s\xE1bado 8:00 \xE0s 13:00 \xB7 domingos e feriados nacionais fechado. Com um \xFAnico par entrada/sa\xEDda no dia, a 1h de intervalo \xE9 descontada da presen\xE7a. Horas al\xE9m das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 \xA75\xBA) ou s\xE3o pagas como extra com adicional m\xEDnimo de 50%."));
+  })()));
 }
 function TelaJustificar({
   user,
@@ -5741,7 +5759,7 @@ function TelaJustificar({
       ...S.input,
       minHeight: 90
     },
-    placeholder: "Descreva o motivo do atraso…",
+    placeholder: "Descreva o motivo do atraso\u2026",
     value: texto,
     onChange: e => setTexto(e.target.value)
   }), /*#__PURE__*/React.createElement("div", {
@@ -5756,7 +5774,7 @@ function TelaJustificar({
       ...S.btnGhost,
       cursor: "pointer"
     }
-  }, "📎 ", anexo ? anexo.nome : "Anexar evidência", /*#__PURE__*/React.createElement("input", {
+  }, "\uD83D\uDCCE ", anexo ? anexo.nome : "Anexar evidência", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*,.pdf",
     style: {
@@ -5821,7 +5839,7 @@ function TelaJustificar({
       color: C.cinza,
       marginTop: 6
     }
-  }, "📎 ", j.anexo.nome))));
+  }, "\uD83D\uDCCE ", j.anexo.nome))));
 }
 function TelaAtestados({
   user,
@@ -5860,14 +5878,14 @@ function TelaAtestados({
       fontSize: 26,
       margin: 0
     }
-  }, "Atestados médicos"), /*#__PURE__*/React.createElement("div", {
+  }, "Atestados m\xE9dicos"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
     }
   }, /*#__PURE__*/React.createElement("input", {
     style: S.input,
-    placeholder: "Observação (opcional): CID, dias de afastamento…",
+    placeholder: "Observa\xE7\xE3o (opcional): CID, dias de afastamento\u2026",
     value: obs,
     onChange: e => setObs(e.target.value)
   }), /*#__PURE__*/React.createElement("label", {
@@ -5898,7 +5916,7 @@ function TelaAtestados({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Dado de saúde = dado sensível (LGPD art. 5º, II). O arquivo sobe pro bucket privado \"anexos\" do Supabase Storage — leitura restrita ao dono e ao gestor pelas policies; o caminho fica gravado no registro.")), meus.map(a => /*#__PURE__*/React.createElement("div", {
+  }, "Dado de sa\xFAde = dado sens\xEDvel (LGPD art. 5\xBA, II). O arquivo sobe pro bucket privado \"anexos\" do Supabase Storage \u2014 leitura restrita ao dono e ao gestor pelas policies; o caminho fica gravado no registro.")), meus.map(a => /*#__PURE__*/React.createElement("div", {
     key: a.id,
     style: {
       ...S.card,
@@ -5920,7 +5938,7 @@ function TelaAtestados({
     style: {
       fontSize: 34
     }
-  }, "📄"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCC4"), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1
     }
@@ -5954,7 +5972,7 @@ function TelaFerias({
       fontSize: 26,
       margin: 0
     }
-  }, "Agendamento de férias"), /*#__PURE__*/React.createElement("div", {
+  }, "Agendamento de f\xE9rias"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
@@ -5964,19 +5982,19 @@ function TelaFerias({
       fontSize: 14,
       color: C.cinza
     }
-  }, "Admissão: ", /*#__PURE__*/React.createElement("b", {
+  }, "Admiss\xE3o: ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, fmtData(user.admissao)), " · ", elegivel ? /*#__PURE__*/React.createElement("span", {
+  }, fmtData(user.admissao)), " \xB7 ", elegivel ? /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.verde
     }
-  }, "✔ período aquisitivo completo") : /*#__PURE__*/React.createElement("span", {
+  }, "\u2714 per\xEDodo aquisitivo completo") : /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.vermelho
     }
-  }, "✖ ainda no período aquisitivo (12 meses)")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2716 ainda no per\xEDodo aquisitivo (12 meses)")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -6024,15 +6042,15 @@ function TelaFerias({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Regras: 12 meses de casa pra liberar (CLT art. 130) + antecedência mínima de ", /*#__PURE__*/React.createElement("b", {
+  }, "Regras: 12 meses de casa pra liberar (CLT art. 130) + anteced\xEAncia m\xEDnima de ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "5 meses"), " contada dia a dia a partir de hoje (política interna da Renovar Tech — o mínimo legal é 30 dias, CLT art. 135, mas a regra interna é mais restritiva e prevalece). ", /*#__PURE__*/React.createElement("b", {
+  }, "5 meses"), " contada dia a dia a partir de hoje (pol\xEDtica interna da Renovar Tech \u2014 o m\xEDnimo legal \xE9 30 dias, CLT art. 135, mas a regra interna \xE9 mais restritiva e prevalece). ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "Fracionamento validado pelo sistema"), " (CLT art. 134 §1º): no máximo 3 períodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando até 30 dias.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "Fracionamento validado pelo sistema"), " (CLT art. 134 \xA71\xBA): no m\xE1ximo 3 per\xEDodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando at\xE9 30 dias.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -6041,7 +6059,7 @@ function TelaFerias({
       justifyContent: "space-between",
       alignItems: "center"
     }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", null, fmtData(f.inicio + "T00:00:00")), " · ", f.dias, " dias"), /*#__PURE__*/React.createElement(Badge, {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", null, fmtData(f.inicio + "T00:00:00")), " \xB7 ", f.dias, " dias"), /*#__PURE__*/React.createElement(Badge, {
     st: f.status
   }))));
 }
@@ -6082,7 +6100,7 @@ function TelaGame({
       fontSize: 26,
       margin: 0
     }
-  }, "Gamificação"), ranking.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Gamifica\xE7\xE3o"), ranking.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
@@ -6101,12 +6119,12 @@ function TelaGame({
       fontSize: 15,
       color: C.amarelo
     }
-  }, "🏆 Ranking da equipe"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDFC6 Ranking da equipe"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: C.cinza
     }
-  }, "competição saudável · reconhecimento interno · sem impacto salarial")), ranking.map((r, i) => {
+  }, "competi\xE7\xE3o saud\xE1vel \xB7 reconhecimento interno \xB7 sem impacto salarial")), ranking.map((r, i) => {
     const eu = r.id === user.id;
     return /*#__PURE__*/React.createElement("div", {
       key: r.id,
@@ -6173,9 +6191,9 @@ function TelaGame({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Todos os colaboradores veem este ranking. É reconhecimento interno e motivacional — não afeta salário, Prêmio Performance ou avaliação formal.")), /*#__PURE__*/React.createElement("span", {
+  }, "Todos os colaboradores veem este ranking. \xC9 reconhecimento interno e motivacional \u2014 n\xE3o afeta sal\xE1rio, Pr\xEAmio Performance ou avalia\xE7\xE3o formal.")), /*#__PURE__*/React.createElement("span", {
     style: S.tag(C.grafite, C.cinza)
-  }, "🎖 Reconhecimento interno · sem impacto salarial")), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDF96 Reconhecimento interno \xB7 sem impacto salarial")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16,
@@ -6202,7 +6220,7 @@ function TelaGame({
       ...S.display,
       fontSize: 20
     }
-  }, "Nível ", /*#__PURE__*/React.createElement("span", {
+  }, "N\xEDvel ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: nv.atual.cor
     }
@@ -6231,7 +6249,7 @@ function TelaGame({
     style: {
       color: C.branco
     }
-  }, nv.faltam, " pts"), " pro nível ", nv.proximo.icone, " ", nv.proximo.nome, " (", nv.proximo.min, " pts)") : /*#__PURE__*/React.createElement(React.Fragment, null, "Nível máximo alcançado — referência da equipe 💎"))), /*#__PURE__*/React.createElement("div", {
+  }, nv.faltam, " pts"), " pro n\xEDvel ", nv.proximo.icone, " ", nv.proximo.nome, " (", nv.proximo.min, " pts)") : /*#__PURE__*/React.createElement(React.Fragment, null, "N\xEDvel m\xE1ximo alcan\xE7ado \u2014 refer\xEAncia da equipe \uD83D\uDC8E"))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: C.cinza,
@@ -6243,7 +6261,7 @@ function TelaGame({
       color: n.nome === nv.atual.nome ? n.cor : C.cinza,
       fontWeight: n.nome === nv.atual.nome ? 700 : 400
     }
-  }, n.icone, " ", n.nome, " · ", n.min, "+ pts"))))), /*#__PURE__*/React.createElement("div", {
+  }, n.icone, " ", n.nome, " \xB7 ", n.min, "+ pts"))))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "1.2fr 1fr 1fr",
@@ -6286,7 +6304,7 @@ function TelaGame({
       color: C.cinza,
       ...S.display
     }
-  }, "Sequência atual"), /*#__PURE__*/React.createElement("div", {
+  }, "Sequ\xEAncia atual"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 52,
@@ -6310,7 +6328,7 @@ function TelaGame({
       color: C.cinza,
       ...S.display
     }
-  }, "Melhor sequência"), /*#__PURE__*/React.createElement("div", {
+  }, "Melhor sequ\xEAncia"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 52,
@@ -6373,7 +6391,7 @@ function TelaGame({
       fontSize: 15,
       color: C.amarelo
     }
-  }, "Conquistas · ", badges.filter(b => b.conquistada).length, "/", badges.length), /*#__PURE__*/React.createElement("div", {
+  }, "Conquistas \xB7 ", badges.filter(b => b.conquistada).length, "/", badges.length), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
@@ -6411,14 +6429,14 @@ function TelaGame({
       fontSize: 13,
       color: C.cinza
     }
-  }, "Nenhuma conquista ainda — a primeira batida de ponto já destrava a primeira. 🌱")), badges.some(b => !b.conquistada) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Nenhuma conquista ainda \u2014 a primeira batida de ponto j\xE1 destrava a primeira. \uD83C\uDF31")), badges.some(b => !b.conquistada) && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 13,
       color: C.cinza,
       marginTop: 16
     }
-  }, "Próximas conquistas"), badges.filter(b => !b.conquistada).sort((a, b) => b.pct - a.pct).map(b => /*#__PURE__*/React.createElement("div", {
+  }, "Pr\xF3ximas conquistas"), badges.filter(b => !b.conquistada).sort((a, b) => b.pct - a.pct).map(b => /*#__PURE__*/React.createElement("div", {
     key: b.id,
     style: {
       display: "flex",
@@ -6478,7 +6496,7 @@ function TelaGame({
     style: {
       color: C.branco
     }
-  }, "Como pontuar:"), " entrada dentro da tolerância vale ", GAME.ptsDiaPontual, " pts/dia; a partir do 3º dia pontual seguido cada dia vale +", GAME.ptsBonusStreak, " de bônus; marcos de sequência pagam extra (5 dias +30 · 10 dias +75 · 20 dias +200); mês sem falta injustificada vale +", GAME.ptsMesSemFalta, "; e fechar o mês dentro da meta de assiduidade (mesmos critérios do Prêmio Performance) vale +", GAME.ptsMetaAssiduidade, ". Atraso ou falta injustificada zera a sequência — mas nunca desconta pontos já ganhos. Faltas justificadas, atestados aceitos e ausências legais não zeram a sequência nem afetam sua pontuação.", /*#__PURE__*/React.createElement("div", {
+  }, "Como pontuar:"), " entrada dentro da toler\xE2ncia vale ", GAME.ptsDiaPontual, " pts/dia; a partir do 3\xBA dia pontual seguido cada dia vale +", GAME.ptsBonusStreak, " de b\xF4nus; marcos de sequ\xEAncia pagam extra (5 dias +30 \xB7 10 dias +75 \xB7 20 dias +200); m\xEAs sem falta injustificada vale +", GAME.ptsMesSemFalta, "; e fechar o m\xEAs dentro da meta de assiduidade (mesmos crit\xE9rios do Pr\xEAmio Performance) vale +", GAME.ptsMetaAssiduidade, ". Atraso ou falta injustificada zera a sequ\xEAncia \u2014 mas nunca desconta pontos j\xE1 ganhos. Faltas justificadas, atestados aceitos e aus\xEAncias legais n\xE3o zeram a sequ\xEAncia nem afetam sua pontua\xE7\xE3o.", /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
       paddingTop: 10,
@@ -6488,15 +6506,15 @@ function TelaGame({
     style: {
       color: C.branco
     }
-  }, "🎖 Natureza da gamificação:"), " pontos, níveis, sequências e conquistas são ", /*#__PURE__*/React.createElement("b", {
+  }, "\uD83C\uDF96 Natureza da gamifica\xE7\xE3o:"), " pontos, n\xEDveis, sequ\xEAncias e conquistas s\xE3o ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "exclusivamente ferramenta motivacional e de reconhecimento interno"), ". Não constituem verba salarial, prêmio, comissão ou benefício de qualquer natureza; não geram direito adquirido, expectativa de remuneração, promoção, cargo ou obrigação contratual; e não são critério de avaliação de desempenho formal. Não confundir com o ", /*#__PURE__*/React.createElement("b", {
+  }, "exclusivamente ferramenta motivacional e de reconhecimento interno"), ". N\xE3o constituem verba salarial, pr\xEAmio, comiss\xE3o ou benef\xEDcio de qualquer natureza; n\xE3o geram direito adquirido, expectativa de remunera\xE7\xE3o, promo\xE7\xE3o, cargo ou obriga\xE7\xE3o contratual; e n\xE3o s\xE3o crit\xE9rio de avalia\xE7\xE3o de desempenho formal. N\xE3o confundir com o ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "Prêmio Performance"), " (aba 🏆 Prêmio), que é o benefício financeiro real, regido por regulamento próprio nos termos do art. 457, §4º, da CLT. A empresa pode ajustar ou descontinuar a gamificação a qualquer momento, sem reflexo em salário ou contrato.")));
+  }, "Pr\xEAmio Performance"), " (aba \uD83C\uDFC6 Pr\xEAmio), que \xE9 o benef\xEDcio financeiro real, regido por regulamento pr\xF3prio nos termos do art. 457, \xA74\xBA, da CLT. A empresa pode ajustar ou descontinuar a gamifica\xE7\xE3o a qualquer momento, sem reflexo em sal\xE1rio ou contrato.")));
 }
 function TelaBanco({
   user,
@@ -6621,7 +6639,7 @@ function TelaBanco({
       color: C.cinza,
       marginTop: 8
     }
-  }, "Você já tem ", hmm(pendentesMin), " em solicitações pendentes — elas contam contra o disponível pra novas solicitações."), msg && /*#__PURE__*/React.createElement("p", {
+  }, "Voc\xEA j\xE1 tem ", hmm(pendentesMin), " em solicita\xE7\xF5es pendentes \u2014 elas contam contra o dispon\xEDvel pra novas solicita\xE7\xF5es."), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: msg.ok ? C.verde : C.vermelho,
@@ -6633,7 +6651,7 @@ function TelaBanco({
       color: C.cinza,
       marginTop: 8
     }
-  }, "A conversão só é efetivada com a aprovação do gestor — aí as horas são debitadas do seu banco. Dica: um dia inteiro de folga = 9 horas (a jornada de seg a sex); um sábado = 5 horas. Base legal: compensação do banco de horas por acordo individual escrito, CLT art. 59 §§ 5º-6º.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "A convers\xE3o s\xF3 \xE9 efetivada com a aprova\xE7\xE3o do gestor \u2014 a\xED as horas s\xE3o debitadas do seu banco. Dica: um dia inteiro de folga = 9 horas (a jornada de seg a sex); um s\xE1bado = 5 horas. Base legal: compensa\xE7\xE3o do banco de horas por acordo individual escrito, CLT art. 59 \xA7\xA7 5\xBA-6\xBA.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -6647,7 +6665,7 @@ function TelaBanco({
     style: {
       fontSize: 14
     }
-  }, /*#__PURE__*/React.createElement("b", null, hmm(f.horas * 60)), " · folga em ", /*#__PURE__*/React.createElement("b", null, fmtData(f.dataFolga + "T00:00:00")), f.decididoEm ? ` · decidido em ${fmtData(f.decididoEm)}` : ""), /*#__PURE__*/React.createElement(Badge, {
+  }, /*#__PURE__*/React.createElement("b", null, hmm(f.horas * 60)), " \xB7 folga em ", /*#__PURE__*/React.createElement("b", null, fmtData(f.dataFolga + "T00:00:00")), f.decididoEm ? ` · decidido em ${fmtData(f.decididoEm)}` : ""), /*#__PURE__*/React.createElement(Badge, {
     st: f.status
   }))));
 }
@@ -6663,7 +6681,7 @@ function TelaPremio({
       fontSize: 26,
       margin: 0
     }
-  }, "Prêmio Performance"), /*#__PURE__*/React.createElement("div", {
+  }, "Pr\xEAmio Performance"), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16,
@@ -6682,15 +6700,15 @@ function TelaPremio({
       ...S.display,
       fontSize: 18
     }
-  }, "Status do mês: ", e.elegivel ? /*#__PURE__*/React.createElement("span", {
+  }, "Status do m\xEAs: ", e.elegivel ? /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.verde
     }
-  }, "ELEGÍVEL ✔") : /*#__PURE__*/React.createElement("span", {
+  }, "ELEG\xCDVEL \u2714") : /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.vermelho
     }
-  }, "NÃO ELEGÍVEL ⛔")), /*#__PURE__*/React.createElement("div", {
+  }, "N\xC3O ELEG\xCDVEL \u26D4")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: C.cinza,
@@ -6710,7 +6728,7 @@ function TelaPremio({
       fontSize: 15,
       color: C.amarelo
     }
-  }, "Regras de elegibilidade — resumo"), REGRAS_PREMIO.map(r => /*#__PURE__*/React.createElement("div", {
+  }, "Regras de elegibilidade \u2014 resumo"), REGRAS_PREMIO.map(r => /*#__PURE__*/React.createElement("div", {
     key: r.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -6738,11 +6756,11 @@ function TelaPremio({
     style: {
       color: C.branco
     }
-  }, "Natureza jurídica do Prêmio Performance:"), " liberalidade concedida pela ", EMPRESA.nome, " em razão de desempenho superior ao ordinariamente esperado, nos termos do art. 457, §4º, da CLT. Não integra o salário, não constitui comissão contratual e sua não concessão por critério de elegibilidade ", /*#__PURE__*/React.createElement("b", {
+  }, "Natureza jur\xEDdica do Pr\xEAmio Performance:"), " liberalidade concedida pela ", EMPRESA.nome, " em raz\xE3o de desempenho superior ao ordinariamente esperado, nos termos do art. 457, \xA74\xBA, da CLT. N\xE3o integra o sal\xE1rio, n\xE3o constitui comiss\xE3o contratual e sua n\xE3o concess\xE3o por crit\xE9rio de elegibilidade ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "não é desconto salarial"), " (art. 462). Critérios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e ausências legais do art. 473 da CLT não afetam a elegibilidade. Regulamento completo disponível com o RH."));
+  }, "n\xE3o \xE9 desconto salarial"), " (art. 462). Crit\xE9rios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e aus\xEAncias legais do art. 473 da CLT n\xE3o afetam a elegibilidade. Regulamento completo dispon\xEDvel com o RH."));
 }
 function TelaFeedback({
   user,
@@ -6839,13 +6857,13 @@ function GateConsentimentoLGPD({
       fontSize: 22,
       color: C.amarelo
     }
-  }, "🔐 Consentimento de dados — LGPD"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD10 Consentimento de dados \u2014 LGPD"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: C.branco,
       marginTop: 6
     }
-  }, "Olá, ", user.nome.split(" ")[0], ". Antes de usar o ponto eletrônico, precisamos do seu consentimento livre e informado (Lei 13.709/2018)."), /*#__PURE__*/React.createElement("div", {
+  }, "Ol\xE1, ", user.nome.split(" ")[0], ". Antes de usar o ponto eletr\xF4nico, precisamos do seu consentimento livre e informado (Lei 13.709/2018)."), /*#__PURE__*/React.createElement("div", {
     style: {
       background: C.grafite,
       borderRadius: 10,
@@ -6866,24 +6884,24 @@ function GateConsentimentoLGPD({
       paddingLeft: 18,
       color: C.branco
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Confirmação de identidade pela biometria do seu próprio celular"), " (Face ID ou impressão digital). A checagem é feita ", /*#__PURE__*/React.createElement("b", null, "localmente pelo aparelho"), ": sua face e sua digital ", /*#__PURE__*/React.createElement("b", null, "nunca saem do sensor do celular"), " — a empresa ", /*#__PURE__*/React.createElement("b", null, "não recebe nem armazena"), " imagem facial nem impressão digital. Guardamos apenas o identificador público da credencial e a confirmação de que o aparelho autenticou você."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Geolocalização"), " (latitude/longitude) — pra confirmar que a batida ocorreu no local de trabalho autorizado (cerca geográfica)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Data, hora e sequência (NSR)"), " de cada marcação — exigência da Portaria MTP 671/2021.")), /*#__PURE__*/React.createElement("b", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Confirma\xE7\xE3o de identidade pela biometria do seu pr\xF3prio celular"), " (Face ID ou impress\xE3o digital). A checagem \xE9 feita ", /*#__PURE__*/React.createElement("b", null, "localmente pelo aparelho"), ": sua face e sua digital ", /*#__PURE__*/React.createElement("b", null, "nunca saem do sensor do celular"), " \u2014 a empresa ", /*#__PURE__*/React.createElement("b", null, "n\xE3o recebe nem armazena"), " imagem facial nem impress\xE3o digital. Guardamos apenas o identificador p\xFAblico da credencial e a confirma\xE7\xE3o de que o aparelho autenticou voc\xEA."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Geolocaliza\xE7\xE3o"), " (latitude/longitude) \u2014 pra confirmar que a batida ocorreu no local de trabalho autorizado (cerca geogr\xE1fica)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Data, hora e sequ\xEAncia (NSR)"), " de cada marca\xE7\xE3o \u2014 exig\xEAncia da Portaria MTP 671/2021.")), /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.amarelo
     }
-  }, "Finalidade:"), " registro eletrônico de jornada, apuração de horas, banco de horas, folha e cumprimento de obrigações trabalhistas. Não vendemos nem compartilhamos seus dados com terceiros para fins de marketing.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+  }, "Finalidade:"), " registro eletr\xF4nico de jornada, apura\xE7\xE3o de horas, banco de horas, folha e cumprimento de obriga\xE7\xF5es trabalhistas. N\xE3o vendemos nem compartilhamos seus dados com terceiros para fins de marketing.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.amarelo
     }
-  }, "Por quanto tempo guardamos:"), " os registros de ponto por ", /*#__PURE__*/React.createElement("b", null, "5 anos"), " (prazo legal); a ", /*#__PURE__*/React.createElement("b", null, "credencial biométrica"), " (identificador público, sem imagem) enquanto durar o vínculo ou até você removê-la na aba 🔐 LGPD. A geolocalização fica vinculada só à marcação correspondente.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+  }, "Por quanto tempo guardamos:"), " os registros de ponto por ", /*#__PURE__*/React.createElement("b", null, "5 anos"), " (prazo legal); a ", /*#__PURE__*/React.createElement("b", null, "credencial biom\xE9trica"), " (identificador p\xFAblico, sem imagem) enquanto durar o v\xEDnculo ou at\xE9 voc\xEA remov\xEA-la na aba \uD83D\uDD10 LGPD. A geolocaliza\xE7\xE3o fica vinculada s\xF3 \xE0 marca\xE7\xE3o correspondente.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.amarelo
     }
-  }, "Seus direitos:"), " você pode revogar este consentimento a qualquer momento na aba 🔐 LGPD (a revogação impede novas batidas pelo app, mas não apaga registros já exigidos por lei). Encarregado de dados (DPO): ", /*#__PURE__*/React.createElement("b", null, "dpo@renovartech.com.br"), ".", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+  }, "Seus direitos:"), " voc\xEA pode revogar este consentimento a qualquer momento na aba \uD83D\uDD10 LGPD (a revoga\xE7\xE3o impede novas batidas pelo app, mas n\xE3o apaga registros j\xE1 exigidos por lei). Encarregado de dados (DPO): ", /*#__PURE__*/React.createElement("b", null, "dpo@renovartech.com.br"), ".", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.cinza,
       fontSize: 12
     }
-  }, EMPRESA.nome, " · CNPJ ", EMPRESA.cnpj, " · ", EMPRESA.endereco)), /*#__PURE__*/React.createElement("label", {
+  }, EMPRESA.nome, " \xB7 CNPJ ", EMPRESA.cnpj, " \xB7 ", EMPRESA.endereco)), /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -6900,7 +6918,7 @@ function GateConsentimentoLGPD({
       width: 18,
       height: 18
     }
-  }), "Li e entendi as informações acima sobre verificação por biometria do meu aparelho, geolocalização, finalidade e prazo de guarda."), /*#__PURE__*/React.createElement("div", {
+  }), "Li e entendi as informa\xE7\xF5es acima sobre verifica\xE7\xE3o por biometria do meu aparelho, geolocaliza\xE7\xE3o, finalidade e prazo de guarda."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -6927,7 +6945,7 @@ function GateConsentimentoLGPD({
       color: C.cinza,
       marginTop: 10
     }
-  }, "Ao clicar em \"Li e concordo\", seu aceite é registrado com data e hora no sistema. Sem o consentimento não é possível bater ponto pelo app.")));
+  }, "Ao clicar em \"Li e concordo\", seu aceite \xE9 registrado com data e hora no sistema. Sem o consentimento n\xE3o \xE9 poss\xEDvel bater ponto pelo app.")));
 }
 const CODIGO_CONDUTA = [{
   titulo: "Uso obrigatório do uniforme",
@@ -6957,14 +6975,14 @@ function SecaoCodigoConduta() {
       fontSize: 15,
       color: C.amarelo
     }
-  }, "📜 Código de conduta — regras internas"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCDC C\xF3digo de conduta \u2014 regras internas"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.branco,
       marginTop: 8,
       lineHeight: 1.6
     }
-  }, "Além das políticas de dados acima, todo colaborador da ", EMPRESA.nome, " deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita às medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade)."), CODIGO_CONDUTA.map((c, i) => /*#__PURE__*/React.createElement("div", {
+  }, "Al\xE9m das pol\xEDticas de dados acima, todo colaborador da ", EMPRESA.nome, " deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita \xE0s medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade)."), CODIGO_CONDUTA.map((c, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
       borderTop: "1px solid #1E3450",
@@ -7027,27 +7045,27 @@ function SecaoBiometria({
       fontSize: 15,
       color: C.amarelo
     }
-  }, "🔐 Biometria do seu aparelho (Face ID / digital)"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD10 Biometria do seu aparelho (Face ID / digital)"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.branco,
       marginTop: 8,
       lineHeight: 1.6
     }
-  }, "Configure uma vez por aparelho. A checagem é feita ", /*#__PURE__*/React.createElement("b", null, "pelo próprio celular"), ": sua face ou digital ", /*#__PURE__*/React.createElement("b", null, "nunca sai do sensor"), " e a empresa não recebe nem armazena imagem alguma — só a confirmação criptográfica de que o aparelho autenticou você, que é ", /*#__PURE__*/React.createElement("b", null, "conferida no servidor"), " a cada batida."), !diag.ok && /*#__PURE__*/React.createElement("p", {
+  }, "Configure uma vez por aparelho. A checagem \xE9 feita ", /*#__PURE__*/React.createElement("b", null, "pelo pr\xF3prio celular"), ": sua face ou digital ", /*#__PURE__*/React.createElement("b", null, "nunca sai do sensor"), " e a empresa n\xE3o recebe nem armazena imagem alguma \u2014 s\xF3 a confirma\xE7\xE3o criptogr\xE1fica de que o aparelho autenticou voc\xEA, que \xE9 ", /*#__PURE__*/React.createElement("b", null, "conferida no servidor"), " a cada batida."), !diag.ok && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.vermelho,
       marginTop: 10,
       lineHeight: 1.55
     }
-  }, "⚠️ ", diag.msg), diag.ok && plataforma === false && /*#__PURE__*/React.createElement("p", {
+  }, "\u26A0\uFE0F ", diag.msg), diag.ok && plataforma === false && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.cinza,
       marginTop: 10
     }
-  }, "ℹ️ Este aparelho não reportou um sensor biométrico interno disponível. O cadastro pode falhar ou pedir outro método (PIN do aparelho, chave de segurança)."), credenciais.length > 0 && credenciais.map(c => /*#__PURE__*/React.createElement("div", {
+  }, "\u2139\uFE0F Este aparelho n\xE3o reportou um sensor biom\xE9trico interno dispon\xEDvel. O cadastro pode falhar ou pedir outro m\xE9todo (PIN do aparelho, chave de seguran\xE7a)."), credenciais.length > 0 && credenciais.map(c => /*#__PURE__*/React.createElement("div", {
     key: c.id,
     style: {
       display: "flex",
@@ -7062,12 +7080,12 @@ function SecaoBiometria({
     style: {
       fontSize: 13
     }
-  }, "✅ ", /*#__PURE__*/React.createElement("b", null, c.dispositivo || "Aparelho"), " ", /*#__PURE__*/React.createElement("span", {
+  }, "\u2705 ", /*#__PURE__*/React.createElement("b", null, c.dispositivo || "Aparelho"), " ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.cinza,
       fontSize: 11
     }
-  }, "· cadastrado em ", fmtData(c.criadoEm), c.ultimoUso ? ` · último uso ${fmtData(c.ultimoUso)}` : "")), /*#__PURE__*/React.createElement("button", {
+  }, "\xB7 cadastrado em ", fmtData(c.criadoEm), c.ultimoUso ? ` · último uso ${fmtData(c.ultimoUso)}` : "")), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       borderColor: C.vermelho,
@@ -7075,7 +7093,7 @@ function SecaoBiometria({
       padding: "5px 12px",
       fontSize: 12
     },
-    "aria-label": "Remover credencial biométrica deste aparelho",
+    "aria-label": "Remover credencial biom\xE9trica deste aparelho",
     onClick: () => onRemover(c.id)
   }, "Remover"))), diag.ok && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -7116,7 +7134,7 @@ function SecaoBiometria({
       marginTop: 10,
       lineHeight: 1.5
     }
-  }, "Trocou de celular? Cadastre o novo aparelho e remova o antigo. Sem biometria configurada você ainda consegue bater ponto, mas a marcação fica sinalizada como \"sem verificação\" pro gestor."));
+  }, "Trocou de celular? Cadastre o novo aparelho e remova o antigo. Sem biometria configurada voc\xEA ainda consegue bater ponto, mas a marca\xE7\xE3o fica sinalizada como \"sem verifica\xE7\xE3o\" pro gestor."));
 }
 function TelaLGPD({
   user,
@@ -7145,7 +7163,7 @@ function TelaLGPD({
     style: {
       color: C.branco
     }
-  }, "Termo de consentimento — tratamento de dados pessoais"), /*#__PURE__*/React.createElement("p", null, "O PONTO RENOVAR coleta, com a finalidade específica de controle de jornada (Portaria MTP 671/2021): ", /*#__PURE__*/React.createElement("b", null, "confirmação de identidade pela biometria nativa do seu aparelho"), " (Face ID/digital — processada ", /*#__PURE__*/React.createElement("b", null, "localmente pelo celular"), "; a empresa ", /*#__PURE__*/React.createElement("b", null, "não recebe nem armazena"), " imagem facial ou impressão digital, apenas o identificador público da credencial e a confirmação da autenticação); ", /*#__PURE__*/React.createElement("b", null, "geolocalização"), " da marcação; e registros de horários. Os dados são usados exclusivamente pra validação de identidade, apuração de jornada e obrigações legais trabalhistas. Retenção: registros de ponto por no mínimo 5 anos; credenciais biométricas enquanto durar o vínculo ou até você removê-las. Você pode solicitar acesso, correção ou exclusão (quando não houver obrigação legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br."), /*#__PURE__*/React.createElement("label", {
+  }, "Termo de consentimento \u2014 tratamento de dados pessoais"), /*#__PURE__*/React.createElement("p", null, "O PONTO RENOVAR coleta, com a finalidade espec\xEDfica de controle de jornada (Portaria MTP 671/2021): ", /*#__PURE__*/React.createElement("b", null, "confirma\xE7\xE3o de identidade pela biometria nativa do seu aparelho"), " (Face ID/digital \u2014 processada ", /*#__PURE__*/React.createElement("b", null, "localmente pelo celular"), "; a empresa ", /*#__PURE__*/React.createElement("b", null, "n\xE3o recebe nem armazena"), " imagem facial ou impress\xE3o digital, apenas o identificador p\xFAblico da credencial e a confirma\xE7\xE3o da autentica\xE7\xE3o); ", /*#__PURE__*/React.createElement("b", null, "geolocaliza\xE7\xE3o"), " da marca\xE7\xE3o; e registros de hor\xE1rios. Os dados s\xE3o usados exclusivamente pra valida\xE7\xE3o de identidade, apura\xE7\xE3o de jornada e obriga\xE7\xF5es legais trabalhistas. Reten\xE7\xE3o: registros de ponto por no m\xEDnimo 5 anos; credenciais biom\xE9tricas enquanto durar o v\xEDnculo ou at\xE9 voc\xEA remov\xEA-las. Voc\xEA pode solicitar acesso, corre\xE7\xE3o ou exclus\xE3o (quando n\xE3o houver obriga\xE7\xE3o legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br."), /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       gap: 10,
@@ -7163,7 +7181,26 @@ function TelaLGPD({
     style: {
       color: C.amarelo
     }
-  }, "consinto"), " com o tratamento descrito acima."))), /*#__PURE__*/React.createElement(SecaoCodigoConduta, null), /*#__PURE__*/React.createElement(SecaoBiometria, {
+  }, "consinto"), " com o tratamento descrito acima."))), /*#__PURE__*/React.createElement(SecaoCodigoConduta, null), user.papel === "gestor" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 16,
+      fontSize: 13,
+      color: C.cinza,
+      borderLeft: `4px solid ${C.amarelo}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 16,
+      color: C.branco,
+      marginBottom: 6
+    }
+  }, "\u26A0\uFE0F Situa\xE7\xE3o fiscal dos arquivos AFD/AEJ"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0
+    }
+  }, "Os arquivos do espelho de ponto s\xE3o gerados no leiaute oficial da Portaria 671/2021 (AFD com marca\xE7\xF5es tipo 7 e cadeia de hash SHA-256; AEJ delimitado por pipe; ambos em ISO 8859-1 com CR+LF). Dois itens ainda s\xE3o placeholders que dependem de etapas externas ao sistema: o n\xBA de registro do programa no INPI (campo 7 do cabe\xE7alho do AFD e nrRep do AEJ), hoje zerado, e a assinatura digital, que exige arquivo .p7s gerado com certificado ICP-Brasil. Enquanto esses dois itens n\xE3o existirem, os arquivos servem para confer\xEAncia interna, mas n\xE3o t\xEAm valor fiscal perante a fiscaliza\xE7\xE3o.")), /*#__PURE__*/React.createElement(SecaoBiometria, {
     credenciais: credenciais,
     onCadastrar: onCadastrarBio,
     onRemover: onRemoverBio
@@ -7270,7 +7307,7 @@ function SecaoEquipe({
       fontSize: 15,
       color: C.cinza
     }
-  }, "👥 Equipe — colaboradores e convites"), usuarios.map(u => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDC65 Equipe \u2014 colaboradores e convites"), usuarios.map(u => /*#__PURE__*/React.createElement("div", {
     key: u.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -7327,7 +7364,7 @@ function SecaoEquipe({
       fontSize: 12,
       color: C.cinza
     }
-  }, "Admissão", /*#__PURE__*/React.createElement("input", {
+  }, "Admiss\xE3o", /*#__PURE__*/React.createElement("input", {
     type: "date",
     style: {
       ...S.input,
@@ -7346,7 +7383,7 @@ function SecaoEquipe({
       fontSize: 12,
       color: C.cinza
     }
-  }, "Salário bruto R$", /*#__PURE__*/React.createElement("input", {
+  }, "Sal\xE1rio bruto R$", /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: "0",
     step: "0.01",
@@ -7447,7 +7484,7 @@ function SecaoEquipe({
       color: C.cinza,
       fontSize: 12
     }
-  }, "· ", u.email, u.cargo ? ` · ${u.cargo}` : "", " · ", u.papel === "gestor" ? "Gestor" : "Colaborador", " · admissão ", fmtData((u.admissao || "").slice(0, 10)) || "—")), /*#__PURE__*/React.createElement("span", {
+  }, "\xB7 ", u.email, u.cargo ? ` · ${u.cargo}` : "", " \xB7 ", u.papel === "gestor" ? "Gestor" : "Colaborador", " \xB7 admiss\xE3o ", fmtData((u.admissao || "").slice(0, 10)) || "—")), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
       gap: 8,
@@ -7504,7 +7541,7 @@ function SecaoEquipe({
       color: C.amarelo,
       marginTop: 16
     }
-  }, "➕ Convidar novo colaborador"), /*#__PURE__*/React.createElement("div", {
+  }, "\u2795 Convidar novo colaborador"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -7566,7 +7603,7 @@ function SecaoEquipe({
       fontSize: 12,
       color: C.cinza
     }
-  }, "Admissão*", /*#__PURE__*/React.createElement("input", {
+  }, "Admiss\xE3o*", /*#__PURE__*/React.createElement("input", {
     type: "date",
     style: {
       ...S.input,
@@ -7609,7 +7646,7 @@ function SecaoEquipe({
       fontSize: 12
     },
     onClick: () => copiar(linkGerado)
-  }, "📋 Copiar link")), msg && /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCCB Copiar link")), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: msg.ok ? C.verde : C.vermelho,
@@ -7643,7 +7680,7 @@ function SecaoEquipe({
         color: C.cinza,
         fontSize: 12
       }
-    }, "· ", c.email, " · ", c.tipo, c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : "", " · expira ", fmtData(c.expiraEm))), /*#__PURE__*/React.createElement("span", {
+    }, "\xB7 ", c.email, " \xB7 ", c.tipo, c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : "", " \xB7 expira ", fmtData(c.expiraEm))), /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         gap: 8,
@@ -7659,14 +7696,14 @@ function SecaoEquipe({
         fontSize: 12
       },
       onClick: () => copiar(linkDe(c.token))
-    }, "📋 Link")));
+    }, "\uD83D\uDCCB Link")));
   })), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
       marginTop: 10
     }
-  }, "Desativar bloqueia o login (o app checa ativo=false), mas a conta de autenticação permanece — exclusão definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e são de uso único (resgate atômico via function no banco)."));
+  }, "Desativar bloqueia o login (o app checa ativo=false), mas a conta de autentica\xE7\xE3o permanece \u2014 exclus\xE3o definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e s\xE3o de uso \xFAnico (resgate at\xF4mico via function no banco)."));
 }
 function SecaoFolgas({
   folgas,
@@ -7689,12 +7726,12 @@ function SecaoFolgas({
       fontSize: 15,
       color: C.cinza
     }
-  }, "⏳ Banco de horas — solicitações de folga"), pendentes.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, "\u23F3 Banco de horas \u2014 solicita\xE7\xF5es de folga"), pendentes.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: C.cinza
     }
-  }, "Nenhuma solicitação pendente."), pendentes.map(f => {
+  }, "Nenhuma solicita\xE7\xE3o pendente."), pendentes.map(f => {
     const sb = saldoBanco(f.userId, registros, faltas, folgas);
     const cabe = f.horas * 60 <= sb.disponivel;
     return /*#__PURE__*/React.createElement("div", {
@@ -7712,12 +7749,12 @@ function SecaoFolgas({
       style: {
         fontSize: 14
       }
-    }, /*#__PURE__*/React.createElement("b", null, nome(f.userId)), " — ", hmm(f.horas * 60), " em ", fmtData(f.dataFolga + "T00:00:00"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("b", null, nome(f.userId)), " \u2014 ", hmm(f.horas * 60), " em ", fmtData(f.dataFolga + "T00:00:00"), /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 12,
         color: cabe ? C.verde : C.vermelho
       }
-    }, " · saldo disponível: ", hmm(sb.disponivel), cabe ? "" : " ⚠ insuficiente")), /*#__PURE__*/React.createElement("span", {
+    }, " \xB7 saldo dispon\xEDvel: ", hmm(sb.disponivel), cabe ? "" : " ⚠ insuficiente")), /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         gap: 8,
@@ -7758,7 +7795,7 @@ function SecaoFolgas({
     style: {
       fontSize: 13
     }
-  }, nome(f.userId), " — ", hmm(f.horas * 60), " em ", fmtData(f.dataFolga + "T00:00:00")), /*#__PURE__*/React.createElement(Badge, {
+  }, nome(f.userId), " \u2014 ", hmm(f.horas * 60), " em ", fmtData(f.dataFolga + "T00:00:00")), /*#__PURE__*/React.createElement(Badge, {
     st: f.status
   }))));
 }
@@ -7905,7 +7942,7 @@ function SecaoFolha({
       fontSize: 15,
       color: C.cinza
     }
-  }, "💰 Folha de pagamento"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCB0 Folha de pagamento"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
@@ -7921,7 +7958,7 @@ function SecaoFolha({
     }
   }, /*#__PURE__*/React.createElement("input", {
     type: "month",
-    "aria-label": "Competência da folha (mês/ano)",
+    "aria-label": "Compet\xEAncia da folha (m\xEAs/ano)",
     style: {
       ...S.input,
       width: 170
@@ -7947,7 +7984,7 @@ function SecaoFolha({
     },
     disabled: ocupado,
     onClick: () => setConfirmandoFechar(true)
-  }, "Fechar folha ✓")), msg && /*#__PURE__*/React.createElement("p", {
+  }, "Fechar folha \u2713")), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: msg.ok ? C.verde : C.vermelho,
@@ -7956,7 +7993,7 @@ function SecaoFolha({
   }, msg.txt), confirmandoFechar && /*#__PURE__*/React.createElement(ModalConfirm, {
     titulo: `Fechar a folha de ${comp}?`,
     texto: "Isso trava os valores, marca os adiantamentos como descontados e gera as guias fiscais.",
-    rotuloOk: "Fechar folha ✓",
+    rotuloOk: "Fechar folha \u2713",
     ocupado: ocupado,
     onCancelar: () => setConfirmandoFechar(false),
     onConfirmar: async () => {
@@ -7984,7 +8021,7 @@ function SecaoFolha({
       textAlign: "left",
       padding: 6
     }
-  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Bruto"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "INSS"), /*#__PURE__*/React.createElement("th", null, "IRRF"), /*#__PURE__*/React.createElement("th", null, "VT"), /*#__PURE__*/React.createElement("th", null, "Adiant."), /*#__PURE__*/React.createElement("th", null, "Líquido"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, doMes.map(f => /*#__PURE__*/React.createElement("tr", {
+  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Bruto"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "INSS"), /*#__PURE__*/React.createElement("th", null, "IRRF"), /*#__PURE__*/React.createElement("th", null, "VT"), /*#__PURE__*/React.createElement("th", null, "Adiant."), /*#__PURE__*/React.createElement("th", null, "L\xEDquido"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, doMes.map(f => /*#__PURE__*/React.createElement("tr", {
     key: f.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -8038,7 +8075,7 @@ function SecaoFolha({
       fontSize: 11
     },
     onClick: () => setEditRow(null)
-  }, "✕"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("td", null, brl(f.salario)), /*#__PURE__*/React.createElement("td", {
+  }, "\u2715"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("td", null, brl(f.salario)), /*#__PURE__*/React.createElement("td", {
     title: `${f.diasFaltas} dia(s) + DSR`
   }, brl(f.faltas)), /*#__PURE__*/React.createElement("td", {
     title: `${f.horasAtraso}h além da tolerância`
@@ -8062,7 +8099,7 @@ function SecaoFolha({
       vt: f.vt,
       adiantamento: f.adiantamento
     })
-  }, "✎"))))), /*#__PURE__*/React.createElement("tr", {
+  }, "\u270E"))))), /*#__PURE__*/React.createElement("tr", {
     style: {
       borderTop: "2px solid #2A4568",
       textAlign: "right",
@@ -8097,7 +8134,7 @@ function SecaoFolha({
       padding: "7px 0",
       fontSize: 13
     }
-  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, g.tipo), " · ", brl(g.valor), " · vence ", fmtData(g.vencimento)), g.status === "paga" ? /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, g.tipo), " \xB7 ", brl(g.valor), " \xB7 vence ", fmtData(g.vencimento)), g.status === "paga" ? /*#__PURE__*/React.createElement("span", {
     style: S.tag("#123B24", C.verde)
   }, "PAGA") : /*#__PURE__*/React.createElement("button", {
     style: {
@@ -8140,7 +8177,7 @@ function SecaoFolha({
     })
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "Colaborador…"), usuarios.filter(u => u.ativo !== false).map(u => /*#__PURE__*/React.createElement("option", {
+  }, "Colaborador\u2026"), usuarios.filter(u => u.ativo !== false).map(u => /*#__PURE__*/React.createElement("option", {
     key: u.id,
     value: u.id
   }, u.nome))), /*#__PURE__*/React.createElement("input", {
@@ -8168,9 +8205,9 @@ function SecaoFolha({
       ...adForm,
       competenciaDesconto: e.target.value
     }),
-    title: "Competência do desconto"
+    title: "Compet\xEAncia do desconto"
   }), /*#__PURE__*/React.createElement("input", {
-    placeholder: "Observação",
+    placeholder: "Observa\xE7\xE3o",
     style: {
       ...S.input,
       width: 180
@@ -8210,7 +8247,7 @@ function SecaoFolha({
       padding: "6px 0",
       fontSize: 12
     }
-  }, /*#__PURE__*/React.createElement("span", null, nome(a.userId), " · ", brl(a.valor), " · desconto em ", a.competenciaDesconto.slice(0, 7), a.observacao ? ` · ${a.observacao}` : ""), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, nome(a.userId), " \xB7 ", brl(a.valor), " \xB7 desconto em ", a.competenciaDesconto.slice(0, 7), a.observacao ? ` · ${a.observacao}` : ""), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
       gap: 8,
@@ -8720,7 +8757,7 @@ function TelaHolerite({
       fontSize: 13,
       color: C.cinza
     }
-  }, "Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada mês."), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada m\xEAs."), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -8738,7 +8775,7 @@ function TelaHolerite({
       fontSize: 16,
       color: C.amarelo
     }
-  }, EMPRESA.nome, " · competência ", f.competencia.slice(0, 7)), /*#__PURE__*/React.createElement("span", {
+  }, EMPRESA.nome, " \xB7 compet\xEAncia ", f.competencia.slice(0, 7)), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
       gap: 8,
@@ -8748,14 +8785,14 @@ function TelaHolerite({
     style: S.tag("#123B24", C.verde)
   }, "FECHADA") : /*#__PURE__*/React.createElement("span", {
     style: S.tag("#3A2A08", C.amarelo)
-  }, "RASCUNHO — sujeito a ajustes"), /*#__PURE__*/React.createElement("button", {
+  }, "RASCUNHO \u2014 sujeito a ajustes"), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       padding: "5px 12px",
       fontSize: 12
     },
     onClick: () => window.print()
-  }, "🖨 Imprimir"))), /*#__PURE__*/React.createElement("table", {
+  }, "\uD83D\uDDA8 Imprimir"))), /*#__PURE__*/React.createElement("table", {
     style: {
       width: "100%",
       borderCollapse: "collapse",
@@ -8786,7 +8823,7 @@ function TelaHolerite({
     style: {
       padding: 6
     }
-  }, "LÍQUIDO A RECEBER"), /*#__PURE__*/React.createElement("td", {
+  }, "L\xCDQUIDO A RECEBER"), /*#__PURE__*/React.createElement("td", {
     style: {
       padding: 6,
       textAlign: "right",
@@ -8799,7 +8836,7 @@ function TelaHolerite({
       color: C.cinza,
       marginTop: 8
     }
-  }, EMPRESA.nome, " · CNPJ ", EMPRESA.cnpj, " · ", EMPRESA.endereco))), adiantamentos.some(a => a.status === "pendente") && /*#__PURE__*/React.createElement("div", {
+  }, EMPRESA.nome, " \xB7 CNPJ ", EMPRESA.cnpj, " \xB7 ", EMPRESA.endereco))), adiantamentos.some(a => a.status === "pendente") && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14,
@@ -8848,7 +8885,7 @@ function SecaoLocais({
       fontSize: 15,
       color: C.cinza
     }
-  }, "📍 Local de trabalho (restrição de raio nas batidas)"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCCD Local de trabalho (restri\xE7\xE3o de raio nas batidas)"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -8898,7 +8935,7 @@ function SecaoLocais({
       color: C.cinza,
       marginTop: 8
     }
-  }, "Sem nenhum local ativo, as batidas ficam liberadas sem verificação. Dica: cadastre estando dentro do local e considere a precisão do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos)."), locais.length > 0 && locais.map(l => /*#__PURE__*/React.createElement("div", {
+  }, "Sem nenhum local ativo, as batidas ficam liberadas sem verifica\xE7\xE3o. Dica: cadastre estando dentro do local e considere a precis\xE3o do GPS ao definir o raio (50 m cobre bem a maioria dos casos urbanos)."), locais.length > 0 && locais.map(l => /*#__PURE__*/React.createElement("div", {
     key: l.id,
     style: {
       display: "flex",
@@ -8918,7 +8955,7 @@ function SecaoLocais({
       color: C.cinza,
       fontSize: 12
     }
-  }, "· ", (+l.latitude).toFixed(5), ", ", (+l.longitude).toFixed(5), " · raio ", l.raio, " m")), /*#__PURE__*/React.createElement("span", {
+  }, "\xB7 ", (+l.latitude).toFixed(5), ", ", (+l.longitude).toFixed(5), " \xB7 raio ", l.raio, " m")), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
       gap: 8,
@@ -8999,7 +9036,7 @@ function TelaGestor({
     }
   }, "Painel do gestor ", pend > 0 && /*#__PURE__*/React.createElement("span", {
     style: S.tag(C.vermelho, "#fff")
-  }, pend, " pendência(s)")), (() => {
+  }, pend, " pend\xEAncia(s)")), (() => {
     const afetados = usuarios.filter(u => u.papel !== "gestor").map(u => ({
       u,
       imp: impactoMudancaIntervalo(u.id, registros)
@@ -9018,14 +9055,14 @@ function TelaGestor({
         fontSize: 14,
         color: C.vermelho
       }
-    }, "📌 Revisão necessária: jornada e intervalo corrigidos"), /*#__PURE__*/React.createElement("p", {
+    }, "\uD83D\uDCCC Revis\xE3o necess\xE1ria: jornada e intervalo corrigidos"), /*#__PURE__*/React.createElement("p", {
       style: {
         fontSize: 12.5,
         color: C.branco,
         margin: "8px 0 0",
         lineHeight: 1.6
       }
-    }, "Até ", fmtData(MUDANCA_INTERVALO.data), " o sistema usava intervalo de ", /*#__PURE__*/React.createElement("b", null, "2 horas"), " e jornada de ", /*#__PURE__*/React.createElement("b", null, "8 horas"), ". Os valores reais da empresa são", /*#__PURE__*/React.createElement("b", null, " 1 hora de intervalo e 9 horas de jornada"), " (8h às 18h). O banco de horas é recalculado ao vivo, então os saldos ", /*#__PURE__*/React.createElement("b", null, "já estão corretos"), " — mas quem registrava a saída e a volta do almoço vinha acumulando ", /*#__PURE__*/React.createElement("b", null, "1 hora de crédito indevida por dia"), ", que deixou de existir. Confira se alguma folga aprovada ou hora extra paga com base no saldo antigo precisa ser acertada."), /*#__PURE__*/React.createElement("div", {
+    }, "At\xE9 ", fmtData(MUDANCA_INTERVALO.data), " o sistema usava intervalo de ", /*#__PURE__*/React.createElement("b", null, "2 horas"), " e jornada de ", /*#__PURE__*/React.createElement("b", null, "8 horas"), ". Os valores reais da empresa s\xE3o", /*#__PURE__*/React.createElement("b", null, " 1 hora de intervalo e 9 horas de jornada"), " (8h \xE0s 18h). O banco de horas \xE9 recalculado ao vivo, ent\xE3o os saldos ", /*#__PURE__*/React.createElement("b", null, "j\xE1 est\xE3o corretos"), " \u2014 mas quem registrava a sa\xEDda e a volta do almo\xE7o vinha acumulando ", /*#__PURE__*/React.createElement("b", null, "1 hora de cr\xE9dito indevida por dia"), ", que deixou de existir. Confira se alguma folga aprovada ou hora extra paga com base no saldo antigo precisa ser acertada."), /*#__PURE__*/React.createElement("div", {
       style: {
         marginTop: 10
       }
@@ -9048,7 +9085,7 @@ function TelaGestor({
         color: C.cinza,
         fontSize: 12
       }
-    }, "· ", imp.diasAfetados, " dia(s) afetado(s)")), /*#__PURE__*/React.createElement("span", {
+    }, "\xB7 ", imp.diasAfetados, " dia(s) afetado(s)")), /*#__PURE__*/React.createElement("span", {
       style: {
         color: imp.minutosDiferenca < 0 ? C.vermelho : C.verde,
         fontWeight: 700
@@ -9060,7 +9097,7 @@ function TelaGestor({
         marginTop: 10,
         lineHeight: 1.5
       }
-    }, "Só entram nesta conta os dias em que o colaborador registrou ", /*#__PURE__*/React.createElement("b", null, "saída e volta do almoço"), " (4 marcações). Em dias com um único par de marcações o resultado é o mesmo nas duas regras — a correção do intervalo e a da jornada se anulam."));
+    }, "S\xF3 entram nesta conta os dias em que o colaborador registrou ", /*#__PURE__*/React.createElement("b", null, "sa\xEDda e volta do almo\xE7o"), " (4 marca\xE7\xF5es). Em dias com um \xFAnico par de marca\xE7\xF5es o resultado \xE9 o mesmo nas duas regras \u2014 a corre\xE7\xE3o do intervalo e a da jornada se anulam."));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
@@ -9074,14 +9111,14 @@ function TelaGestor({
       fontSize: 14,
       color: C.amarelo
     }
-  }, "⚠️ Como funcionam os lembretes e a saída automática"), /*#__PURE__*/React.createElement("p", {
+  }, "\u26A0\uFE0F Como funcionam os lembretes e a sa\xEDda autom\xE1tica"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.branco,
       margin: "8px 0 0",
       lineHeight: 1.6
     }
-  }, "Este app roda 100% no navegador do colaborador, ", /*#__PURE__*/React.createElement("b", null, "sem servidor próprio rodando o tempo todo"), ". Por isso:"), /*#__PURE__*/React.createElement("ul", {
+  }, "Este app roda 100% no navegador do colaborador, ", /*#__PURE__*/React.createElement("b", null, "sem servidor pr\xF3prio rodando o tempo todo"), ". Por isso:"), /*#__PURE__*/React.createElement("ul", {
     style: {
       fontSize: 12.5,
       color: C.branco,
@@ -9089,13 +9126,13 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada contratual de 9h/dia:"), " 8h às 18h com 1 hora de intervalo (seg-sex) + sábado de 5h = ", /*#__PURE__*/React.createElement("b", null, "50h semanais"), ". O dia normal fecha em zero no banco de horas; só sobra saldo quem sai depois das 18h. ", /*#__PURE__*/React.createElement("b", null, "Atenção jurídica:"), " a Constituição (art. 7º XIII) fixa 44h semanais — as 6h excedentes precisam estar cobertas por acordo de compensação/banco de horas ou pagas como extraordinárias. Vale confirmar o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de bater ponto (8h/9h e almoço):"), " só disparam ", /*#__PURE__*/React.createElement("b", null, "enquanto o colaborador estiver com o app aberto"), " no navegador. Se o app estiver fechado no horário, o lembrete daquele momento não aparece (e não vira notificação push de celular)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Batida automática de saída (fecha o dia às 18h/13h se esqueceram de bater):"), " depende de uma rotina agendada ", /*#__PURE__*/React.createElement("b", null, "no banco de dados (Supabase/pg_cron)"), ", que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se não, a saída não será preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h está ligado.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada contratual de 9h/dia:"), " 8h \xE0s 18h com 1 hora de intervalo (seg-sex) + s\xE1bado de 5h = ", /*#__PURE__*/React.createElement("b", null, "50h semanais"), ". O dia normal fecha em zero no banco de horas; s\xF3 sobra saldo quem sai depois das 18h. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h semanais \u2014 as 6h excedentes precisam estar cobertas por acordo de compensa\xE7\xE3o/banco de horas ou pagas como extraordin\xE1rias. Vale confirmar o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de bater ponto (8h/9h e almo\xE7o):"), " s\xF3 disparam ", /*#__PURE__*/React.createElement("b", null, "enquanto o colaborador estiver com o app aberto"), " no navegador. Se o app estiver fechado no hor\xE1rio, o lembrete daquele momento n\xE3o aparece (e n\xE3o vira notifica\xE7\xE3o push de celular)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Batida autom\xE1tica de sa\xEDda (fecha o dia \xE0s 18h/13h se esqueceram de bater):"), " depende de uma rotina agendada ", /*#__PURE__*/React.createElement("b", null, "no banco de dados (Supabase/pg_cron)"), ", que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se n\xE3o, a sa\xEDda n\xE3o ser\xE1 preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h est\xE1 ligado.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "Recomendação: oriente a equipe a manter o app aberto durante o expediente pra receber os lembretes, e trate-os como apoio — a responsabilidade de bater o ponto é sempre do colaborador.")), /*#__PURE__*/React.createElement("div", {
+  }, "Recomenda\xE7\xE3o: oriente a equipe a manter o app aberto durante o expediente pra receber os lembretes, e trate-os como apoio \u2014 a responsabilidade de bater o ponto \xE9 sempre do colaborador.")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14,
@@ -9108,14 +9145,14 @@ function TelaGestor({
       fontSize: 14,
       color: C.amarelo
     }
-  }, "⚠️ O que a biometria do celular comprova (e o que NÃO comprova)"), /*#__PURE__*/React.createElement("p", {
+  }, "\u26A0\uFE0F O que a biometria do celular comprova (e o que N\xC3O comprova)"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12.5,
       color: C.branco,
       margin: "8px 0 0",
       lineHeight: 1.6
     }
-  }, "A verificação usa ", /*#__PURE__*/React.createElement("b", null, "WebAuthn"), " com o Face ID / digital do aparelho do colaborador. É importante entender o alcance real dessa tecnologia:"), /*#__PURE__*/React.createElement("ul", {
+  }, "A verifica\xE7\xE3o usa ", /*#__PURE__*/React.createElement("b", null, "WebAuthn"), " com o Face ID / digital do aparelho do colaborador. \xC9 importante entender o alcance real dessa tecnologia:"), /*#__PURE__*/React.createElement("ul", {
     style: {
       fontSize: 12.5,
       color: C.branco,
@@ -9123,14 +9160,14 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que comprova:"), " que quem bateu o ponto ", /*#__PURE__*/React.createElement("b", null, "tem o aparelho cadastrado em mãos"), " e passou pela checagem biométrica configurada ", /*#__PURE__*/React.createElement("b", null, "naquele aparelho"), "."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que NÃO comprova:"), " não é reconhecimento facial contra uma foto de referência da empresa. O celular apenas responde \"a biometria cadastrada neste aparelho foi reconhecida\" — então ", /*#__PURE__*/React.createElement("b", null, "qualquer pessoa cujo rosto ou digital esteja cadastrado naquele celular"), " (um familiar no Face ID alternativo, uma digital adicional) ", /*#__PURE__*/React.createElement("b", null, "conseguiria bater o ponto"), ". O sistema não distingue."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Validação criptográfica: feita no servidor ✔"), " — a assinatura devolvida pelo aparelho é conferida por uma função no servidor (Supabase Edge Function) antes de a marcação ser gravada: desafio de uso único gerado no backend (impede replay), conferência de origem e domínio, exigência do flag de verificação biométrica, validação da assinatura contra a chave pública cadastrada e checagem do contador do autenticador (detecta clonagem de credencial).")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que comprova:"), " que quem bateu o ponto ", /*#__PURE__*/React.createElement("b", null, "tem o aparelho cadastrado em m\xE3os"), " e passou pela checagem biom\xE9trica configurada ", /*#__PURE__*/React.createElement("b", null, "naquele aparelho"), "."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que N\xC3O comprova:"), " n\xE3o \xE9 reconhecimento facial contra uma foto de refer\xEAncia da empresa. O celular apenas responde \"a biometria cadastrada neste aparelho foi reconhecida\" \u2014 ent\xE3o ", /*#__PURE__*/React.createElement("b", null, "qualquer pessoa cujo rosto ou digital esteja cadastrado naquele celular"), " (um familiar no Face ID alternativo, uma digital adicional) ", /*#__PURE__*/React.createElement("b", null, "conseguiria bater o ponto"), ". O sistema n\xE3o distingue."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Valida\xE7\xE3o criptogr\xE1fica: feita no servidor \u2714"), " \u2014 a assinatura devolvida pelo aparelho \xE9 conferida por uma fun\xE7\xE3o no servidor (Supabase Edge Function) antes de a marca\xE7\xE3o ser gravada: desafio de uso \xFAnico gerado no backend (impede replay), confer\xEAncia de origem e dom\xEDnio, exig\xEAncia do flag de verifica\xE7\xE3o biom\xE9trica, valida\xE7\xE3o da assinatura contra a chave p\xFAblica cadastrada e checagem do contador do autenticador (detecta clonagem de credencial).")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
       margin: "8px 0 0",
       lineHeight: 1.5
     }
-  }, "Como mitigar a limitação que resta: combine a biometria com a ", /*#__PURE__*/React.createElement("b", null, "cerca geográfica"), " (já ativa) e oriente a equipe a não cadastrar terceiros no Face ID/digital do aparelho usado pro ponto — de preferência, registre isso no regulamento interno. Marcações feitas ", /*#__PURE__*/React.createElement("b", null, "sem"), " verificação biométrica aparecem sinalizadas no espelho e na trilha de auditoria.")), /*#__PURE__*/React.createElement("div", {
+  }, "Como mitigar a limita\xE7\xE3o que resta: combine a biometria com a ", /*#__PURE__*/React.createElement("b", null, "cerca geogr\xE1fica"), " (j\xE1 ativa) e oriente a equipe a n\xE3o cadastrar terceiros no Face ID/digital do aparelho usado pro ponto \u2014 de prefer\xEAncia, registre isso no regulamento interno. Marca\xE7\xF5es feitas ", /*#__PURE__*/React.createElement("b", null, "sem"), " verifica\xE7\xE3o biom\xE9trica aparecem sinalizadas no espelho e na trilha de auditoria.")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
@@ -9149,12 +9186,12 @@ function TelaGestor({
       fontSize: 15,
       color: C.cinza
     }
-  }, "🎮 Ranking de gamificação"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDFAE Ranking de gamifica\xE7\xE3o"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: C.cinza
     }
-  }, "🎖 reconhecimento interno · somente leitura · sem impacto salarial, no Prêmio Performance ou em avaliação formal")), ranking.map((r, i) => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDF96 reconhecimento interno \xB7 somente leitura \xB7 sem impacto salarial, no Pr\xEAmio Performance ou em avalia\xE7\xE3o formal")), ranking.map((r, i) => /*#__PURE__*/React.createElement("div", {
     key: r.u.id,
     style: {
       display: "flex",
@@ -9219,7 +9256,7 @@ function TelaGestor({
       fontSize: 15,
       color: C.cinza
     }
-  }, "Equipe — assiduidade (últimos 10 dias)"), /*#__PURE__*/React.createElement("table", {
+  }, "Equipe \u2014 assiduidade (\xFAltimos 10 dias)"), /*#__PURE__*/React.createElement("table", {
     style: {
       width: "100%",
       borderCollapse: "collapse",
@@ -9235,7 +9272,7 @@ function TelaGestor({
     style: {
       padding: 6
     }
-  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Dias"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Banco"), /*#__PURE__*/React.createElement("th", null, "Prêmio"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, equipe.map(({
+  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Dias"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Banco"), /*#__PURE__*/React.createElement("th", null, "Pr\xEAmio"), /*#__PURE__*/React.createElement("th", null, "Status"))), /*#__PURE__*/React.createElement("tbody", null, equipe.map(({
     u,
     a
   }) => {
@@ -9264,11 +9301,11 @@ function TelaGestor({
       }
     }, hmm(a.saldoMin)), /*#__PURE__*/React.createElement("td", null, e.elegivel ? /*#__PURE__*/React.createElement("span", {
       style: S.tag(C.verde, "#fff")
-    }, "ELEGÍVEL", e.bonusPontualidade ? " +10%" : "") : /*#__PURE__*/React.createElement("span", {
+    }, "ELEG\xCDVEL", e.bonusPontualidade ? " +10%" : "") : /*#__PURE__*/React.createElement("span", {
       style: S.tag(C.vermelho, "#fff")
-    }, "NÃO ELEGÍVEL")), /*#__PURE__*/React.createElement("td", null, a.atrasos >= 3 || a.faltas > 0 ? /*#__PURE__*/React.createElement("span", {
+    }, "N\xC3O ELEG\xCDVEL")), /*#__PURE__*/React.createElement("td", null, a.atrasos >= 3 || a.faltas > 0 ? /*#__PURE__*/React.createElement("span", {
       style: S.tag(C.vermelho, "#fff")
-    }, "ATENÇÃO") : a.diasTrab === 0 ? /*#__PURE__*/React.createElement("span", {
+    }, "ATEN\xC7\xC3O") : a.diasTrab === 0 ? /*#__PURE__*/React.createElement("span", {
       style: S.tag("#1A2F4A", "#C7D2E4")
     }, "SEM DADOS") : /*#__PURE__*/React.createElement("span", {
       style: S.tag(C.verde, "#fff")
@@ -9397,7 +9434,7 @@ function TelaGestor({
       flexWrap: "wrap"
     }
   }, /*#__PURE__*/React.createElement("select", {
-    "aria-label": "Filtrar por tipo de ação",
+    "aria-label": "Filtrar por tipo de a\xE7\xE3o",
     style: {
       ...S.input,
       width: 200,
@@ -9407,9 +9444,9 @@ function TelaGestor({
     onChange: e => setFiltroAcao(e.target.value)
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "Todas as ações"), /*#__PURE__*/React.createElement("option", {
+  }, "Todas as a\xE7\xF5es"), /*#__PURE__*/React.createElement("option", {
     value: "__sensiveis"
-  }, "⚠ Só ações sensíveis"), acoesDisponiveis.map(a => /*#__PURE__*/React.createElement("option", {
+  }, "\u26A0 S\xF3 a\xE7\xF5es sens\xEDveis"), acoesDisponiveis.map(a => /*#__PURE__*/React.createElement("option", {
     key: a,
     value: a
   }, a))), /*#__PURE__*/React.createElement("select", {
@@ -9428,7 +9465,7 @@ function TelaGestor({
     value: u.id
   }, u.nome))), /*#__PURE__*/React.createElement("input", {
     "aria-label": "Buscar na trilha de auditoria",
-    placeholder: "Buscar no texto…",
+    placeholder: "Buscar no texto\u2026",
     style: {
       ...S.input,
       flex: 1,
@@ -9455,7 +9492,7 @@ function TelaGestor({
       a.click();
       URL.revokeObjectURL(url);
     }
-  }, "⬇ Exportar CSV")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2B07 Exportar CSV")), /*#__PURE__*/React.createElement("div", {
     style: {
       maxHeight: 300,
       overflowY: "auto",
@@ -9478,11 +9515,11 @@ function TelaGestor({
       borderLeft: ACOES_SENSIVEIS.includes(l.acao) ? `3px solid ${C.amarelo}` : "none",
       paddingLeft: ACOES_SENSIVEIS.includes(l.acao) ? 8 : 0
     }
-  }, fmtDataHora(l.ts), " · ", /*#__PURE__*/React.createElement("span", {
+  }, fmtDataHora(l.ts), " \xB7 ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: ACOES_SENSIVEIS.includes(l.acao) ? C.amarelo : C.cinza
     }
-  }, l.acao), " · ", /*#__PURE__*/React.createElement("b", null, nome(l.userId)), " · ", l.detalhe)))));
+  }, l.acao), " \xB7 ", /*#__PURE__*/React.createElement("b", null, nome(l.userId)), " \xB7 ", l.detalhe)))));
 }
 document.addEventListener("DOMContentLoaded", function () {
   ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
