@@ -2124,7 +2124,62 @@ export default function App() {
     catch (e) { console.warn("[auditoria adiantamento]", e.message); }
   };
 
-  /* ---------- aprovações do gestor ---------- */
+  /* ---------- rescisao e exames ocupacionais (gestor) ---------- */
+   const criarRescisao = async (dados) => {
+      if (!uuidValido(dados.userId) && !demo) throw new Error("Colaborador invalido.");
+      if (!dataValida(dados.dataDeslig)) throw new Error("Data de desligamento invalida.");
+      if (!MOTIVOS_RESCISAO[dados.motivo]) throw new Error("Motivo de desligamento invalido.");
+      const u = usuarios.find(x => x.id === dados.userId);
+      if (!u) throw new Error("Colaborador nao encontrado.");
+      const motivoInfo = MOTIVOS_RESCISAO[dados.motivo];
+      const avisoTipo = motivoInfo.avisoDevido ? (dados.avisoTipo === "indenizado" ? "indenizado" : "trabalhado") : null;
+      const calc = calcRescisao(u, dados.dataDeslig, dados.motivo, avisoTipo);
+      const linha = {
+         usuario_id: u.id, data_desligamento: dados.dataDeslig, motivo: dados.motivo, aviso_tipo: avisoTipo,
+         calculo: calc, total_proventos: calc.totalProventos, total_descontos: calc.totalDescontos, valor_liquido: calc.liquido,
+         status: "rascunho", criado_por: user.id,
+      };
+      let novo;
+      if (demo) novo = mapRescisao({ id: `r${Date.now()}`, ...linha, criado_em: iso(new Date()) });
+      else { const [row] = await sbInsert(sessao.token, "rescisoes", [linha]); novo = mapRescisao(row); }
+      setRescisoes(rs => [novo, ...rs]);
+      try { await auditar("rescisao_criada", `${user.nome} calculou rescisao de ${u.nome} - motivo: ${motivoInfo.label} - desligamento ${fmtData(dados.dataDeslig)} - liquido estimado ${brl(calc.liquido)} (rascunho)`); }
+      catch (e) { setErroDados(`Calculo salvo, mas a trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
+      return novo;
+   };
+   
+   const confirmarRescisao = async (id) => {
+      const r = rescisoes.find(x => x.id === id);
+      if (!r || r.status !== "rascunho") return;
+      const agora = iso(new Date());
+      if (!demo) await sbUpdate(sessao.token, "rescisoes", `id=eq.${id}`, { status: "confirmado", confirmado_em: agora });
+      setRescisoes(rs => rs.map(x => x.id === id ? { ...x, status: "confirmado", confirmadoEm: agora } : x));
+      try { await salvarUsuario(r.userId, { ativo: false }); } catch (e) { setErroDados(`Rescisao confirmada, mas a desativacao do cadastro falhou (${mensagemAmigavel(e)}) - desative manualmente em Equipe.`); }
+      const nomeCol = usuarios.find(u => u.id === r.userId)?.nome || r.userId;
+      try { await auditar("rescisao_confirmada", `${user.nome} CONFIRMOU a rescisao de ${nomeCol} - liquido ${brl(r.liquido)} - colaborador desativado`); }
+      catch (e) { setErroDados(`Rescisao confirmada, mas a trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
+   };
+   
+   const criarExame = async (dados) => {
+      if (!uuidValido(dados.userId) && !demo) throw new Error("Colaborador invalido.");
+      if (!TIPOS_EXAME[dados.tipo]) throw new Error("Tipo de exame invalido.");
+      if (!dataValida(dados.data)) throw new Error("Data do exame invalida.");
+      if (dados.resultado && !RESULTADOS_EXAME[dados.resultado]) throw new Error("Resultado de exame invalido.");
+      const clinica = limparTexto(dados.clinica, LIMITES.nome) || null;
+      const observacao = limparTexto(dados.observacao, LIMITES.obs) || null;
+      const path = dados.anexo ? await sbUpload(sessao.token, dados.userId, dados.anexo) : null;
+      const linha = { usuario_id: dados.userId, tipo: dados.tipo, data_exame: dados.data, resultado: dados.resultado || null, clinica, anexo_url: path, observacao, criado_por: user.id };
+      let novo;
+      if (demo) novo = mapExame({ id: `ex${Date.now()}`, ...linha, criado_em: iso(new Date()) });
+      else { const [row] = await sbInsert(sessao.token, "exames_ocupacionais", [linha]); novo = mapExame(row); }
+      setExamesOcupacionais(ex => [novo, ...ex]);
+      const nomeCol = usuarios.find(u => u.id === dados.userId)?.nome || dados.userId;
+      try { await auditar("exame_ocupacional_criado", `${user.nome} registrou exame ${TIPOS_EXAME[dados.tipo]} de ${nomeCol}${dados.resultado ? ` - resultado: ${RESULTADOS_EXAME[dados.resultado]}` : " - resultado pendente"}`); }
+      catch (e) { setErroDados(`Exame registrado, mas a trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
+      return novo;
+   };
+   
+   /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
     const mapa = {
       "Justificativas": { tabela: "justificativas", setLista: setJustificativas, lista: justificativas, status: aprovar ? "aprovada" : "rejeitada" },
@@ -3404,7 +3459,7 @@ function ModalConfirm({ titulo, texto, rotuloOk = "Confirmar", onConfirmar, onCa
    falha visível) e destacadas na trilha. São as que mexem em dinheiro, acesso ou registro de jornada. */
 const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada",
   "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto",
-  "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao"];
+  "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado"];
 
 const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
 
