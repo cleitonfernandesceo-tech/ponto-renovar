@@ -767,6 +767,8 @@ const mapFolhaPg = (r) => ({
   status: r.status, fechadoEm: r.fechado_em,
 });
 const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
+const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.data_desligamento || "").slice(0, 10), motivo: r.motivo, motivoLabel: MOTIVOS_RESCISAO[r.motivo]?.label || r.motivo, avisoTipo: r.aviso_tipo, calculo: r.calculo || null, totalProventos: +r.total_proventos || 0, totalDescontos: +r.total_descontos || 0, liquido: +r.valor_liquido || 0, status: r.status, criadoEm: r.criado_em, confirmadoEm: r.confirmado_em });
+const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, criadoEm: r.criado_em });
 const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status });
 
 const mapUser = (r, consentiu) => ({
