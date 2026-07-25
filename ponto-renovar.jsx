@@ -1427,7 +1427,7 @@ export default function App() {
       // ---------- FASE 2: complementos (não bloqueiam a tela de ponto) ----------
       (async () => {
         try {
-          const [marcsCompleto, flts, justs, ates, fers, auds, convs, flgs, fpgs, adts, gfs, rkg, remun] = await Promise.all([
+          const [marcsCompleto, flts, justs, ates, fers, auds, convs, flgs, fpgs, adts, gfs, rkg, remun, rescs, exms] = await Promise.all([
             sbSelect(token, "marcacoes", "select=*&order=nsr"), // histórico completo: AFD/AEJ e relatórios exigem o período inteiro
             sbSelect(token, "faltas", "select=*&order=data"),
             sbSelect(token, "justificativas", "select=*&order=criado_em.desc"),
@@ -1441,6 +1441,8 @@ export default function App() {
             perfil.papel === "gestor" ? sbSelect(token, "guias_fiscais", "select=*&order=competencia.desc") : Promise.resolve([]),
             sbSelect(token, "ranking_pontos_publico", "select=*"),
             perfil.papel === "gestor" ? sbSelect(token, "usuarios_remuneracao", "select=*") : Promise.resolve([]),
+             sbSelect(token, "rescisoes", "select=*&order=criado_em.desc"),
+             sbSelect(token, "exames_ocupacionais", "select=*&order=criado_em.desc"),
           ]);
           // Substitui o recorte da fase 1 pelo histórico completo, preservando batidas
           // que ainda estão na fila (sem NSR) e correções de saída já aplicadas em memória.
@@ -1464,6 +1466,8 @@ export default function App() {
           setFolhasPg(fpgs.map(mapFolhaPg));
           setAdiantamentos(adts.map(mapAdiant));
           setGuias(gfs.map(mapGuia));
+           setRescisoes(rescs.map(mapRescisao));
+           setExamesOcupacionais(exms.map(mapExame));
           setRankingUsuarios(rkg.map(r => ({ id: r.id, nome: r.nome, papel: r.tipo, pontos: +r.pontos_total || 0, streak: +r.streak_atual || 0 })));
           // Remuneração só existe na memória do gestor; pro colaborador a lista vem vazia.
           if (remun.length) setUsuarios(us => us.map(u => {
