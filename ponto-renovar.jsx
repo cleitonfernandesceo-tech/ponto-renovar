@@ -1327,6 +1327,8 @@ export default function App() {
   const [folhasPg, setFolhasPg] = useState([]);
   const [adiantamentos, setAdiantamentos] = useState([]);
   const [guias, setGuias] = useState([]);
+   const [rescisoes, setRescisoes] = useState([]);
+   const [examesOcupacionais, setExamesOcupacionais] = useState([]);
   const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
