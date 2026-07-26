@@ -2600,6 +2600,60 @@ function baixarArquivo(conteudo, nome) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/* ---------- notificacao real no aparelho ----------
+   No iPhone o construtor new Notification() não existe (nem instalado): só o
+   service worker consegue exibir aviso do sistema. Por isso tentamos primeiro
+   o registration.showNotification e caímos pro construtor no desktop. */
+const TELAS_ATALHO = ["ponto", "espelho", "banco", "holerite", "ferias"];
+function telaInicial() {
+  try {
+    const t = new URLSearchParams(window.location.search).get("ir");
+    return TELAS_ATALHO.indexOf(t) >= 0 ? t : "ponto";
+  } catch {
+    return "ponto";
+  }
+}
+async function notificarAparelho(titulo, corpo, marca) {
+  const opcoes = {
+    body: corpo,
+    tag: marca || "ponto-renovar",
+    lang: "pt-BR",
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+    data: {
+      url: "./"
+    }
+  };
+  try {
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && typeof reg.showNotification === "function") {
+        await reg.showNotification(titulo, opcoes);
+        return "aparelho";
+      }
+    }
+  } catch {}
+  try {
+    new Notification(titulo, opcoes);
+    return "janela";
+  } catch {}
+  return "nenhum";
+}
+function appInstalado() {
+  try {
+    if (window.__APP_PWA && typeof window.__APP_PWA.instalado === "boolean") return window.__APP_PWA.instalado;
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+    if (window.navigator && window.navigator.standalone === true) return true;
+  } catch {}
+  return false;
+}
+function legendaLembretes(status, instalado) {
+  if (status === "granted") return "chegam como aviso do celular \u2714 \u2014 o app precisa estar aberto ou ter sido usado h\u00e1 pouco; n\u00e3o \u00e9 push de servidor.";
+  if (status === "denied") return "aviso do celular bloqueado nas configura\u00e7\u00f5es do navegador \u2014 o lembrete continua aparecendo dentro do app.";
+  if (status === "unsupported") return instalado ? "este aparelho n\u00e3o permite aviso do sistema \u2014 o lembrete aparece dentro do app." : "adicione o app \u00e0 tela de in\u00edcio para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
+  return "toque em Ativar para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
+}
 function MedidorPremio({
   m
 }) {
@@ -3015,7 +3069,7 @@ function App() {
       return null;
     }
   });
-  const [tela, setTela] = useState("ponto");
+  const [tela, setTela] = useState(telaInicial);
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
@@ -3984,13 +4038,7 @@ function App() {
           titulo,
           corpo
         });
-        if (notifStatus === "granted") {
-          try {
-            new Notification(titulo, {
-              body: corpo
-            });
-          } catch {}
-        }
+        if (notifStatus === "granted") notificarAparelho(titulo, corpo, id + "-" + chaveDia);
       };
       if (h === 8 && total === 0) disparar("ent8", "⏰ Hora de bater o ponto", "Seu expediente começou às 8:00 — registre sua entrada.");
       if (h === 9 && total === 0) disparar("ent9", "⏰ Entrada ainda não registrada", "Já passa das 9:00 e sua entrada de hoje não foi registrada.");
@@ -5864,7 +5912,7 @@ function TelaPonto({
       marginTop: 6,
       lineHeight: 1.6
     }
-  }, GEO_MOTIVOS.permissao_negada.comoResolver)), notifStatus === "default" && /*#__PURE__*/React.createElement("div", {
+  }, GEO_MOTIVOS.permissao_negada.comoResolver)), (notifStatus === "default" || notifStatus === "unsupported") && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -5872,20 +5920,25 @@ function TelaPonto({
       marginTop: 10,
       flexWrap: "wrap"
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, notifStatus === "default" ? /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       fontSize: 12,
       padding: "8px 14px"
     },
     onClick: onPedirNotif
-  }, "\uD83D\uDD14 Ativar notifica\xE7\xF5es do navegador (lembretes de ponto)")), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD14 Ativar aviso de lembrete no celular") : !appInstalado() && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: C.cinza
+    }
+  }, "\uD83D\uDD14 Para receber aviso do celular, adicione o app \xE0 tela de in\xEDcio.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "\u23F0 Os lembretes de batida (entrada e almo\xE7o) s\xF3 funcionam ", /*#__PURE__*/React.createElement("b", null, "com o app aberto no navegador"), " \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push.", notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
+  }, "\u23F0 Lembretes de entrada e almo\xE7o: ", legendaLembretes(notifStatus, appInstalado())), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
     role: "alert",
     style: {
       ...S.card,
@@ -10818,7 +10871,7 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 9h/dia"), " (8h \xE0s 18h com 1h de intervalo) + s\xE1bado de 5h = 50h semanais. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h \u2014 as 6h excedentes precisam de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " s\xF3 disparam com o app aberto no navegador \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push de celular."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h/13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 9h/dia"), " (8h \xE0s 18h com 1h de intervalo) + s\xE1bado de 5h = 50h semanais. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h \u2014 as 6h excedentes precisam de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio), mas dependem do app aberto ou rec\xE9m-usado \u2014 n\xE3o s\xE3o push de servidor."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h/13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
@@ -11220,7 +11273,7 @@ document.addEventListener("DOMContentLoaded", function () {
      O service worker guarda somente o casco do app (index.html, React, icones).
      Nenhuma chamada ao Supabase passa pelo cache: dado de ponto nao fica gravado ali. -->
 <script>
-window.__APP_VERSAO = '2026.07.25-2';
+window.__APP_VERSAO = '2026.07.25-3';
 (function () {
   var instalado = false;
   try {

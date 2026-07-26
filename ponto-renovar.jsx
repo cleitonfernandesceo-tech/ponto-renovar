@@ -1523,6 +1523,59 @@ function baixarArquivo(conteudo, nome) {
 }
 
 
+/* ---------- notificacao real no aparelho ----------
+   No iPhone o construtor new Notification() não existe (nem instalado): só o
+   service worker consegue exibir aviso do sistema. Por isso tentamos primeiro
+   o registration.showNotification e caímos pro construtor no desktop. */
+const TELAS_ATALHO = ["ponto", "espelho", "banco", "holerite", "ferias"];
+
+function telaInicial() {
+  try {
+    const t = new URLSearchParams(window.location.search).get("ir");
+    return TELAS_ATALHO.indexOf(t) >= 0 ? t : "ponto";
+  } catch { return "ponto"; }
+}
+
+async function notificarAparelho(titulo, corpo, marca) {
+  const opcoes = {
+    body: corpo,
+    tag: marca || "ponto-renovar",
+    lang: "pt-BR",
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+    data: { url: "./" },
+  };
+  try {
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && typeof reg.showNotification === "function") {
+        await reg.showNotification(titulo, opcoes);
+        return "aparelho";
+      }
+    }
+  } catch {}
+  try { new Notification(titulo, opcoes); return "janela"; } catch {}
+  return "nenhum";
+}
+
+function appInstalado() {
+  try {
+    if (window.__APP_PWA && typeof window.__APP_PWA.instalado === "boolean") return window.__APP_PWA.instalado;
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+    if (window.navigator && window.navigator.standalone === true) return true;
+  } catch {}
+  return false;
+}
+
+function legendaLembretes(status, instalado) {
+  if (status === "granted") return "chegam como aviso do celular \u2714 \u2014 o app precisa estar aberto ou ter sido usado h\u00e1 pouco; n\u00e3o \u00e9 push de servidor.";
+  if (status === "denied") return "aviso do celular bloqueado nas configura\u00e7\u00f5es do navegador \u2014 o lembrete continua aparecendo dentro do app.";
+  if (status === "unsupported") return instalado
+    ? "este aparelho n\u00e3o permite aviso do sistema \u2014 o lembrete aparece dentro do app."
+    : "adicione o app \u00e0 tela de in\u00edcio para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
+  return "toque em Ativar para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
+}
+
 function MedidorPremio({ m }) {
   const pct = Math.min(1, m.limite ? m.valor / m.limite : 0);
   const cor = m.estourou ? C.vermelho : corMedidor(pct);
@@ -1700,7 +1753,7 @@ export default function App() {
   const [notifStatus, setNotifStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const lembretesDisparados = useRef({});
   const [conviteToken] = useState(() => { try { return new URLSearchParams(window.location.search).get("convite"); } catch { return null; } });
-  const [tela, setTela] = useState("ponto");
+  const [tela, setTela] = useState(telaInicial);
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
@@ -2269,7 +2322,7 @@ export default function App() {
         if (fired.has(id)) return;
         fired.add(id);
         setLembrete({ id, titulo, corpo });
-        if (notifStatus === "granted") { try { new Notification(titulo, { body: corpo }); } catch {} }
+        if (notifStatus === "granted") notificarAparelho(titulo, corpo, id + "-" + chaveDia);
       };
       if (h === 8 && total === 0) disparar("ent8", "⏰ Hora de bater o ponto", "Seu expediente começou às 8:00 — registre sua entrada.");
       if (h === 9 && total === 0) disparar("ent9", "⏰ Entrada ainda não registrada", "Já passa das 9:00 e sua entrada de hoje não foi registrada.");
@@ -3061,13 +3114,15 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
           <p style={{ fontSize: 12.5, color: C.branco, marginTop: 6, lineHeight: 1.6 }}>{GEO_MOTIVOS.permissao_negada.comoResolver}</p>
         </div>
       )}
-      {notifStatus === "default" && (
+      {(notifStatus === "default" || notifStatus === "unsupported") && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-          <button style={{ ...S.btnGhost, fontSize: 12, padding: "8px 14px" }} onClick={onPedirNotif}>🔔 Ativar notificações do navegador (lembretes de ponto)</button>
+          {notifStatus === "default"
+            ? <button style={{ ...S.btnGhost, fontSize: 12, padding: "8px 14px" }} onClick={onPedirNotif}>🔔 Ativar aviso de lembrete no celular</button>
+            : !appInstalado() && <span style={{ fontSize: 12, color: C.cinza }}>🔔 Para receber aviso do celular, adicione o app à tela de início.</span>}
         </div>
       )}
       <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0" }}>
-        ⏰ Os lembretes de batida (entrada e almoço) só funcionam <b>com o app aberto no navegador</b> — não são notificações push.{notifStatus === "granted" ? " Notificações do navegador: ativas ✔" : notifStatus === "denied" ? " Notificações do navegador: bloqueadas (o banner interno continua funcionando)." : ""}
+        ⏰ Lembretes de entrada e almoço: {legendaLembretes(notifStatus, appInstalado())}
       </p>
       {bloqueioGeo && (
         <div role="alert" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: `4px solid ${C.vermelho}`, textAlign: "left" }}>
@@ -4675,7 +4730,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Limites e transparência do sistema</div>
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
           <li><b>Jornada de 9h/dia</b> (8h às 18h com 1h de intervalo) + sábado de 5h = 50h semanais. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h — as 6h excedentes precisam de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
-          <li><b>Lembretes de batida</b> só disparam com o app aberto no navegador — não são notificações push de celular.</li>
+          <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início), mas dependem do app aberto ou recém-usado — não são push de servidor.</li>
           <li><b>Saída automática (18h/13h)</b> depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h está ativo.</li>
           <li><b>Biometria (WebAuthn)</b> comprova que quem bateu está com o aparelho cadastrado e passou pelo Face ID/digital <b>daquele aparelho</b>. Não é reconhecimento facial contra foto de referência da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto.</li>
           <li><b>Assinatura validada no servidor</b> antes de gravar a marcação — desafio de uso único, conferência de origem, flag de verificação biométrica, assinatura contra a chave pública e contador do autenticador.</li>

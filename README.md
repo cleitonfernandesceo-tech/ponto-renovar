@@ -37,6 +37,17 @@ O `index.html` usa *rede primeiro*: quem tem internet ve sempre a versao mais no
 Ao mexer no `sw.js`, suba a `VERSAO` nele **e** o `window.__APP_VERSAO` no `index.html`
 (os dois precisam bater; o `testes.mjs` reprova se ficarem diferentes).
 
+### Atalhos e lembretes
+
+O `manifest.json` declara atalhos (segurar o icone do app): *Bater ponto*, *Espelho* e *Banco*.
+Cada atalho abre `./?ir=<tela>`; as telas aceitas estao em `TELAS_ATALHO` no `.jsx`.
+
+Os lembretes de batida aparecem como aviso do sistema. No iPhone o construtor
+`new Notification()` nao funciona nem com o app instalado, entao o aviso e sempre
+pedido ao service worker (`registration.showNotification`) e o construtor fica
+apenas como reserva no desktop. Tocar no aviso foca a aba do app ou abre uma nova.
+Os lembretes continuam dependendo do app aberto ou recem-usado - **nao ha push de servidor.**
+
 ## Como publicar uma alteracao
 
 ```bash

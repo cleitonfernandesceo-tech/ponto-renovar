@@ -14,7 +14,7 @@
    sempre a versao mais nova; o cache so entra em cena se a rede falhar.
    ========================================================================= */
 
-const VERSAO = '2026.07.25-2';
+const VERSAO = '2026.07.25-3';
 const CACHE = 'ponto-renovar-' + VERSAO;
 const CASCO = [
   './', './index.html', './manifest.json',
@@ -59,6 +59,20 @@ self.addEventListener('activate', (ev) => {
 self.addEventListener('message', (ev) => {
   if (ev.data === 'ATUALIZAR_AGORA') self.skipWaiting();
   if (ev.data === 'VERSAO' && ev.source) ev.source.postMessage({ tipo: 'VERSAO', versao: VERSAO });
+});
+
+/* Aviso de lembrete: o app pede pro service worker mostrar (unico jeito no
+   iPhone). Ao tocar no aviso, focamos a aba aberta ou abrimos o app. */
+self.addEventListener('notificationclick', (ev) => {
+  ev.notification.close();
+  const alvo = new URL((ev.notification.data && ev.notification.data.url) || './', self.registration.scope).href;
+  ev.waitUntil((async () => {
+    const abas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const aba of abas) {
+      if (aba.url.indexOf(self.registration.scope) === 0) { try { await aba.focus(); return; } catch (e) {} }
+    }
+    try { await self.clients.openWindow(alvo); } catch (e) {}
+  })());
 });
 
 function guardar(cache, req, resp) {

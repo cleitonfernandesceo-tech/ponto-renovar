@@ -39,5 +39,46 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "Registrar ponto",
+      "short_name": "Bater ponto",
+      "description": "Abre direto na tela de registro de ponto",
+      "url": "./?ir=ponto",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Meu espelho do mês",
+      "short_name": "Espelho",
+      "description": "Abre o espelho de ponto do mês",
+      "url": "./?ir=espelho",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Banco de horas",
+      "short_name": "Banco",
+      "description": "Abre o saldo do banco de horas",
+      "url": "./?ir=banco",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

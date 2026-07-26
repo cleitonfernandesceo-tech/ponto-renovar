@@ -264,6 +264,37 @@ t('o backup carrega todas as listas do painel',
    'adiantamentos', 'guias', 'rescisoes', 'exames', 'consImagem', 'aceites', 'locais', 'logs']
     .every((k) => new RegExp('<SecaoBackup[^>]*' + k).test(src.replace(/\n/g, ' '))));
 
+// ══════════════════════════════════════════════════════════════
+secao("Lembrete vira aviso do celular + atalhos do app");
+const blocoNotif = src.slice(src.indexOf("const TELAS_ATALHO"), src.indexOf("function MedidorPremio"));
+t("existe o helper que mostra o aviso pelo service worker",
+  /async function notificarAparelho/.test(blocoNotif) && /reg\.showNotification/.test(blocoNotif));
+t("o helper tenta o service worker ANTES do construtor (iPhone só aceita o 1º)",
+  blocoNotif.indexOf("showNotification") < blocoNotif.indexOf("new Notification"));
+t("o lembrete usa o helper e não mais o construtor direto",
+  src.includes('notificarAparelho(titulo, corpo, id + "-" + chaveDia)') &&
+  !src.includes("try { new Notification(titulo, { body: corpo }); }"));
+t("o service worker reage ao toque no aviso e foca a aba aberta",
+  /addEventListener\('notificationclick'/.test(swTxt) && /clients\.matchAll/.test(swTxt) && /clients\.openWindow/.test(swTxt));
+t("a legenda do lembrete muda conforme a permissão (4 situações)",
+  ["granted", "denied", "unsupported", "return \"toque em Ativar"].every((c) => blocoNotif.includes(c)));
+t("o aviso de transparência explica a condição do iPhone e nega push de servidor",
+  /Lembretes de batida<\/b> viram aviso do celular/.test(src) &&
+  /tela de in\u00edcio|tela de início/.test(src) && /não são push de servidor/.test(src));
+t("o app detecta se está instalado sem quebrar fora do navegador",
+  /function appInstalado/.test(blocoNotif) && /display-mode: standalone/.test(blocoNotif));
+t("o manifest declara atalhos de acesso rápido", Array.isArray(manifest?.shortcuts) && manifest.shortcuts.length >= 2);
+const atalhosJsx = (blocoNotif.match(/const TELAS_ATALHO = \[([^\]]*)\]/) || [])[1] || "";
+t("todo atalho do manifest aponta pra uma tela que existe no app",
+  (manifest?.shortcuts || []).every((a) => {
+    const alvo = String(a.url || "").split("ir=")[1];
+    return !!alvo && atalhosJsx.includes('"' + alvo + '"') && src.includes('tela === "' + alvo + '"');
+  }));
+t("os atalhos usam caminho relativo (subpasta do GitHub Pages)",
+  (manifest?.shortcuts || []).every((a) => String(a.url || "").startsWith("./")));
+t("os atalhos têm ícone existente", (manifest?.shortcuts || []).every((a) => (a.icons || []).every((i) => existsSync(i.src))));
+t("o app abre na tela pedida pelo atalho (?ir=)", /useState\(telaInicial\)/.test(src) && /function telaInicial/.test(blocoNotif));
+
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
