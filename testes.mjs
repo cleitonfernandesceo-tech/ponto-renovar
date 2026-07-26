@@ -13,7 +13,7 @@
  * ------------------------------------------------------------------
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -209,6 +209,32 @@ t('intervalo de 1h batido não acusa o art. 71', !conf(comAlmoco).some((a) => a.
 t('7 dias seguidos acusam a falta de repouso semanal', conf([1, 2, 3, 4, 5, 6, 7].flatMap((d) => dia(d, 8, 0, 18, 0))).some((a) => a.tipo === 'repouso' && a.texto.includes('7º dia')));
 t('dia só com entrada acusa par incompleto (CLT 74 §2º)', conf([dia(1, 8, 0, 18, 0)[0]]).some((a) => a.tipo === 'marcacao'));
 t('semana dentro do contratual não acusa excesso', !conf([1, 2, 3].flatMap((d) => dia(d, 8, 0, 18, 0))).some((a) => a.tipo === 'semana'));
+
+// ==============================================================
+secao('PWA: instalar no celular e abrir sem internet');
+const leia = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : '');
+const htmlPub = leia('index.html');
+const manifestTxt = leia('manifest.json');
+let manifest = null;
+try { manifest = JSON.parse(manifestTxt); } catch (e) { /* testado abaixo */ }
+t('manifest.json existe e é um JSON válido', !!manifest);
+t('o app abre em janela própria (display standalone)', manifest?.display === 'standalone');
+t('caminhos relativos no manifest (funciona em subpasta do GitHub Pages)',
+  manifest?.start_url === './' && manifest?.scope === './');
+t('todos os ícones declarados existem na pasta',
+  Array.isArray(manifest?.icons) && manifest.icons.length >= 3 && manifest.icons.every((i) => existsSync(i.src)));
+t('existe ícone maskable (Android não corta o logo)',
+  !!manifest?.icons?.some((i) => String(i.purpose).includes('maskable')));
+const swTxt = leia('sw.js');
+t('sw.js existe', swTxt.length > 0);
+t('service worker ignora o Supabase: nenhum dado de ponto vai pro cache',
+  swTxt.includes("url.hostname.endsWith('supabase.co')") && !/const CASCO[^;]*supabase/.test(swTxt));
+t('index.html registra o service worker', htmlPub.includes("register('sw.js')"));
+t('index.html aponta para o manifest', /rel="manifest"\s+href="manifest.json"/.test(htmlPub));
+const vSw = (swTxt.match(/VERSAO = '([^']+)'/) || [])[1];
+const vHtml = (htmlPub.match(/__APP_VERSAO = '([^']+)'/) || [])[1];
+t('versão do sw.js e do index.html combinam (senão o cache velho gruda)',
+  !!vSw && vSw === vHtml, (vSw || '?') + ' / ' + (vHtml || '?'));
 
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);

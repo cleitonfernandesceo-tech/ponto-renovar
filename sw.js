@@ -1,0 +1,106 @@
+/* =========================================================================
+   Ponto Renovar - service worker
+   Objetivo: o app abrir na hora e ainda funcionar quando a internet da loja
+   cai, alem de permitir instalar o atalho no celular (PWA).
+
+   O QUE ENTRA NO CACHE: somente o casco do app - index.html, o React vindo
+   do unpkg, o manifest.json e os icones.
+
+   O QUE NUNCA ENTRA NO CACHE: qualquer chamada ao Supabase (login, biometria,
+   batidas, folha, atestados). Nenhum dado de colaborador fica guardado aqui;
+   a fila offline de batidas continua sendo responsabilidade do proprio app.
+
+   index.html usa REDE PRIMEIRO (com 5s de paciencia): quem tem internet ve
+   sempre a versao mais nova; o cache so entra em cena se a rede falhar.
+   ========================================================================= */
+
+const VERSAO = '2026.07.25-1';
+const CACHE = 'ponto-renovar-' + VERSAO;
+const CASCO = [
+  './', './index.html', './manifest.json',
+  './icon-192.png', './icon-512.png', './icon-maskable-512.png'
+];
+
+const SEM_REDE =
+  '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+  '<title>Ponto Renovar - sem conexao</title></head>' +
+  '<body style="margin:0;background:#0D1B2A;color:#F5F7FA;font:16px/1.5 system-ui;padding:32px 24px">' +
+  '<h1 style="font-size:20px;color:#FF7A1A">Sem conexao</h1>' +
+  '<p>O Ponto Renovar ainda nao foi guardado neste aparelho. Conecte a internet' +
+  ' uma vez para que o app passe a abrir tambem offline.</p>' +
+  '<p><a href="./" style="color:#FF7A1A">Tentar de novo</a></p></body></html>';
+
+self.addEventListener('install', (ev) => {
+  ev.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.allSettled(CASCO.map((u) => {
+      var req;
+      try { req = new Request(u, { cache: 'reload' }); } catch (e) { req = new Request(u); }
+      return cache.add(req).catch(() => {});
+    }));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (ev) => {
+  ev.waitUntil((async () => {
+    const nomes = await caches.keys();
+    await Promise.all(
+      nomes.filter((n) => n.startsWith('ponto-renovar-') && n !== CACHE).map((n) => caches.delete(n))
+    );
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('message', (ev) => {
+  if (ev.data === 'ATUALIZAR_AGORA') self.skipWaiting();
+  if (ev.data === 'VERSAO' && ev.source) ev.source.postMessage({ tipo: 'VERSAO', versao: VERSAO });
+});
+
+function guardar(cache, req, resp) {
+  try {
+    if (resp && resp.ok && resp.type !== 'opaque') cache.put(req, resp.clone());
+  } catch (e) { /* cache cheio ou resposta nao cacheavel: segue sem guardar */ }
+  return resp;
+}
+
+async function redePrimeiro(req) {
+  const cache = await caches.open(CACHE);
+  const daRede = fetch(req).then((r) => guardar(cache, req, r)).catch(() => null);
+  const paciencia = new Promise((ok) => setTimeout(() => ok(null), 5000));
+  const resp = await Promise.race([daRede, paciencia]);
+  if (resp) return resp;
+  const salvo = (await cache.match('./index.html')) || (await cache.match('./')) || (await cache.match(req));
+  if (salvo) return salvo;
+  const tardia = await daRede;
+  if (tardia) return tardia;
+  return new Response(SEM_REDE, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+async function cachePrimeiro(req) {
+  const cache = await caches.open(CACHE);
+  const salvo = await cache.match(req);
+  if (salvo) {
+    fetch(req).then((r) => guardar(cache, req, r)).catch(() => {});
+    return salvo;
+  }
+  const resp = await fetch(req);
+  return guardar(cache, req, resp);
+}
+
+self.addEventListener('fetch', (ev) => {
+  const req = ev.request;
+  if (req.method !== 'GET' || req.headers.has('range')) return;
+  let url;
+  try { url = new URL(req.url); } catch (e) { return; }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return;
+  if (url.hostname.endsWith('supabase.co')) return; // dados e autenticacao: sempre rede
+  if (req.mode === 'navigate' || req.destination === 'document') {
+    ev.respondWith(redePrimeiro(req));
+    return;
+  }
+  if (url.origin === self.location.origin || url.hostname === 'unpkg.com') {
+    ev.respondWith(cachePrimeiro(req));
+  }
+});

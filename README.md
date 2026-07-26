@@ -18,7 +18,24 @@ O que ele faz, em resumo:
 | `ponto-renovar.jsx` | Fonte do app em JSX. **Toda alteracao comeca aqui.** |
 | `index.html` | Arquivo que o GitHub Pages serve. O JS do app dentro dele e *gerado*, nao escrito a mao. |
 | `build.mjs` | Compila o `.jsx` e reescreve o trecho gerado do `index.html`. |
-| `testes.mjs` | Testes dos motores de calculo (jornada, banco de horas, folha, rescisao). |
+| `testes.mjs` | Testes dos motores de calculo (jornada, banco de horas, folha, rescisao) e dos arquivos do PWA. |
+| `manifest.json` | Faz o app ser instalavel no celular (nome, cor, icones, abre em janela propria). |
+| `sw.js` | Service worker: guarda o casco do app pra abrir com internet ruim. **Nao guarda dado nenhum do Supabase.** |
+| `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` | Icones do atalho na tela inicial. |
+
+## Instalar no celular (PWA)
+
+O app pode ficar como atalho na tela inicial e abrir sem barra de navegador.
+
+- **Android/Chrome:** aparece a faixa *Instalar* no rodape.
+- **iPhone/Safari:** botao Compartilhar -> *Adicionar a Tela de Inicio* (o app mostra o lembrete).
+
+O `sw.js` guarda somente `index.html`, o React do unpkg, o `manifest.json` e os icones.
+Chamadas ao Supabase (login, biometria, batidas, folha) **nunca** passam pelo cache.
+O `index.html` usa *rede primeiro*: quem tem internet ve sempre a versao mais nova.
+
+Ao mexer no `sw.js`, suba a `VERSAO` nele **e** o `window.__APP_VERSAO` no `index.html`
+(os dois precisam bater; o `testes.mjs` reprova se ficarem diferentes).
 
 ## Como publicar uma alteracao
 

@@ -10859,5 +10859,90 @@ document.addEventListener("DOMContentLoaded", function () {
   ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
 });
 </script>
+
+<!-- ===== Instalacao no celular + funcionar sem internet (PWA) =====
+     O service worker guarda somente o casco do app (index.html, React, icones).
+     Nenhuma chamada ao Supabase passa pelo cache: dado de ponto nao fica gravado ali. -->
+<script>
+window.__APP_VERSAO = '2026.07.25-1';
+(function () {
+  var instalado = false;
+  try {
+    instalado = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  } catch (e) {}
+  var suportado = 'serviceWorker' in navigator && location.protocol === 'https:';
+  window.__APP_PWA = { suportado: suportado, ativo: false, instalado: instalado };
+
+  /* ---- registro do service worker ---- */
+  if (suportado) {
+    window.addEventListener('load', function () {
+      var jaControlado = !!navigator.serviceWorker.controller;
+      var recarregou = false;
+      navigator.serviceWorker.register('sw.js').then(function () {
+        window.__APP_PWA.ativo = true;
+      }).catch(function () {});
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!jaControlado || recarregou) return;   // versao nova assumiu: recarrega uma vez
+        recarregou = true;
+        location.reload();
+      });
+    });
+  }
+
+  /* ---- convite para instalar (so aparece se ainda nao estiver instalado) ---- */
+  var OCULTAR = 'pontoRenovar.instalar.oculto';
+  function jaDispensou() { try { return localStorage.getItem(OCULTAR) === '1'; } catch (e) { return true; } }
+  function dispensar() { try { localStorage.setItem(OCULTAR, '1'); } catch (e) {} }
+  function barra(texto, rotuloBotao, acao) {
+    if (instalado || jaDispensou() || document.getElementById('barraInstalar')) return;
+    var d = document.createElement('div');
+    d.id = 'barraInstalar';
+    d.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;display:flex;gap:10px;' +
+      'align-items:center;flex-wrap:wrap;background:#12263A;color:#F5F7FA;font:14px/1.4 system-ui,-apple-system,sans-serif;' +
+      'padding:12px 14px;padding-bottom:calc(12px + env(safe-area-inset-bottom));' +
+      'border-top:1px solid rgba(245,247,250,.14);box-shadow:0 -6px 18px rgba(0,0,0,.35)';
+    var t = document.createElement('span');
+    t.style.cssText = 'flex:1 1 190px';
+    t.textContent = texto;
+    d.appendChild(t);
+    if (rotuloBotao) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = rotuloBotao;
+      b.style.cssText = 'background:#FF7A1A;color:#0D1B2A;border:0;border-radius:8px;padding:9px 14px;font:600 14px system-ui;cursor:pointer';
+      b.onclick = function () { d.remove(); acao && acao(); };
+      d.appendChild(b);
+    }
+    var x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = 'Agora nao';
+    x.style.cssText = 'background:transparent;color:#9FB3C8;border:1px solid rgba(245,247,250,.22);border-radius:8px;padding:9px 12px;font:14px system-ui;cursor:pointer';
+    x.onclick = function () { dispensar(); d.remove(); };
+    d.appendChild(x);
+    document.body.appendChild(d);
+  }
+
+  var promptAndroid = null;
+  window.addEventListener('beforeinstallprompt', function (ev) {
+    ev.preventDefault();
+    promptAndroid = ev;
+    barra('Instale o Ponto Renovar na tela inicial: abre mais rapido e funciona com internet ruim.', 'Instalar', function () {
+      dispensar();
+      promptAndroid.prompt();
+    });
+  });
+  window.addEventListener('appinstalled', function () { dispensar(); instalado = true; });
+
+  var ehIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ehIOS && !instalado) {
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        barra('Para bater ponto mais rapido: toque em Compartilhar e depois em "Adicionar a Tela de Inicio".', null, null);
+      }, 4000);
+    });
+  }
+})();
+</script>
 </body>
 </html>
