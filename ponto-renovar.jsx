@@ -773,6 +773,10 @@ const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 
 
 const mapConsImagem = (r) => ({ userId: r.usuario_id, cftvCiente: !!r.cftv_ciente, autorizada: !!r.imagem_autorizada, atualizadoEm: r.atualizado_em });
 
+/* Aceites com trilha de data/hora. tipo 'conduta' -> referencia = versao do codigo;
+   tipo 'espelho' -> referencia = competencia AAAA-MM. status: 'aceito' | 'contestado'. */
+const mapAceite = (r) => ({ userId: r.usuario_id, tipo: r.tipo, ref: r.referencia, status: r.status, obs: r.observacao || '', em: r.criado_em });
+
 const mapUser = (r, consentiu) => ({
   id: r.id, nome: r.nome, email: r.email, cpf: r.cpf, papel: r.tipo, cargo: r.cargo, matricula: r.matricula, ativo: r.ativo,
   admissao: r.data_admissao || "2020-01-01",
@@ -802,6 +806,23 @@ const CONS_IMAGEM_SEED = [
   { userId: "u1", cftvCiente: true, autorizada: true, atualizadoEm: iso(d(-120)) },
   { userId: "u2", cftvCiente: true, autorizada: true, atualizadoEm: iso(d(-90)) },
   { userId: "u3", cftvCiente: true, autorizada: false, atualizadoEm: iso(d(-45)) },
+];
+
+/* Versao vigente do codigo de conduta. Se o texto mudar, subir a versao faz o app
+   pedir um novo aceite - o aceite anterior continua guardado no historico. */
+const CONDUTA_VERSAO = '2026.1';
+const compDe = (dt) => dataISO(dt).slice(0, 7);
+const compAtual = () => compDe(new Date());
+const rotuloComp = (c) => { const p = String(c || '').split('-'); return p[1] ? p[1] + '/' + p[0] : String(c || ''); };
+
+/* Modo demonstracao: Marina conferiu o espelho do mes; Rafael contestou (mostra pro
+   gestor como aparece uma divergencia aberta) e Juliana ainda nao aceitou a conduta. */
+const ACEITES_SEED = [
+  { userId: 'u1', tipo: 'conduta', ref: CONDUTA_VERSAO, status: 'aceito', obs: '', em: iso(d(-100)) },
+  { userId: 'u2', tipo: 'conduta', ref: CONDUTA_VERSAO, status: 'aceito', obs: '', em: iso(d(-80)) },
+  { userId: 'u3', tipo: 'conduta', ref: CONDUTA_VERSAO, status: 'aceito', obs: '', em: iso(d(-60)) },
+  { userId: 'u2', tipo: 'espelho', ref: compAtual(), status: 'aceito', obs: '', em: iso(d(-2)) },
+  { userId: 'u3', tipo: 'espelho', ref: compAtual(), status: 'contestado', obs: 'A saída do dia 20 foi preenchida pelo sistema; saí às 18h20.', em: iso(d(-1)) },
 ];
 
 const REGISTROS_SEED = [];
@@ -1320,6 +1341,116 @@ function pdfReciboFolha(f, u, compISO) {
   return p.conteudo();
 }
 
+/* Espelho de ponto em PDF: marcacoes do mes, jornada prevista, saldo, legenda das
+   ressalvas e o aceite eletronico do colaborador (quando houver). Multipagina. */
+function pdfEspelhoPonto(u, dias, comp, aceite) {
+  const x0 = 36, x1 = 559, larg = x1 - x0;
+  const cData = x0 + 6, cExp = x0 + 62, cMarc = x0 + 152, cTrab = 404, cPrev = 470, cSaldo = x1 - 6;
+  const itens = Object.entries(dias).map(([dia, regs]) => {
+    const dt = new Date(regs[0].ts);
+    const exp = expedienteDoDia(dt);
+    const min = minutosDia(regs);
+    const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
+    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    const rot = exp.jornadaMin === 0 ? (exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO") : (exp.jornadaMin <= 300 ? "SABADO 8-13h" : "SEG-SEX 8-18h");
+    const marcas = regs.map((r) => fmtHora(r.ts)
+      + (r.ajustada ? "*" : r.automatica ? "A" : "")
+      + (r.metodo === "sem_verificacao" ? "!" : "")
+      + (r.offline ? "F" : "")
+      + (r.geoStatus === "dispensado_por_falha" ? "G" : "")).join("  ");
+    return { dia, dt, rot, min, prev: exp.jornadaMin, saldo: min - desc - exp.jornadaMin, marcas };
+  }).sort((a, b) => a.dt - b.dt);
+  const somaTrab = itens.reduce((s, i) => s + i.min, 0);
+  const somaPrev = itens.reduce((s, i) => s + i.prev, 0);
+  const somaSaldo = itens.reduce((s, i) => s + i.saldo, 0);
+  const todos = Object.values(dias).reduce((ac, v) => ac.concat(v), []);
+  const legenda = [];
+  if (todos.some((r) => r && r.ajustada)) legenda.push("*  horario corrigido com justificativa (marcacao original preservada na auditoria)");
+  if (todos.some((r) => r && r.automatica)) legenda.push("A  saida preenchida automaticamente pelo sistema no fim do expediente");
+  if (todos.some((r) => r && r.metodo === "sem_verificacao")) legenda.push("!  batida registrada sem verificacao biometrica do aparelho");
+  if (todos.some((r) => r && r.offline)) legenda.push("F  registrada sem rede - horario do proprio aparelho");
+  if (todos.some((r) => r && r.geoStatus === "dispensado_por_falha")) legenda.push("G  registrada sem localizacao, com justificativa do colaborador");
+  if (!legenda.length) legenda.push("Nenhuma marcacao com ressalva neste periodo.");
+  const paginas = [];
+  let p = null, y = 0;
+  const cabecalho = () => {
+    p = pdfPagina();
+    p.caixa(x0, 34, larg, 58);
+    p.txt(x0 + 8, 50, EMPRESA.nome, 11, true);
+    p.txt(x0 + 8, 63, "CNPJ " + EMPRESA.cnpj, 8);
+    p.txt(x0 + 8, 74, EMPRESA.endereco + " - CEP " + EMPRESA.cep, 7.5);
+    p.txt(x0 + 8, 85, "Controle de jornada - CLT art. 74 e Portaria MTP 671/2021", 7);
+    p.dir(x1 - 8, 50, "ESPELHO DE PONTO", 10.5, true);
+    p.dir(x1 - 8, 65, "Competencia " + rotuloComp(comp), 9.5, true);
+    p.dir(x1 - 8, 77, "Emitido em " + fmtDataHora(new Date()), 7.5);
+    p.dir(x1 - 8, 88, "Pagina " + (paginas.length + 1), 7.5);
+    p.caixa(x0, 98, larg, 52);
+    p.linha(x0, 124, x1, 124, 0.4);
+    const campo = (x, yy, rt, val, size) => { p.txt(x, yy, rt, 6.5); p.txt(x, yy + 11, val || "-", size || 9); };
+    campo(x0 + 8, 108, "MATRICULA", u && u.matricula);
+    campo(x0 + 88, 108, "NOME DO COLABORADOR", u && u.nome, 9.5);
+    campo(x0 + 340, 108, "CPF", u && u.cpf);
+    campo(x0 + 430, 108, "ADMISSAO", u && u.admissao ? fmtData(u.admissao) : "-");
+    campo(x0 + 8, 134, "FUNCAO", (u && u.cargo) || "-");
+    campo(x0 + 200, 134, "JORNADA CONTRATUAL", "9h/dia seg-sex + sabado 5h");
+    campo(x0 + 430, 134, "DIAS COM MARCACAO", String(itens.length));
+    y = 160;
+    p.fundo(x0, y, larg, 16, 0.88);
+    p.caixa(x0, y, larg, 16);
+    p.txt(cData, y + 11, "DATA", 7.5, true);
+    p.txt(cExp, y + 11, "EXPEDIENTE", 7.5, true);
+    p.txt(cMarc, y + 11, "MARCACOES", 7.5, true);
+    p.dir(cTrab, y + 11, "TRABALHADO", 7.5, true);
+    p.dir(cPrev, y + 11, "PREVISTO", 7.5, true);
+    p.dir(cSaldo, y + 11, "SALDO", 7.5, true);
+    y += 16;
+  };
+  itens.forEach((it) => {
+    if (!p || y > 700) { if (p) paginas.push(p.conteudo()); cabecalho(); }
+    p.txt(cData, y + 9.5, it.dia, 8);
+    p.txt(cExp, y + 9.5, it.rot, 7);
+    p.txt(cMarc, y + 9.5, it.marcas, 8);
+    p.dir(cTrab, y + 9.5, hmm(it.min), 8);
+    p.dir(cPrev, y + 9.5, hmm(it.prev), 8);
+    p.dir(cSaldo, y + 9.5, hmm(it.saldo), 8, true);
+    p.linha(x0, y + 13, x1, y + 13, 0.3);
+    y += 13.5;
+  });
+  if (!p) { cabecalho(); p.txt(cData, y + 12, "Nenhuma marcacao registrada nesta competencia.", 8.5); y += 20; }
+  if (y > 600) { paginas.push(p.conteudo()); cabecalho(); }
+  p.fundo(x0, y, larg, 18, 0.88);
+  p.caixa(x0, y, larg, 18);
+  p.txt(cData, y + 12, "TOTAIS DO PERIODO", 8, true);
+  p.dir(cTrab, y + 12, hmm(somaTrab), 9, true);
+  p.dir(cPrev, y + 12, hmm(somaPrev), 9, true);
+  p.dir(cSaldo, y + 12, hmm(somaSaldo), 9, true);
+  y += 32;
+  p.txt(x0, y, "LEGENDA DAS MARCACOES", 7, true);
+  y += 11;
+  legenda.forEach((l) => { p.txt(x0, y, l, 7); y += 10; });
+  y += 6;
+  p.caixa(x0, y, larg, 64);
+  p.txt(x0 + 8, y + 14, "CONFERENCIA DO COLABORADOR", 7, true);
+  if (aceite) {
+    p.txt(x0 + 8, y + 29, aceite.status === "aceito"
+      ? "Espelho conferido e ACEITO em " + fmtDataHora(aceite.em) + " pelo proprio colaborador, no aplicativo."
+      : "Espelho CONTESTADO em " + fmtDataHora(aceite.em) + " pelo colaborador, no aplicativo.", 8.5);
+    if (aceite.obs) p.txt(x0 + 8, y + 42, ("Observacao: " + aceite.obs).slice(0, 120), 7.5);
+    p.txt(x0 + 8, y + 56, "O aceite eletronico registra a ciencia do colaborador; nao convalida erro nem impede correcao posterior.", 7);
+  } else {
+    p.txt(x0 + 8, y + 29, "Sem aceite eletronico registrado para esta competencia - conferir e assinar abaixo.", 8);
+    p.linha(x0 + 10, y + 50, x0 + 250, y + 50, 0.7);
+    p.txt(x0 + 10, y + 60, "Assinatura do colaborador", 6.5);
+    p.linha(x0 + 300, y + 50, x1 - 10, y + 50, 0.7);
+    p.txt(x0 + 300, y + 60, EMPRESA.cidade + ", ____ de _______________ de " + String(comp).slice(0, 4), 6.5);
+  }
+  p.txt(x0, PDF_H - 54, "Documento gerado pelo Ponto Renovar a partir das marcacoes originais do periodo.", 7);
+  p.txt(x0, PDF_H - 44, "Correcoes de horario ficam registradas com justificativa, autor e data na auditoria do sistema.", 7);
+  p.txt(x0, PDF_H - 34, EMPRESA.nome + " - CNPJ " + EMPRESA.cnpj, 7);
+  paginas.push(p.conteudo());
+  return pdfArquivo(paginas);
+}
+
 function baixarArquivo(conteudo, nome) {
   const bytes = new Uint8Array([...conteudo].map((c) => Math.min(c.charCodeAt(0), 255)));
   const blob = new Blob([bytes], { type: "text/plain;charset=ISO-8859-1" });
@@ -1496,6 +1627,7 @@ export default function App() {
   const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
   const [consImagem, setConsImagem] = useState([]); // termo de imagem: ciência do CFTV + autorização pra divulgação
+  const [aceites, setAceites] = useState([]); // aceites do codigo de conduta e do espelho mensal
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
   const [carregandoSecundarios, setCarregandoSecundarios] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: "erro"|"ok", texto }
@@ -1652,6 +1784,14 @@ export default function App() {
           setConsImagem(rows.map(mapConsImagem));
         } catch (e) { console.warn("[termo de imagem]", e.message); }
       })();
+      // Aceites (codigo de conduta e espelho mensal): tabela opcional (aceites).
+      // Enquanto nao existir no banco, o app segue funcionando sem trilha de aceite.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "aceites", "select=*");
+          setAceites(rows.map(mapAceite));
+        } catch (e) { console.warn("[aceites]", e.message); }
+      })();
     } catch (e) {
       setErroDados(mensagemAmigavel(e, "ao carregar seus dados"));
     }
@@ -1757,7 +1897,7 @@ export default function App() {
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
     setFolhasPg([]); setAdiantamentos([]); setGuias([]); setCredenciais([]);
-    setConsImagem(CONS_IMAGEM_SEED);
+    setConsImagem(CONS_IMAGEM_SEED); setAceites(ACEITES_SEED);
     setRankingUsuarios(USUARIOS_SEED.map(u => { const gg = calcularGamificacao(u.id, REGISTROS_SEED, FALTAS_SEED.map((f, i) => ({ id: i, ...f, justificada: false }))); return { id: u.id, nome: u.nome, papel: u.papel, pontos: gg.total, streak: gg.streak }; }));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
     setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
@@ -2389,6 +2529,15 @@ export default function App() {
     log("lgpd", `Termo de imagem: CFTV ${cftvCiente ? "ciente" : "sem ciência"} · divulgação ${autorizada ? "AUTORIZADA" : "NÃO autorizada"}`);
   };
 
+  const salvarAceite = async (tipo, ref, status, obs) => {
+    const agora = iso(new Date());
+    if (!demo) await sbUpsert(sessao.token, 'aceites', [{ usuario_id: user.id, tipo, referencia: ref, status, observacao: obs || null, criado_em: agora }], 'usuario_id,tipo,referencia');
+    setAceites((as) => [...as.filter((a) => !(a.userId === user.id && a.tipo === tipo && a.ref === ref)), { userId: user.id, tipo, ref, status, obs: obs || '', em: agora }]);
+    log('aceite', tipo === 'conduta'
+      ? `Código de conduta aceito (versão ${ref})`
+      : `Espelho de ${rotuloComp(ref)}: ${status === 'aceito' ? 'conferido e aceito' : 'CONTESTADO'}${obs ? ' — ' + obs : ''}`);
+  };
+
   /* ---------- exportações fiscais ---------- */
   const cpfDe = (userId) => usuarios.find(u => u.id === userId)?.cpf || "";
 
@@ -2580,7 +2729,7 @@ export default function App() {
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
           {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
-          {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} />}
+          {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
@@ -2589,10 +2738,10 @@ export default function App() {
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
-          {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} />}
+          {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, consImagem }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, consImagem, aceites }} />
           )}
         </main>
       </div>
@@ -2979,8 +3128,23 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   );
 }
 
-function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
-  const dias = agruparPorDia(registros, user.id);
+function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], onAceitar }) {
+  const todosDias = agruparPorDia(registros, user.id);
+  // O espelho e o aceite sao MENSAIS: lista as competencias com marcacao, mais recente primeiro.
+  const comps = Array.from(new Set(Object.values(todosDias).map((regs) => compDe(new Date(regs[0].ts))))).sort().reverse();
+  const [comp, setComp] = useState(comps[0] || compAtual());
+  const chaveComps = comps.join(",");
+  useEffect(() => { if (comps.length && comps.indexOf(comp) < 0) setComp(comps[0]); }, [chaveComps]);
+  const dias = {};
+  Object.entries(todosDias).forEach(([dia, regs]) => { if (compDe(new Date(regs[0].ts)) === comp) dias[dia] = regs; });
+  const aceite = aceites.find((a) => a.userId === user.id && a.tipo === "espelho" && a.ref === comp);
+  const totais = Object.values(dias).reduce((ac, regs) => {
+    const exp = expedienteDoDia(new Date(regs[0].ts));
+    const min = minutosDia(regs);
+    const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
+    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    return { dias: ac.dias + 1, trab: ac.trab + min, prev: ac.prev + exp.jornadaMin, saldo: ac.saldo + (min - desc - exp.jornadaMin) };
+  }, { dias: 0, trab: 0, prev: 0, saldo: 0 });
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -2988,7 +3152,10 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }} className="no-print">
           <button style={S.btnGhost} onClick={exportarAFD}>⬇ Exportar AFD (leiaute 003)</button>
           <button style={S.btnGhost} onClick={exportarAEJ}>⬇ Exportar AEJ (leiaute 001)</button>
-          <button style={S.btn} onClick={() => window.print()}>🖨 Exportar PDF</button>
+          <select style={{ ...S.input, width: "auto", padding: "10px 12px", fontSize: 14 }} value={comp} onChange={(e) => setComp(e.target.value)}>
+            {(comps.length ? comps : [comp]).map((c) => <option key={c} value={c}>{rotuloComp(c)}</option>)}
+          </select>
+          <button style={S.btn} onClick={() => baixarPDF(pdfEspelhoPonto(user, dias, comp, aceite), `espelho-${comp}.pdf`)}>🖨 Espelho em PDF</button>
         </div>
       </div>
             <div style={{ ...S.card, marginTop: 16 }}>
@@ -3029,6 +3196,68 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ }) {
           );
         })()}
       </div>
+      <div style={{ ...S.card, marginTop: 14, display: "flex", gap: 22, flexWrap: "wrap" }}>
+        {[["Dias com marcação", String(totais.dias)], ["Trabalhado", hmm(totais.trab)], ["Previsto", hmm(totais.prev)], ["Saldo do mês", hmm(totais.saldo)]].map(([rot, val]) => (
+          <div key={rot}>
+            <div style={{ fontSize: 11, color: C.cinza }}>{rot}</div>
+            <div style={{ ...S.display, fontSize: 20, color: rot === "Saldo do mês" ? (totais.saldo >= 0 ? C.verde : C.vermelho) : C.branco }}>{val}</div>
+          </div>
+        ))}
+      </div>
+      {onAceitar && <ConfereEspelho comp={comp} aceite={aceite} onAceitar={onAceitar} />}
+    </div>
+  );
+}
+
+/* Aceite mensal do espelho de ponto: prova datada de que o colaborador conferiu as
+   proprias marcacoes. Contestar exige descrever a divergencia, que chega ao gestor.
+   O aceite e ciencia - nao convalida erro nem impede correcao depois (CLT art. 9º). */
+function ConfereEspelho({ comp, aceite, onAceitar }) {
+  const [modo, setModo] = useState(null);
+  const [obs, setObs] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { setModo(null); setObs(""); setMsg(null); }, [comp]);
+  const enviar = async (status) => {
+    if (status === "contestado" && obs.trim().length < 10) { setMsg({ ok: false, txt: "Descreva a divergência com pelo menos 10 caracteres — o gestor precisa saber o que corrigir." }); return; }
+    setSalvando(true); setMsg(null);
+    try {
+      await onAceitar("espelho", comp, status, status === "contestado" ? obs.trim() : "");
+      setModo(null); setObs("");
+      setMsg({ ok: true, txt: status === "aceito" ? "Conferência registrada com data e hora." : "Divergência registrada — ela aparece no painel do gestor." });
+    } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e, "ao registrar a conferência do espelho") }); }
+    finally { setSalvando(false); }
+  };
+  const jaAceito = aceite && aceite.status === "aceito";
+  return (
+    <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${aceite ? (jaAceito ? C.verde : C.vermelho) : C.amarelo}` }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>✔ Conferência do espelho de {rotuloComp(comp)}</div>
+      {aceite ? (
+        <p style={{ fontSize: 13, color: jaAceito ? C.verde : C.vermelho, margin: "8px 0 0", lineHeight: 1.6 }}>
+          {jaAceito ? "Você conferiu e aceitou este espelho" : "Você registrou uma divergência neste espelho"} em {fmtDataHora(aceite.em)}.
+          {aceite.obs ? <span style={{ color: C.cinza }}> Divergência apontada: {aceite.obs}</span> : null}
+        </p>
+      ) : (
+        <p style={{ fontSize: 13, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>Confira as marcações acima. Se estiver tudo certo, registre o aceite; se algo estiver errado, aponte a divergência.</p>
+      )}
+      {modo === "contestar" && (
+        <textarea style={{ ...S.input, marginTop: 10, minHeight: 70, fontSize: 14 }} value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ex.: no dia 12 a saída foi lançada pelo sistema; saí às 18h10." />
+      )}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+        {modo === "contestar" ? (
+          <>
+            <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: salvando ? 0.6 : 1 }} disabled={salvando} onClick={() => enviar("contestado")}>{salvando ? "⏳…" : "Enviar divergência"}</button>
+            <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => { setModo(null); setObs(""); }}>Cancelar</button>
+          </>
+        ) : (
+          <>
+            <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: salvando ? 0.6 : 1 }} disabled={salvando} onClick={() => enviar("aceito")}>{salvando ? "⏳…" : jaAceito ? "Confirmar de novo" : "Está tudo certo"}</button>
+            <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setModo("contestar")}>Tenho uma divergência</button>
+          </>
+        )}
+      </div>
+      {msg && <p style={{ fontSize: 12.5, color: msg.ok ? C.verde : C.vermelho, margin: "8px 0 0" }}>{msg.txt}</p>}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>O aceite registra apenas a sua ciência das marcações do mês: ele não convalida erro nem impede correção posterior, administrativa ou judicial (CLT art. 9º). O espelho em PDF sai com a data e o resultado desta conferência.</p>
     </div>
   );
 }
@@ -3529,10 +3758,19 @@ function SecaoImagens({ usuarios, consImagem = [] }) {
   );
 }
 
-function SecaoCodigoConduta() {
+function SecaoCodigoConduta({ aceite, onAceitar }) {
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const emDia = !!aceite && aceite.ref === CONDUTA_VERSAO;
+  const aceitar = async () => {
+    setSalvando(true); setMsg(null);
+    try { await onAceitar("conduta", CONDUTA_VERSAO, "aceito", ""); setMsg({ ok: true, txt: "Aceite registrado com data e hora." }); }
+    catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e, "ao registrar o aceite do código de conduta") }); }
+    finally { setSalvando(false); }
+  };
   return (
     <div style={{ ...S.card, marginTop: 14 }}>
-      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📜 Código de conduta — regras internas</div>
+      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📜 Código de conduta — regras internas <span style={{ fontSize: 11, color: C.cinza }}>· versão {CONDUTA_VERSAO}</span></div>
       <p style={{ fontSize: 12.5, color: C.branco, marginTop: 8, lineHeight: 1.6 }}>Além das políticas de dados acima, todo colaborador da {EMPRESA.nome} deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita às medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade).</p>
       {CODIGO_CONDUTA.map((c, i) => (
         <div key={i} style={{ borderTop: "1px solid #1E3450", padding: "10px 0" }}>
@@ -3540,6 +3778,18 @@ function SecaoCodigoConduta() {
           <p style={{ fontSize: 12.5, color: "#C7D2E4", margin: "4px 0 0", lineHeight: 1.6 }}>{c.texto}</p>
         </div>
       ))}
+      {onAceitar && (
+        <div style={{ borderTop: "1px solid #1E3450", paddingTop: 12, marginTop: 4 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: salvando ? 0.6 : 1 }} disabled={salvando} onClick={aceitar}>{salvando ? "⏳…" : emDia ? "Confirmar de novo" : "Li e aceito estas regras"}</button>
+            <span style={{ fontSize: 11.5, color: emDia ? C.verde : C.cinza }}>
+              {aceite ? `Aceito em ${fmtDataHora(aceite.em)} (versão ${aceite.ref})${emDia ? "" : " — texto atualizado, precisa de novo aceite"}` : "Ainda sem aceite registrado."}
+            </span>
+          </div>
+          {msg && <p style={{ fontSize: 12.5, color: msg.ok ? C.verde : C.vermelho, margin: "8px 0 0" }}>{msg.txt}</p>}
+          <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>O aceite guarda data, hora e versão do texto — é a prova de ciência das regras (CLT art. 456, parágrafo único). Não substitui o contrato de trabalho e não impede você de discutir a aplicação de qualquer regra.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -3587,7 +3837,7 @@ function SecaoBiometria({ credenciais, onCadastrar, onRemover }) {
   );
 }
 
-function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemoverBio, imagem, onSalvarImagem }) {
+function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemoverBio, imagem, onSalvarImagem, aceiteConduta, onAceitar }) {
   const [aceito, setAceito] = useState(user.consentimentoLGPD);
   useEffect(() => setAceito(user.consentimentoLGPD), [user.consentimentoLGPD]);
   return (
@@ -3601,7 +3851,7 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
         </label>
       </div>
-      <SecaoCodigoConduta />
+      <SecaoCodigoConduta aceite={aceiteConduta} onAceitar={onAceitar} />
       <SecaoDireitoImagem user={user} imagem={imagem} onSalvar={onSalvarImagem} />
       {user.papel === "gestor" && (
       <div style={{ ...S.card, marginTop: 16, fontSize: 13, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
@@ -3975,6 +4225,53 @@ function SecaoRescisao({ usuarios, rescisoes, onCriarRescisao, onConfirmarRescis
   );
 }
 
+/* Painel do gestor: trilha de aceites. Mostra quem aceitou o codigo de conduta na
+   versao vigente e quem conferiu (ou contestou) o espelho do mes fechado. As
+   divergencias abertas aparecem em destaque porque exigem analise. */
+function SecaoAceites({ usuarios, aceites = [] }) {
+  const equipe = usuarios.filter((u) => u.papel !== "gestor");
+  const comp = compAtual();
+  const nomeDe = (id) => (usuarios.find((u) => u.id === id) || {}).nome || id;
+  const contestados = aceites.filter((a) => a.tipo === "espelho" && a.status === "contestado").sort((a, b) => (a.em < b.em ? 1 : -1));
+  const pendConduta = equipe.filter((u) => !aceites.some((a) => a.userId === u.id && a.tipo === "conduta" && a.ref === CONDUTA_VERSAO)).length;
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>✔ Aceites e conferências</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        Código de conduta na versão {CONDUTA_VERSAO}: {pendConduta === 0 ? "toda a equipe aceitou" : `${pendConduta} pendente(s)`} · espelho de {rotuloComp(comp)}: conferência do próprio colaborador.
+      </p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 6 }}>Colaborador</th><th>Código de conduta</th><th>Espelho {rotuloComp(comp)}</th></tr></thead>
+        <tbody>
+          {equipe.map((u) => {
+            const ac = aceites.find((a) => a.userId === u.id && a.tipo === "conduta");
+            const es = aceites.find((a) => a.userId === u.id && a.tipo === "espelho" && a.ref === comp);
+            const acOk = ac && ac.ref === CONDUTA_VERSAO;
+            return (
+              <tr key={u.id} style={{ borderTop: "1px solid #1E3450" }}>
+                <td style={{ padding: 6, fontWeight: 700 }}>{u.nome}</td>
+                <td style={{ color: acOk ? C.verde : C.amarelo }}>{ac ? `${acOk ? "aceito" : "versão " + ac.ref + " (desatualizada)"} · ${fmtData(ac.em)}` : "pendente"}</td>
+                <td style={{ color: !es ? C.cinza : es.status === "aceito" ? C.verde : C.vermelho }}>{es ? `${es.status === "aceito" ? "conferido" : "contestado"} · ${fmtData(es.em)}` : "sem conferência"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {contestados.length > 0 && (
+        <div style={{ marginTop: 12, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.vermelho }}>⚠ Divergências apontadas</div>
+          {contestados.map((a, i) => (
+            <p key={i} style={{ fontSize: 12.5, color: "#C7D2E4", margin: "6px 0 0", lineHeight: 1.6 }}>
+              <b>{nomeDe(a.userId)}</b> · espelho de {rotuloComp(a.ref)} · {fmtDataHora(a.em)}<br />{a.obs || "sem descrição"}
+            </p>
+          ))}
+        </div>
+      )}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>A conferência do colaborador é prova de ciência das marcações, não de quitação: divergência procedente deve ser corrigida no espelho com justificativa — a correção fica registrada na auditoria, com autor e data. A guarda das marcações originais segue obrigatória por 5 anos.</p>
+    </div>
+  );
+}
+
 function SecaoLocais({ locais, onCriar, onDesativar }) {
   const [nome, setNome] = useState("");
   const [raio, setRaio] = useState(50);
@@ -4018,7 +4315,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, consImagem }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, consImagem, aceites }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -4128,6 +4425,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
        <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
+      <SecaoAceites usuarios={usuarios} aceites={aceites} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
