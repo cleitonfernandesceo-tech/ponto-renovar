@@ -268,7 +268,7 @@ t('o SQL cria as duas tabelas opcionais',
 t('o SQL tem todas as colunas que os mapeadores leem',
   ['usuario_id', 'cftv_ciente', 'imagem_autorizada', 'atualizado_em', 'tipo', 'referencia', 'status', 'observacao', 'criado_em']
     .every((c) => sqlBloco.includes(c)));
-t('o SQL liga RLS nas duas tabelas', (sqlBloco.match(/enable row level security/g) || []).length === 2);
+t('o SQL liga RLS em todas as tabelas que ele cria', (sqlBloco.match(/enable row level security/g) || []).length === 4);
 t('o SQL tem a chave única usada no upsert de aceites', sqlBloco.includes('unique (usuario_id, tipo, referencia)'));
 const blocoDiag = src.slice(src.indexOf('function SecaoDiagnostico'), src.indexOf('function SecaoAceites'));
 t('o diagnóstico é só leitura (não grava nem altera nada)', !/sbInsert|sbUpsert|sbDelete|sbUpdate/.test(blocoDiag));
