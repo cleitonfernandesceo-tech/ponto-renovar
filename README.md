@@ -61,6 +61,18 @@ Janela padrao: `AGENDA_JANELA_DIAS` = 120 dias. No maximo 2 periodos de ferias
 atrasados por pessoa, pra lista nao virar rolagem infinita.
 Gestor e inativos ficam fora. O cartao nao grava nada.
 
+## Rede de seguranca (sem tela branca)
+
+O `App` exportado e apenas uma casca: ele devolve `<RedeDeSeguranca><AppInterno /></RedeDeSeguranca>`.
+`RedeDeSeguranca` e um error boundary de verdade (classe com `getDerivedStateFromError`
+e `componentDidCatch`). Se qualquer tela quebrar na montagem, aparece um cartao com
+*Recarregar o app* e *Copiar detalhes* em vez da tela branca.
+
+O detalhe copiado leva data, versao do app e o `Nome - mensagem` do erro. Nada sai do
+aparelho: a rede de seguranca nao faz `fetch` nem grava no banco.
+Quem mexer no `.jsx` deve manter **um unico** `export default function App` - o
+`build.mjs` conta essa ocorrencia e o `testes.mjs` reprova se mudar.
+
 ## Como publicar uma alteracao
 
 ```bash

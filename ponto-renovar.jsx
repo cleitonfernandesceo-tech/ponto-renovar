@@ -1826,7 +1826,73 @@ function CameraCapture({ onCapture, onSkip }) {
 }
 
 /* ================= App ================= */
+/* ═══════════════════════════════════════════════════════════════
+   REDE DE SEGURANÇA — se algum pedaço da tela quebrar, o app mostra um
+   aviso legível em vez de ficar com a tela branca. O erro fica só na
+   memória do aparelho (nada é enviado pra ninguém) e as batidas já
+   gravadas não são afetadas.
+   ═══════════════════════════════════════════════════════════════ */
+function descreveErro(erro) {
+  if (!erro) return "erro desconhecido";
+  const nome = erro.name || "Erro";
+  const msg = erro.message || String(erro);
+  return nome + " - " + msg;
+}
+
+class RedeDeSeguranca extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { erro: null };
+    this.copiar = this.copiar.bind(this);
+  }
+  static getDerivedStateFromError(erro) { return { erro: erro }; }
+  componentDidCatch(erro, info) {
+    try { console.error("Ponto Renovar — a tela quebrou:", erro, info && info.componentStack); } catch (e) {}
+  }
+  copiar() {
+    const texto = [
+      "Ponto Renovar — falha na tela",
+      "quando: " + new Date().toLocaleString("pt-BR"),
+      "versão do app: " + ((typeof window !== "undefined" && window.__APP_VERSAO) || "não informada"),
+      "erro: " + descreveErro(this.state.erro),
+    ].join("\n");
+    try { navigator.clipboard.writeText(texto); } catch (e) {}
+  }
+  render() {
+    if (!this.state.erro) return this.props.children;
+    return (
+      <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}>
+        <div style={{ ...S.card, maxWidth: 420, borderLeft: "4px solid " + C.amarelo }}>
+          <div style={{ ...S.display, fontSize: 18, color: C.amarelo }}>A tela travou</div>
+          <p style={{ fontSize: 13.5, color: C.branco, lineHeight: 1.6, margin: "10px 0 0" }}>
+            Deu um problema ao montar esta parte do app. <b>Suas batidas já registradas continuam salvas</b> — nada foi perdido.
+          </p>
+          <p style={{ fontSize: 12.5, color: C.cinza, lineHeight: 1.6, margin: "8px 0 0" }}>
+            Recarregue para voltar. Se travar de novo, copie os detalhes e mande pro gestor — assim dá pra corrigir a causa.
+          </p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+            <button style={{ ...S.btn }} onClick={() => { try { window.location.reload(); } catch (e) {} }}>Recarregar o app</button>
+            <button style={{ ...S.btnGhost, fontSize: 12.5 }} onClick={this.copiar}>Copiar detalhes</button>
+          </div>
+          <p style={{ fontSize: 11, color: C.cinza, margin: "12px 0 0", lineHeight: 1.5, wordBreak: "break-word" }}>
+            [ref: {descreveErro(this.state.erro)}]
+          </p>
+        </div>
+      </div>
+    );
+  }
+}
+
+/* O App exportado é só a casca protegida: quem monta as telas é o AppInterno. */
 export default function App() {
+  return (
+    <RedeDeSeguranca>
+      <AppInterno />
+    </RedeDeSeguranca>
+  );
+}
+
+function AppInterno() {
   const [demo, setDemo] = useState(false);
   const [sessao, setSessao] = useState(null); // { token, uid }
   const [user, setUser] = useState(null);

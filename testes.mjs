@@ -351,6 +351,28 @@ t("o painel do gestor exibe a agenda do RH", src.includes("<SecaoAgendaRH usuari
 t("a agenda avisa que nao substitui contador nem medico do trabalho",
   /não substitui esses profissionais/.test(src.slice(src.indexOf("function SecaoAgendaRH"), src.indexOf("function SecaoConformidade"))));
 
+// ══════════════════════════════════════════════════════════════
+secao("Rede de seguranca: nunca mais tela branca");
+const blocoRede = src.slice(src.indexOf("function descreveErro"), src.indexOf("function AppInterno()"));
+t("existe um limite de erro de verdade (class + os dois ganchos do React)",
+  /class RedeDeSeguranca extends React\.Component/.test(blocoRede) &&
+  /static getDerivedStateFromError/.test(blocoRede) && /componentDidCatch/.test(blocoRede));
+t("o App exportado e so a casca protegida em volta do AppInterno",
+  /export default function App\(\) \{\s*return \(\s*<RedeDeSeguranca>\s*<AppInterno \/>/.test(src) &&
+  /function AppInterno\(\) \{/.test(src));
+t("continua havendo exatamente um export default (o build.mjs depende disso)",
+  (src.match(/export default function App/g) || []).length === 1);
+t("a tela de falha explica que as batidas nao foram perdidas",
+  /continuam salvas/.test(blocoRede) && /nada foi perdido/.test(blocoRede));
+t("a tela de falha oferece recarregar e copiar os detalhes",
+  /Recarregar o app/.test(blocoRede) && /Copiar detalhes/.test(blocoRede) && /clipboard\.writeText/.test(blocoRede));
+t("o detalhe copiado leva a versao do app e nao leva dado de ninguem",
+  /window\.__APP_VERSAO/.test(blocoRede) && !/senha|cpf|salario|token/i.test(blocoRede));
+t("o erro fica so no aparelho (nada e enviado pra fora)",
+  !/fetch\(|sbInsert|sbUpsert|sbUpdate/.test(blocoRede));
+t("o texto do erro sai no formato Nome - mensagem",
+  /return nome \+ " - " \+ msg;/.test(blocoRede));
+
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
