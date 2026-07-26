@@ -727,6 +727,27 @@ async function sbUpload(token, uid, file) {
   if (!r.ok) throw new Error(`Upload falhou (${r.status}): ${await r.text()}`);
   return path; // gravado em anexo_url; leitura via URL assinada (gestor/dono, conforme policies)
 }
+// O bucket "anexos" e privado: pra abrir um arquivo o app pede uma URL assinada,
+// que vale poucos minutos. Assim o link nao pode ser repassado por engano nem
+// indexado, e a leitura continua valendo as policies (dono da pasta ou gestor).
+async function sbUrlAssinada(token, path, segundos = 120) {
+  const r = await fetch(`${SUPA.url}/storage/v1/object/sign/anexos/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: SUPA.anonKey,
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      expiresIn: segundos
+    })
+  });
+  if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+  const d = await r.json();
+  const rel = d.signedURL || d.signedUrl;
+  if (!rel) throw new Error("O servidor não devolveu o link do arquivo.");
+  return `${SUPA.url}/storage/v1${rel.startsWith("/") ? "" : "/"}${rel}`;
+}
 const sbRpc = (t, fn, args) => sbFetch(t, `/rest/v1/rpc/${fn}`, {
   method: "POST",
   body: args
@@ -1454,17 +1475,104 @@ function calcRescisao(u, dataDesligStr, motivoKey, avisoTipo) {
   };
 }
 const AVISO_RESCISAO = "Calculo de apoio a decisao gerencial (CLT arts. 477/478/487, Lei 12.506/2011, Lei 8.036/90 art. 18 par.1). Ferias vencidas nao gozadas devem ser confirmadas manualmente pelo gestor. Nao substitui o TRCT oficial, a homologacao (quando exigida) nem o calculo definitivo do contador com o extrato real do FGTS.";
+/* --------- custo real da equipe: encargos e provisoes ---------
+   O liquido do holerite nao e o que a empresa gasta. Alem do bruto entram FGTS,
+   provisao de 13o e de ferias com 1/3 e - fora do Simples - INSS patronal, RAT
+   e terceiros. O regime e escolhido na tela porque muda tudo: no Simples
+   Nacional a parte patronal do INSS ja esta dentro do DAS, entao somar 20% ali
+   inventaria um custo que a empresa nao tem. Numeros de apoio: quem fecha a
+   apuracao e a contabilidade. */
+const REGIMES_EMPRESA = {
+  simples: {
+    label: "Simples Nacional — INSS patronal já vai no DAS",
+    inssPatronal: 0,
+    rat: 0,
+    terceiros: 0
+  },
+  normal: {
+    label: "Lucro presumido ou real — INSS patronal por fora",
+    inssPatronal: 0.2,
+    rat: 0.02,
+    terceiros: 0.058
+  }
+};
+function custoDaEquipe(folhas = [], regimeKey = "simples") {
+  const reg = REGIMES_EMPRESA[regimeKey] || REGIMES_EMPRESA.simples;
+  const soma = campo => r2(folhas.reduce((s, f) => s + (+f[campo] || 0), 0));
+  const bruto = soma("salario");
+  const aliquotaPatronal = TABELAS_2026.fgtsPatronal + reg.inssPatronal + reg.rat + reg.terceiros;
+  const fgts = r2(bruto * TABELAS_2026.fgtsPatronal);
+  const inssPatronal = r2(bruto * reg.inssPatronal);
+  const rat = r2(bruto * reg.rat);
+  const terceiros = r2(bruto * reg.terceiros);
+  const encargos = r2(fgts + inssPatronal + rat + terceiros);
+  // Provisao mensal: 1/12 do bruto pro 13o, 1/12 pras ferias e 1/36 pro terco.
+  const decimo = r2(bruto / 12);
+  const ferias = r2(bruto / 12);
+  const tercoFerias = r2(bruto / 36);
+  const encargosProvisao = r2((decimo + ferias + tercoFerias) * aliquotaPatronal);
+  const provisoes = r2(decimo + ferias + tercoFerias + encargosProvisao);
+  return {
+    pessoas: folhas.length,
+    regime: regimeKey,
+    regimeLabel: reg.label,
+    bruto,
+    liquido: soma("liquido"),
+    inssRetido: soma("inss"),
+    irrfRetido: soma("irrf"),
+    fgts,
+    inssPatronal,
+    rat,
+    terceiros,
+    encargos,
+    decimo,
+    ferias,
+    tercoFerias,
+    encargosProvisao,
+    provisoes,
+    custoCaixa: r2(bruto + encargos),
+    custoTotal: r2(bruto + encargos + provisoes)
+  };
+}
 const TIPOS_EXAME = {
   admissional: "Admissional",
-  periodico: "Periodico",
+  periodico: "Periódico",
   retorno_trabalho: "Retorno ao trabalho",
-  mudanca_funcao: "Mudanca de funcao",
+  mudanca_funcao: "Mudança de função",
   demissional: "Demissional"
 };
 const RESULTADOS_EXAME = {
   apto: "Apto",
   apto_com_restricao: "Apto com restricao",
   inapto: "Inapto"
+};
+/* --------- recrutamento, documentos e agendamento de exame ---------
+   Curriculo e documentos vao pro bucket privado "anexos", igual aos atestados.
+   Candidato nao tem login, entao o arquivo dele fica na pasta do gestor que subiu. */
+const STATUS_CANDIDATO = {
+  recebido: "Currículo recebido",
+  entrevista: "Em entrevista",
+  aprovado: "Aprovado",
+  contratado: "Contratado",
+  reprovado: "Não seguiu"
+};
+const ORDEM_CANDIDATO = ["recebido", "entrevista", "aprovado", "contratado", "reprovado"];
+const TIPOS_DOCUMENTO = {
+  curriculo: "Currículo",
+  identidade: "RG ou CNH",
+  cpf: "CPF",
+  ctps: "Carteira de trabalho",
+  residencia: "Comprovante de residência",
+  contrato: "Contrato assinado",
+  aso: "ASO do exame",
+  dependentes: "Documento de dependente",
+  outro: "Outro documento"
+};
+// Pasta de admissao: o minimo que a empresa precisa guardar de cada contratacao.
+const DOCS_ADMISSAO = ["identidade", "cpf", "ctps", "residencia", "contrato"];
+const STATUS_EXAME = {
+  agendado: "Agendado",
+  realizado: "Realizado"
 };
 const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(0, 7);
 // Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
@@ -1584,6 +1692,8 @@ const mapExame = r => ({
     path: r.anexo_url
   } : null,
   observacao: r.observacao,
+  status: r.status || "realizado",
+  dataPrevista: (r.data_prevista || "").slice(0, 10),
   criadoEm: r.criado_em
 });
 const mapGuia = r => ({
@@ -1592,7 +1702,45 @@ const mapGuia = r => ({
   tipo: r.tipo,
   valor: +r.valor_total,
   vencimento: r.vencimento,
-  status: r.status
+  status: r.status,
+  pagoEm: (r.pago_em || "").slice(0, 10),
+  valorPago: r.valor_pago == null ? null : +r.valor_pago,
+  comprovante: r.comprovante_url ? {
+    nome: r.comprovante_url.split("/").pop().replace(/^\d+_/, ""),
+    path: r.comprovante_url
+  } : null,
+  observacao: r.observacao || ""
+});
+const mapCandidato = r => ({
+  id: r.id,
+  nome: r.nome,
+  email: r.email || "",
+  telefone: r.telefone || "",
+  cargo: r.cargo || "",
+  origem: r.origem || "",
+  status: r.status || "recebido",
+  statusLabel: STATUS_CANDIDATO[r.status] || r.status,
+  curriculo: r.curriculo_url ? {
+    nome: r.curriculo_url.split("/").pop().replace(/^\d+_/, ""),
+    path: r.curriculo_url
+  } : null,
+  observacao: r.observacao || "",
+  contratadoUserId: r.contratado_usuario_id || null,
+  criadoEm: r.criado_em,
+  atualizadoEm: r.atualizado_em
+});
+const mapDocumento = r => ({
+  id: r.id,
+  userId: r.usuario_id || null,
+  candidatoId: r.candidato_id || null,
+  tipo: r.tipo,
+  tipoLabel: TIPOS_DOCUMENTO[r.tipo] || r.tipo,
+  arquivo: {
+    nome: r.nome_original || String(r.arquivo_url).split("/").pop().replace(/^\d+_/, ""),
+    path: r.arquivo_url
+  },
+  observacao: r.observacao || "",
+  criadoEm: r.criado_em
 });
 const mapConsImagem = r => ({
   userId: r.usuario_id,
@@ -3455,6 +3603,8 @@ function AppInterno() {
   const [guias, setGuias] = useState([]);
   const [rescisoes, setRescisoes] = useState([]);
   const [examesOcupacionais, setExamesOcupacionais] = useState([]);
+  const [candidatos, setCandidatos] = useState([]); // recrutamento: curriculo e etapas
+  const [documentosRH, setDocumentosRH] = useState([]); // pasta de documentos por pessoa
   const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
   const [consImagem, setConsImagem] = useState([]); // termo de imagem: ciência do CFTV + autorização pra divulgação
@@ -3693,6 +3843,24 @@ function AppInterno() {
           setAceites(rows.map(mapAceite));
         } catch (e) {
           console.warn("[aceites]", e.message);
+        }
+      })();
+      // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
+      // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "candidatos", "select=*&order=criado_em.desc");
+          setCandidatos(rows.map(mapCandidato));
+        } catch (e) {
+          console.warn("[candidatos]", e.message);
+        }
+      })();
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "documentos_rh", "select=*&order=criado_em.desc");
+          setDocumentosRH(rows.map(mapDocumento));
+        } catch (e) {
+          console.warn("[documentos rh]", e.message);
         }
       })();
     } catch (e) {
@@ -4800,21 +4968,6 @@ function AppInterno() {
       setErroDados(`Folha fechada, mas o registro na trilha de auditoria falhou (${mensagemAmigavel(e)}).`);
     }
   };
-  const marcarGuiaPaga = async id => {
-    if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, {
-      status: "paga"
-    });
-    setGuias(gs => gs.map(g => g.id === id ? {
-      ...g,
-      status: "paga"
-    } : g));
-    const gg = guias.find(x => x.id === id);
-    try {
-      await auditar("guia_paga", `${user.nome} marcou como PAGA a guia ${gg?.tipo || id} de ${gg ? brl(gg.valor) : "?"} (competência ${gg?.competencia?.slice(0, 7) || "?"})`);
-    } catch (e) {
-      console.warn("[auditoria guia]", e.message);
-    }
-  };
   const criarAdiantamento = async dados => {
     const valor = numeroValido(dados.valor, {
       min: 0.01
@@ -4965,6 +5118,242 @@ function AppInterno() {
     return novo;
   };
 
+  /* ---------- recrutamento, documentos e agenda de exame ---------- */
+  // O curriculo e os documentos vao pro bucket privado. O candidato nao tem
+  // login, entao o arquivo dele fica na pasta do gestor que subiu — e so o
+  // gestor abre. Documento nunca e apagado por aqui: some do painel, fica no banco.
+  const registrarDocumento = async dados => {
+    if (!dados.tipo || !TIPOS_DOCUMENTO[dados.tipo]) throw new Error("Escolha o tipo do documento.");
+    if (!dados.userId && !dados.candidatoId) throw new Error("Escolha de quem é o documento.");
+    const path = dados.path || (dados.arquivo ? await sbUpload(sessao.token, user.id, dados.arquivo) : null);
+    if (!path) throw new Error("Anexe o arquivo do documento.");
+    const linha = {
+      usuario_id: dados.userId || null,
+      candidato_id: dados.candidatoId || null,
+      tipo: dados.tipo,
+      arquivo_url: path,
+      nome_original: (dados.nomeOriginal || dados.arquivo?.name || "").slice(0, 180) || null,
+      observacao: limparTexto(dados.observacao, LIMITES.obs) || null,
+      criado_por: user.id
+    };
+    let novo;
+    if (demo) novo = mapDocumento({
+      id: `d${Date.now()}`,
+      ...linha,
+      criado_em: iso(new Date())
+    });else {
+      const [row] = await sbInsert(sessao.token, "documentos_rh", [linha]);
+      novo = mapDocumento(row);
+    }
+    setDocumentosRH(ds => [novo, ...ds]);
+    const dono = dados.userId ? usuarios.find(u => u.id === dados.userId)?.nome || "colaborador" : candidatos.find(c => c.id === dados.candidatoId)?.nome || "candidato";
+    try {
+      await auditar("documento_anexado", `${user.nome} anexou ${TIPOS_DOCUMENTO[dados.tipo]} de ${dono}`);
+    } catch (e) {
+      console.warn("[auditoria documento]", e.message);
+    }
+    return novo;
+  };
+  const abrirDocumento = async path => {
+    if (demo) throw new Error("Na demonstração os arquivos são fictícios: não há nada pra abrir.");
+    const url = await sbUrlAssinada(sessao.token, path);
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+  const criarCandidato = async dados => {
+    const nome = limparTexto(dados.nome, LIMITES.nome);
+    if (!nome || nome.length < 2) throw new Error("Informe o nome do candidato.");
+    const email = limparTexto(dados.email, LIMITES.email).toLowerCase();
+    if (email && !emailValido(email)) throw new Error("E-mail do candidato inválido.");
+    const path = dados.curriculo ? await sbUpload(sessao.token, user.id, dados.curriculo) : null;
+    const linha = {
+      nome,
+      email: email || null,
+      telefone: limparTexto(dados.telefone, 40) || null,
+      cargo: limparTexto(dados.cargo, LIMITES.cargo) || null,
+      origem: limparTexto(dados.origem, LIMITES.cargo) || null,
+      status: "recebido",
+      curriculo_url: path,
+      observacao: limparTexto(dados.observacao, LIMITES.obs) || null,
+      criado_por: user.id
+    };
+    let novo;
+    if (demo) novo = mapCandidato({
+      id: `c${Date.now()}`,
+      ...linha,
+      criado_em: iso(new Date()),
+      atualizado_em: iso(new Date())
+    });else {
+      const [row] = await sbInsert(sessao.token, "candidatos", [linha]);
+      novo = mapCandidato(row);
+    }
+    setCandidatos(cs => [novo, ...cs]);
+    if (path) {
+      try {
+        await registrarDocumento({
+          candidatoId: novo.id,
+          tipo: "curriculo",
+          path,
+          nomeOriginal: dados.curriculo.name
+        });
+      } catch (e) {
+        console.warn("[curriculo na pasta]", e.message);
+      }
+    }
+    try {
+      await auditar("candidato_criado", `${user.nome} cadastrou o candidato ${nome}${linha.cargo ? " para " + linha.cargo : ""}${path ? " com currículo anexado" : " sem currículo"}`);
+    } catch (e) {
+      console.warn("[auditoria candidato]", e.message);
+    }
+    return novo;
+  };
+  const mudarStatusCandidato = async (id, status) => {
+    if (!STATUS_CANDIDATO[status]) throw new Error("Etapa inválida.");
+    const agora = iso(new Date());
+    if (!demo) await sbUpdate(sessao.token, "candidatos", `id=eq.${id}`, {
+      status,
+      atualizado_em: agora
+    });
+    setCandidatos(cs => cs.map(c => c.id === id ? {
+      ...c,
+      status,
+      statusLabel: STATUS_CANDIDATO[status],
+      atualizadoEm: agora
+    } : c));
+    const c = candidatos.find(x => x.id === id);
+    try {
+      await auditar("candidato_etapa", `${user.nome} moveu ${c?.nome || id} para ${STATUS_CANDIDATO[status]}`);
+    } catch (e) {
+      console.warn("[auditoria etapa]", e.message);
+    }
+  };
+
+  // Contratar = criar o convite ja com os dados do candidato. O acesso nasce
+  // quando a pessoa usa o convite e escolhe a propria senha: o app nunca
+  // cria conta por ela nem guarda senha de ninguem.
+  const contratarCandidato = async (cand, dados) => {
+    const conv = await criarConvite({
+      nome: cand.nome,
+      email: dados.email || cand.email,
+      cargo: dados.cargo || cand.cargo,
+      tipo: "colaborador",
+      dataAdmissao: dados.dataAdmissao
+    });
+    await mudarStatusCandidato(cand.id, "contratado");
+    return conv;
+  };
+
+  // Exame agendado: data prevista, sem resultado. Vira realizado quando o ASO chega.
+  const agendarExame = async dados => {
+    if (!uuidValido(dados.userId) && !demo) throw new Error("Colaborador inválido.");
+    if (!TIPOS_EXAME[dados.tipo]) throw new Error("Tipo de exame inválido.");
+    if (!dataValida(dados.data)) throw new Error("Data prevista inválida.");
+    const linha = {
+      usuario_id: dados.userId,
+      tipo: dados.tipo,
+      data_exame: dados.data,
+      data_prevista: dados.data,
+      status: "agendado",
+      resultado: null,
+      clinica: limparTexto(dados.clinica, LIMITES.nome) || null,
+      observacao: limparTexto(dados.observacao, LIMITES.obs) || null,
+      criado_por: user.id
+    };
+    let novo;
+    if (demo) novo = mapExame({
+      id: `ex${Date.now()}`,
+      ...linha,
+      criado_em: iso(new Date())
+    });else {
+      const [row] = await sbInsert(sessao.token, "exames_ocupacionais", [linha]);
+      novo = mapExame(row);
+    }
+    setExamesOcupacionais(es => [novo, ...es]);
+    const nomeCol = usuarios.find(u => u.id === dados.userId)?.nome || dados.userId;
+    try {
+      await auditar("exame_agendado", `${user.nome} agendou exame ${TIPOS_EXAME[dados.tipo]} de ${nomeCol} para ${fmtData(dados.data)}${linha.clinica ? " na " + linha.clinica : ""}`);
+    } catch (e) {
+      console.warn("[auditoria exame agendado]", e.message);
+    }
+    return novo;
+  };
+  const concluirExame = async (id, dados) => {
+    if (!dataValida(dados.data)) throw new Error("Informe a data em que o exame foi feito.");
+    if (!RESULTADOS_EXAME[dados.resultado]) throw new Error("Informe o resultado do exame.");
+    const path = dados.anexo ? await sbUpload(sessao.token, user.id, dados.anexo) : null;
+    const patch = {
+      status: "realizado",
+      data_exame: dados.data,
+      resultado: dados.resultado
+    };
+    if (path) patch.anexo_url = path;
+    if (!demo) await sbUpdate(sessao.token, "exames_ocupacionais", `id=eq.${id}`, patch);
+    setExamesOcupacionais(es => es.map(e => e.id === id ? {
+      ...e,
+      status: "realizado",
+      data: dados.data,
+      resultado: dados.resultado,
+      resultadoLabel: RESULTADOS_EXAME[dados.resultado],
+      anexo: path ? {
+        nome: dados.anexo.name,
+        path
+      } : e.anexo
+    } : e));
+    const ex = examesOcupacionais.find(e => e.id === id);
+    if (ex?.userId && path) {
+      try {
+        await registrarDocumento({
+          userId: ex.userId,
+          tipo: "aso",
+          path,
+          nomeOriginal: dados.anexo.name
+        });
+      } catch (e) {
+        console.warn("[aso na pasta]", e.message);
+      }
+    }
+    const nomeCol = usuarios.find(u => u.id === ex?.userId)?.nome || "colaborador";
+    try {
+      await auditar("exame_concluido", `${user.nome} lançou o resultado do exame ${ex?.tipoLabel || ""} de ${nomeCol}: ${RESULTADOS_EXAME[dados.resultado]}`);
+    } catch (e) {
+      console.warn("[auditoria exame concluido]", e.message);
+    }
+  };
+
+  // A guia nao e paga aqui dentro: o pagamento acontece no banco ou com a
+  // contabilidade. O app guarda a prova (data, valor e comprovante).
+  const registrarPagamentoGuia = async (id, dados) => {
+    const g = guias.find(x => x.id === id);
+    if (!dataValida(dados.pagoEm)) throw new Error("Informe a data do pagamento.");
+    const valor = numeroValido(dados.valorPago, {
+      min: 0.01
+    });
+    if (valor === null) throw new Error("Informe o valor pago (maior que zero).");
+    const path = dados.comprovante ? await sbUpload(sessao.token, user.id, dados.comprovante) : null;
+    const patch = {
+      status: "paga",
+      pago_em: dados.pagoEm,
+      valor_pago: valor,
+      observacao: limparTexto(dados.observacao, LIMITES.obs) || null
+    };
+    if (path) patch.comprovante_url = path;
+    if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, patch);
+    setGuias(gs => gs.map(x => x.id === id ? {
+      ...x,
+      status: "paga",
+      pagoEm: dados.pagoEm,
+      valorPago: valor,
+      observacao: patch.observacao || "",
+      comprovante: path ? {
+        nome: dados.comprovante.name,
+        path
+      } : x.comprovante
+    } : x));
+    try {
+      await auditar("guia_paga", `${user.nome} registrou o pagamento da guia ${g?.tipo || id} de ${brl(valor)} em ${fmtData(dados.pagoEm)}${path ? " com comprovante anexado" : " sem comprovante"}`);
+    } catch (e) {
+      console.warn("[auditoria pagamento guia]", e.message);
+    }
+  };
   /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
     const mapa = {
@@ -5675,7 +6064,6 @@ function AppInterno() {
     onGerarFolha: gerarFolha,
     onEditarFolha: editarFolha,
     onFecharFolha: fecharFolha,
-    onMarcarGuiaPaga: marcarGuiaPaga,
     onCriarAdiant: criarAdiantamento,
     onCancelarAdiant: cancelarAdiantamento,
     rescisoes,
@@ -5683,6 +6071,16 @@ function AppInterno() {
     onCriarRescisao: criarRescisao,
     onConfirmarRescisao: confirmarRescisao,
     onCriarExame: criarExame,
+    onAgendarExame: agendarExame,
+    onConcluirExame: concluirExame,
+    candidatos,
+    documentosRH,
+    onCriarCandidato: criarCandidato,
+    onMudarStatusCandidato: mudarStatusCandidato,
+    onContratarCandidato: contratarCandidato,
+    onAnexarDocumento: registrarDocumento,
+    onAbrirArquivo: abrirDocumento,
+    onRegistrarPagamentoGuia: registrarPagamentoGuia,
     consImagem,
     aceites,
     demo
@@ -9544,7 +9942,7 @@ function ModalConfirm({
 
 /* Ações administrativas sensíveis: gravadas com auditoria CRÍTICA (aguardada, com retry e
    falha visível) e destacadas na trilha. São as que mexem em dinheiro, acesso ou registro de jornada. */
-const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada", "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto", "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado"];
+const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada", "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto", "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado", "exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado"];
 const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
 function SecaoFolha({
   usuarios,
@@ -9554,7 +9952,6 @@ function SecaoFolha({
   onGerarFolha,
   onEditarFolha,
   onFecharFolha,
-  onMarcarGuiaPaga,
   onCriarAdiant,
   onCancelarAdiant
 }) {
@@ -9844,7 +10241,13 @@ function SecaoFolha({
       fontSize: 13,
       color: C.cinza
     }
-  }, "Guias fiscais de ", comp), guiasMes.map(g => /*#__PURE__*/React.createElement("div", {
+  }, "Guias fiscais de ", comp), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      margin: "4px 0 0"
+    }
+  }, "O pagamento \xE9 registrado em Contabilidade, com data, valor e comprovante."), guiasMes.map(g => /*#__PURE__*/React.createElement("div", {
     key: g.id,
     style: {
       display: "flex",
@@ -9856,16 +10259,9 @@ function SecaoFolha({
     }
   }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, g.tipo), " \xB7 ", brl(g.valor), " \xB7 vence ", fmtData(g.vencimento)), g.status === "paga" ? /*#__PURE__*/React.createElement("span", {
     style: S.tag("#123B24", C.verde)
-  }, "PAGA") : /*#__PURE__*/React.createElement("button", {
-    style: {
-      ...S.btnGhost,
-      borderColor: C.verde,
-      color: C.verde,
-      padding: "5px 12px",
-      fontSize: 12
-    },
-    onClick: () => rodar(() => onMarcarGuiaPaga(g.id), "Guia marcada como paga.")
-  }, "Marcar paga")))), /*#__PURE__*/React.createElement("div", {
+  }, "PAGA") : /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3B2A12", C.amarelo)
+  }, "A PAGAR")))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14,
       borderTop: "1px solid #1E3450",
@@ -10239,14 +10635,19 @@ function SecaoRescisao({
   }, h("span", null, nome(r.userId) + " · " + r.motivoLabel + " · desligamento " + fmtData(r.dataDeslig) + " · líquido " + brl(r.liquido)), h(Badge, {
     st: r.status === "confirmado" ? "aprovado" : "pendente"
   })))) : null);
-}
+} /* Exames ocupacionais (NR-7). Duas coisas diferentes numa tela: AGENDAR o que
+  ainda vai acontecer (data prevista, sem resultado) e LANCAR o que ja aconteceu
+  com o ASO em anexo. O agendado alimenta a Agenda do RH; o realizado zera o prazo. */
 function SecaoExames({
   usuarios,
-  exames,
-  onCriarExame
+  exames = [],
+  onCriarExame,
+  onAgendar,
+  onConcluir,
+  onAbrir
 }) {
-  const h = React.createElement;
-  const nome = id => usuarios.find(u => u.id === id)?.nome || id;
+  const nome = id => usuarios.find(u => u.id === id)?.nome || "colaborador";
+  const [modo, setModo] = useState("agendar");
   const [form, setForm] = useState({
     userId: "",
     tipo: "admissional",
@@ -10256,35 +10657,33 @@ function SecaoExames({
     observacao: ""
   });
   const [anexo, setAnexo] = useState(null);
-  const [msg, setMsg] = useState(null);
   const [ocupado, setOcupado] = useState(false);
-  const registrar = async () => {
-    if (!form.userId || !form.data) {
-      setMsg({
-        ok: false,
-        txt: "Escolha o colaborador e a data do exame."
-      });
-      return;
-    }
+  const [msg, setMsg] = useState(null);
+  const [concluindo, setConcluindo] = useState(null);
+  const [fim2, setFim2] = useState({
+    data: hojeStr(),
+    resultado: "apto"
+  });
+  const [anexoFim, setAnexoFim] = useState(null);
+  const limpar = () => {
+    setForm({
+      userId: "",
+      tipo: "admissional",
+      data: "",
+      resultado: "",
+      clinica: "",
+      observacao: ""
+    });
+    setAnexo(null);
+  };
+  const rodar = async (fn, okTxt) => {
     setOcupado(true);
     setMsg(null);
     try {
-      await onCriarExame({
-        ...form,
-        anexo: anexo?.file || null
-      });
-      setForm({
-        userId: "",
-        tipo: "admissional",
-        data: "",
-        resultado: "",
-        clinica: "",
-        observacao: ""
-      });
-      setAnexo(null);
+      await fn();
       setMsg({
         ok: true,
-        txt: "Exame registrado."
+        txt: okTxt
       });
     } catch (e) {
       setMsg({
@@ -10295,26 +10694,101 @@ function SecaoExames({
       setOcupado(false);
     }
   };
-  return h("div", {
+  const enviar = () => {
+    if (!form.userId || !form.data) {
+      setMsg({
+        ok: false,
+        txt: "Escolha o colaborador e a data."
+      });
+      return;
+    }
+    if (modo === "agendar") return rodar(async () => {
+      await onAgendar({
+        ...form
+      });
+      limpar();
+    }, "Exame agendado. Ele já aparece na Agenda do RH.");
+    if (!form.resultado) {
+      setMsg({
+        ok: false,
+        txt: "Informe o resultado do exame que já foi feito."
+      });
+      return;
+    }
+    return rodar(async () => {
+      await onCriarExame({
+        ...form,
+        anexo: anexo?.file || null
+      });
+      limpar();
+    }, "Exame registrado.");
+  };
+  const pegarArquivo = (e, set) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const p = validarArquivo(f);
+    if (p) {
+      setMsg({
+        ok: false,
+        txt: p
+      });
+      return;
+    }
+    set({
+      nome: f.name,
+      file: f
+    });
+  };
+  const agendados = exames.filter(ex => ex.status === "agendado").sort((a, b) => a.data < b.data ? -1 : 1);
+  const feitos = exames.filter(ex => ex.status !== "agendado").sort((a, b) => a.data < b.data ? 1 : -1);
+  return /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14
     }
-  }, h("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 15,
-      color: C.cinza
+      color: C.branco
     }
-  }, "Exames ocupacionais (admissional, periódico, demissional…)"), h("div", {
+  }, "\uD83E\uDE7A Exames ocupacionais"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, "Admissional antes do primeiro dia, peri\xF3dico conforme o PCMSO e demissional no desligamento (NR-7). Agende o que est\xE1 por vir e guarde o ASO de cada um."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
-      marginTop: 10,
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, [["agendar", "Agendar exame"], ["registrar", "Lançar exame já feito"]].map(([k, r]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    style: modo === k ? {
+      ...S.btn,
+      padding: "7px 14px",
+      fontSize: 12.5
+    } : {
+      ...S.btnGhost,
+      padding: "7px 14px",
+      fontSize: 12.5
+    },
+    onClick: () => {
+      setModo(k);
+      setMsg(null);
+    }
+  }, r))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
       flexWrap: "wrap",
       alignItems: "center"
     }
-  }, h("select", {
+  }, /*#__PURE__*/React.createElement("select", {
     style: {
       ...S.input,
       width: 190
@@ -10324,25 +10798,25 @@ function SecaoExames({
       ...form,
       userId: e.target.value
     })
-  }, h("option", {
+  }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "Colaborador…"), usuarios.map(u => h("option", {
+  }, "Colaborador\u2026"), usuarios.map(u => /*#__PURE__*/React.createElement("option", {
     key: u.id,
     value: u.id
-  }, u.nome))), h("select", {
+  }, u.nome))), /*#__PURE__*/React.createElement("select", {
     style: {
       ...S.input,
-      width: 170
+      width: 180
     },
     value: form.tipo,
     onChange: e => setForm({
       ...form,
       tipo: e.target.value
     })
-  }, Object.entries(TIPOS_EXAME).map(([k, v]) => h("option", {
+  }, Object.entries(TIPOS_EXAME).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
     key: k,
     value: k
-  }, v))), h("input", {
+  }, v))), /*#__PURE__*/React.createElement("input", {
     type: "date",
     style: {
       ...S.input,
@@ -10353,92 +10827,202 @@ function SecaoExames({
       ...form,
       data: e.target.value
     })
-  }), h("select", {
+  }), modo === "registrar" && /*#__PURE__*/React.createElement("select", {
     style: {
       ...S.input,
-      width: 170
+      width: 190
     },
     value: form.resultado,
     onChange: e => setForm({
       ...form,
       resultado: e.target.value
     })
-  }, h("option", {
+  }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "Resultado (opcional)"), Object.entries(RESULTADOS_EXAME).map(([k, v]) => h("option", {
+  }, "Resultado\u2026"), Object.entries(RESULTADOS_EXAME).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
     key: k,
     value: k
-  }, v))), h("input", {
+  }, v))), /*#__PURE__*/React.createElement("input", {
     style: {
       ...S.input,
-      width: 170
+      width: 180
     },
-    placeholder: "Clínica",
+    placeholder: "Cl\xEDnica",
     value: form.clinica,
     onChange: e => setForm({
       ...form,
       clinica: e.target.value
     })
-  }), h("label", {
+  }), modo === "registrar" && /*#__PURE__*/React.createElement("label", {
     style: {
       ...S.btnGhost,
       cursor: "pointer",
       padding: "10px 14px",
       fontSize: 13
     }
-  }, anexo ? "Anexo: " + anexo.nome : "Anexar ASO", h("input", {
+  }, anexo ? "ASO: " + anexo.nome : "Anexar ASO", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*,.pdf",
     style: {
       display: "none"
     },
-    onChange: e => {
-      const f = e.target.files[0];
-      if (!f) return;
-      const p = validarArquivo(f);
-      if (p) {
-        setMsg({
-          ok: false,
-          txt: p
-        });
-        return;
-      }
-      setAnexo({
-        nome: f.name,
-        file: f
-      });
-    }
-  })), h("input", {
+    onChange: e => pegarArquivo(e, setAnexo)
+  })), /*#__PURE__*/React.createElement("input", {
     style: {
       ...S.input,
       width: 200
     },
-    placeholder: "Observação",
+    placeholder: "Observa\xE7\xE3o",
     value: form.observacao,
     onChange: e => setForm({
       ...form,
       observacao: e.target.value
     })
-  }), h("button", {
+  }), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
       opacity: ocupado ? 0.6 : 1
     },
     disabled: ocupado,
-    onClick: registrar
-  }, ocupado ? "Registrando…" : "Registrar exame")), msg ? h("p", {
+    onClick: enviar
+  }, ocupado ? "Salvando…" : modo === "agendar" ? "Agendar" : "Registrar exame")), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: msg.ok ? C.verde : C.vermelho,
       marginTop: 8
     }
-  }, msg.txt) : null, exames.length > 0 ? h("div", {
+  }, msg.txt), agendados.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      marginTop: 12,
+      marginTop: 14,
       borderTop: "1px solid #1E3450",
       paddingTop: 10
     }
-  }, exames.map(ex => h("div", {
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Agendados"), agendados.map(ex => /*#__PURE__*/React.createElement("div", {
+    key: ex.id,
+    style: {
+      borderTop: "1px solid #1A2F4A",
+      padding: "7px 0",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, nome(ex.userId), " \xB7 ", ex.tipoLabel, " \xB7 ", fmtData(ex.data), ex.clinica ? " · " + ex.clinica : ""), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3B2A12", C.amarelo)
+  }, "AGENDADO"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => {
+      setConcluindo(ex.id);
+      setFim2({
+        data: hojeStr(),
+        resultado: "apto"
+      });
+      setAnexoFim(null);
+      setMsg(null);
+    }
+  }, "Lan\xE7ar resultado"))), concluindo === ex.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: {
+      ...S.input,
+      width: 155
+    },
+    value: fim2.data,
+    onChange: e => setFim2({
+      ...fim2,
+      data: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: 190
+    },
+    value: fim2.resultado,
+    onChange: e => setFim2({
+      ...fim2,
+      resultado: e.target.value
+    })
+  }, Object.entries(RESULTADOS_EXAME).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...S.btnGhost,
+      cursor: "pointer",
+      padding: "10px 14px",
+      fontSize: 13
+    }
+  }, anexoFim ? "ASO: " + anexoFim.nome : "Anexar ASO", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => pegarArquivo(e, setAnexoFim)
+  })), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "8px 14px",
+      fontSize: 13,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado,
+    onClick: () => rodar(async () => {
+      await onConcluir(ex.id, {
+        ...fim2,
+        anexo: anexoFim?.file || null
+      });
+      setConcluindo(null);
+    }, "Resultado lançado. O prazo do próximo exame já foi recalculado.")
+  }, "Salvar resultado"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 13
+    },
+    onClick: () => setConcluindo(null)
+  }, "Cancelar"))))), feitos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Realizados"), feitos.map(ex => /*#__PURE__*/React.createElement("div", {
     key: ex.id,
     style: {
       display: "flex",
@@ -10450,7 +11034,1022 @@ function SecaoExames({
       gap: 10,
       flexWrap: "wrap"
     }
-  }, h("span", null, nome(ex.userId) + " · " + ex.tipoLabel + " · " + fmtData(ex.data) + (ex.resultadoLabel ? " · " + ex.resultadoLabel : " · resultado pendente") + (ex.clinica ? " · " + ex.clinica : "") + (ex.observacao ? " · " + ex.observacao : ""))))) : null);
+  }, /*#__PURE__*/React.createElement("span", null, nome(ex.userId), " \xB7 ", ex.tipoLabel, " \xB7 ", fmtData(ex.data), " \xB7 ", ex.resultadoLabel || "resultado pendente", ex.clinica ? " · " + ex.clinica : "", ex.observacao ? " · " + ex.observacao : ""), ex.anexo && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => onAbrir(ex.anexo.path)
+  }, "Abrir ASO")))));
+}
+/* Recrutamento: o curriculo entra aqui, o candidato anda pelas etapas e, quando
+   for contratado, o convite ja sai preenchido. O app nunca cria conta por ninguem:
+   a pessoa usa o convite e escolhe a propria senha. Curriculo de quem nao foi
+   contratado tambem tem prazo de guarda (LGPD art. 15): descarte quando nao servir mais. */
+function SecaoRecrutamento({
+  candidatos = [],
+  onCriar,
+  onMudarStatus,
+  onContratar,
+  onAbrir,
+  demo
+}) {
+  const [form, setForm] = useState({
+    nome: "",
+    email: "",
+    telefone: "",
+    cargo: "",
+    origem: "",
+    observacao: ""
+  });
+  const [curriculo, setCurriculo] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [filtro, setFiltro] = useState("todos");
+  const [contratando, setContratando] = useState(null);
+  const [adm, setAdm] = useState({
+    dataAdmissao: hojeStr(),
+    cargo: ""
+  });
+  const [convite, setConvite] = useState(null);
+  const rodar = async (fn, okTxt) => {
+    setOcupado(true);
+    setMsg(null);
+    try {
+      await fn();
+      if (okTxt) setMsg({
+        ok: true,
+        txt: okTxt
+      });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        txt: mensagemAmigavel(e)
+      });
+    } finally {
+      setOcupado(false);
+    }
+  };
+  const lista = filtro === "todos" ? candidatos : candidatos.filter(c => c.status === filtro);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83D\uDDC2 Recrutamento e curr\xEDculos"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, "Guarde o curr\xEDculo, acompanhe a etapa de cada candidato e transforme o aprovado em convite de acesso com um clique. Os arquivos ficam em \xE1rea privada: s\xF3 o gestor abre."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 190
+    },
+    placeholder: "Nome do candidato",
+    value: form.nome,
+    onChange: e => setForm({
+      ...form,
+      nome: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 200
+    },
+    placeholder: "E-mail",
+    value: form.email,
+    onChange: e => setForm({
+      ...form,
+      email: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 150
+    },
+    placeholder: "Telefone",
+    value: form.telefone,
+    onChange: e => setForm({
+      ...form,
+      telefone: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 170
+    },
+    placeholder: "Cargo pretendido",
+    value: form.cargo,
+    onChange: e => setForm({
+      ...form,
+      cargo: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 150
+    },
+    placeholder: "Como chegou",
+    value: form.origem,
+    onChange: e => setForm({
+      ...form,
+      origem: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...S.btnGhost,
+      cursor: "pointer",
+      padding: "10px 14px",
+      fontSize: 13
+    }
+  }, curriculo ? "Currículo: " + curriculo.nome : "Anexar currículo", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const p = validarArquivo(f);
+      if (p) {
+        setMsg({
+          ok: false,
+          txt: p
+        });
+        return;
+      }
+      setCurriculo({
+        nome: f.name,
+        file: f
+      });
+    }
+  })), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 200
+    },
+    placeholder: "Observa\xE7\xE3o",
+    value: form.observacao,
+    onChange: e => setForm({
+      ...form,
+      observacao: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado,
+    onClick: () => rodar(async () => {
+      await onCriar({
+        ...form,
+        curriculo: curriculo?.file || null
+      });
+      setForm({
+        nome: "",
+        email: "",
+        telefone: "",
+        cargo: "",
+        origem: "",
+        observacao: ""
+      });
+      setCurriculo(null);
+    }, "Candidato cadastrado.")
+  }, ocupado ? "Salvando…" : "Cadastrar candidato")), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: msg.ok ? C.verde : C.vermelho,
+      marginTop: 8
+    }
+  }, msg.txt), convite && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 12,
+      background: "#0F2A1C",
+      borderColor: "#1E5B3A"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: C.verde,
+      fontWeight: 700
+    }
+  }, "Convite criado para ", convite.nome), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 0",
+      lineHeight: 1.6
+    }
+  }, "Ele est\xE1 na lista de convites, em Equipe. Mande o link pra pessoa: ela escolhe a pr\xF3pria senha ao entrar.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 14
+    }
+  }, [["todos", "Todos"]].concat(ORDEM_CANDIDATO.map(k => [k, STATUS_CANDIDATO[k]])).map(([k, r]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    style: filtro === k ? {
+      ...S.btn,
+      padding: "6px 12px",
+      fontSize: 12
+    } : {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => setFiltro(k)
+  }, r, " ", k === "todos" ? candidatos.length : candidatos.filter(c => c.status === k).length))), lista.length === 0 ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: C.cinza,
+      marginTop: 12
+    }
+  }, "Nenhum candidato nessa etapa.") : lista.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    style: {
+      borderTop: "1px solid #1E3450",
+      padding: "9px 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13.5
+    }
+  }, c.nome, " ", c.cargo ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.cinza,
+      fontWeight: 400
+    }
+  }, "\xB7 ", c.cargo) : null), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      marginTop: 2
+    }
+  }, [c.email, c.telefone, c.origem ? "veio de " + c.origem : "", "cadastrado em " + fmtData(String(c.criadoEm).slice(0, 10))].filter(Boolean).join(" · ")), c.observacao ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      marginTop: 2
+    }
+  }, c.observacao) : null), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: S.tag(c.status === "contratado" ? "#123B24" : c.status === "reprovado" ? "#3B1220" : "#132A47", c.status === "contratado" ? C.verde : c.status === "reprovado" ? C.vermelho : C.azul)
+  }, c.statusLabel), c.curriculo && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => rodar(() => onAbrir(c.curriculo.path))
+  }, "Abrir curr\xEDculo"), /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: 170,
+      padding: "7px 10px",
+      fontSize: 12.5
+    },
+    value: c.status,
+    onChange: e => rodar(() => onMudarStatus(c.id, e.target.value), "Etapa atualizada.")
+  }, ORDEM_CANDIDATO.map(k => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, STATUS_CANDIDATO[k]))), c.status !== "contratado" && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => {
+      setContratando(c.id);
+      setAdm({
+        dataAdmissao: hojeStr(),
+        cargo: c.cargo || ""
+      });
+      setMsg(null);
+    }
+  }, "Contratar"))), contratando === c.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: {
+      ...S.input,
+      width: 160
+    },
+    value: adm.dataAdmissao,
+    onChange: e => setAdm({
+      ...adm,
+      dataAdmissao: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 180
+    },
+    placeholder: "Cargo na admiss\xE3o",
+    value: adm.cargo,
+    onChange: e => setAdm({
+      ...adm,
+      cargo: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "8px 14px",
+      fontSize: 13,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado,
+    onClick: () => rodar(async () => {
+      const conv = await onContratar(c, adm);
+      setConvite({
+        nome: c.nome
+      });
+      setContratando(null);
+      return conv;
+    }, "Convite criado e candidato marcado como contratado.")
+  }, "Criar convite de acesso"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 13
+    },
+    onClick: () => setContratando(null)
+  }, "Cancelar"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza
+    }
+  }, "O e-mail usado ser\xE1 ", c.email || "o que estiver no cadastro", ".")))));
+}
+
+/* Pasta de documentos de cada pessoa, com o checklist da admissao. O app diz o
+   que falta; nao inventa exigencia: a lista e a basica de contratacao no Brasil e
+   pode ser ajustada em DOCS_ADMISSAO conforme o que a contabilidade pedir. */
+function SecaoDocumentos({
+  usuarios = [],
+  documentos = [],
+  exames = [],
+  onAnexar,
+  onAbrir
+}) {
+  const equipe = usuarios.filter(u => u.ativo);
+  const [quem, setQuem] = useState("");
+  const [tipo, setTipo] = useState("identidade");
+  const [arquivo, setArquivo] = useState(null);
+  const [obs, setObs] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const alvo = quem || equipe[0]?.id || "";
+  const meus = documentos.filter(d => d.userId === alvo);
+  const tem = t => meus.some(d => d.tipo === t);
+  const admissional = exames.some(e => e.userId === alvo && e.tipo === "admissional" && e.status !== "agendado");
+  const faltando = DOCS_ADMISSAO.filter(t => !tem(t));
+  const rodar = async (fn, okTxt) => {
+    setOcupado(true);
+    setMsg(null);
+    try {
+      await fn();
+      setMsg({
+        ok: true,
+        txt: okTxt
+      });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        txt: mensagemAmigavel(e)
+      });
+    } finally {
+      setOcupado(false);
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83D\uDCC1 Documentos e pasta de admiss\xE3o"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, "Um lugar s\xF3 pra guardar documento de contrata\xE7\xE3o, contrato assinado e ASO. Guarde apenas o necess\xE1rio e por tempo definido (LGPD art. 6\xBA, I e III)."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: 200
+    },
+    value: alvo,
+    onChange: e => setQuem(e.target.value)
+  }, equipe.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, u.nome))), /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: 210
+    },
+    value: tipo,
+    onChange: e => setTipo(e.target.value)
+  }, Object.entries(TIPOS_DOCUMENTO).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...S.btnGhost,
+      cursor: "pointer",
+      padding: "10px 14px",
+      fontSize: 13
+    }
+  }, arquivo ? "Arquivo: " + arquivo.nome : "Escolher arquivo", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const p = validarArquivo(f);
+      if (p) {
+        setMsg({
+          ok: false,
+          txt: p
+        });
+        return;
+      }
+      setArquivo({
+        nome: f.name,
+        file: f
+      });
+    }
+  })), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 190
+    },
+    placeholder: "Observa\xE7\xE3o",
+    value: obs,
+    onChange: e => setObs(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado,
+    onClick: () => rodar(async () => {
+      await onAnexar({
+        userId: alvo,
+        tipo,
+        arquivo: arquivo?.file || null,
+        observacao: obs
+      });
+      setArquivo(null);
+      setObs("");
+    }, "Documento guardado.")
+  }, ocupado ? "Enviando…" : "Guardar documento")), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: msg.ok ? C.verde : C.vermelho,
+      marginTop: 8
+    }
+  }, msg.txt), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Checklist da admiss\xE3o"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, DOCS_ADMISSAO.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    style: S.tag(tem(t) ? "#123B24" : "#3B2A12", tem(t) ? C.verde : C.amarelo)
+  }, tem(t) ? "✓ " : "• ", TIPOS_DOCUMENTO[t])), /*#__PURE__*/React.createElement("span", {
+    style: S.tag(admissional ? "#123B24" : "#3B2A12", admissional ? C.verde : C.amarelo)
+  }, admissional ? "✓ " : "• ", "Exame admissional")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: faltando.length || !admissional ? C.amarelo : C.verde,
+      margin: "8px 0 0",
+      lineHeight: 1.6
+    }
+  }, faltando.length === 0 && admissional ? "Pasta completa." : "Falta: " + faltando.map(t => TIPOS_DOCUMENTO[t]).concat(admissional ? [] : ["exame admissional"]).join(", ") + ".")), meus.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Arquivos guardados"), meus.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderTop: "1px solid #1A2F4A",
+      padding: "7px 0",
+      fontSize: 13,
+      gap: 10,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, d.tipoLabel), " \xB7 ", d.arquivo.nome, " \xB7 ", fmtData(String(d.criadoEm).slice(0, 10)), d.observacao ? " · " + d.observacao : ""), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => rodar(() => onAbrir(d.arquivo.path), "Arquivo aberto em outra aba.")
+  }, "Abrir")))));
+}
+/* Contabilidade: o que a equipe custa de verdade e o que precisa ser recolhido.
+   Tres numeros que ninguem enxerga no holerite: encargos por fora do bruto,
+   provisao de 13o e ferias (dinheiro que ja e devido, mesmo sem ter saido) e o
+   custo total. O regime muda a conta e vem escolhido aqui em cima, porque no
+   Simples Nacional a parte patronal do INSS ja esta dentro do DAS.
+   Numero de apoio a decisao: a apuracao oficial e a da contabilidade. */
+function SecaoContabilidade({
+  usuarios = [],
+  folhasPg = [],
+  guias = [],
+  onRegistrarPagamento,
+  onAbrir,
+  demo
+}) {
+  const nome = id => usuarios.find(u => u.id === id)?.nome || "colaborador";
+  const comps = Array.from(new Set(folhasPg.map(f => f.competencia).concat(guias.map(g => g.competencia)))).filter(Boolean).sort().reverse();
+  const [comp, setComp] = useState("");
+  const [regime, setRegime] = useState("simples");
+  const [pagando, setPagando] = useState(null);
+  const [pag, setPag] = useState({
+    pagoEm: hojeStr(),
+    valorPago: "",
+    observacao: ""
+  });
+  const [comprovante, setComprovante] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const alvo = comp || comps[0] || compDe(new Date());
+  const folhas = folhasPg.filter(f => f.competencia === alvo);
+  const custo = useMemo(() => custoDaEquipe(folhas, regime), [folhas, regime]);
+  const guiasMes = guias.filter(g => g.competencia === alvo);
+  const aPagar = guiasMes.filter(g => g.status !== "paga");
+  const rodar = async (fn, okTxt) => {
+    setOcupado(true);
+    setMsg(null);
+    try {
+      await fn();
+      setMsg({
+        ok: true,
+        txt: okTxt
+      });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        txt: mensagemAmigavel(e)
+      });
+    } finally {
+      setOcupado(false);
+    }
+  };
+  const csvContador = () => {
+    const num = v => String(r2(+v || 0)).replace(".", ",");
+    const linhas = [["Competencia", rotuloComp(alvo)], ["Regime", custo.regimeLabel], ["Pessoas", custo.pessoas], ["Salario bruto", num(custo.bruto)], ["INSS retido do colaborador", num(custo.inssRetido)], ["IRRF retido", num(custo.irrfRetido)], ["Liquido pago", num(custo.liquido)], ["FGTS 8%", num(custo.fgts)], ["INSS patronal", num(custo.inssPatronal)], ["RAT", num(custo.rat)], ["Terceiros", num(custo.terceiros)], ["Total de encargos", num(custo.encargos)], ["Provisao 13o", num(custo.decimo)], ["Provisao ferias", num(custo.ferias)], ["Provisao 1/3 de ferias", num(custo.tercoFerias)], ["Encargos sobre provisoes", num(custo.encargosProvisao)], ["Total provisionado", num(custo.provisoes)], ["Custo de caixa do mes", num(custo.custoCaixa)], ["Custo total com provisoes", num(custo.custoTotal)]];
+    const gs = guiasMes.map(g => [g.tipo, num(g.valor), g.vencimento || "", g.status, g.pagoEm || "", g.valorPago == null ? "" : num(g.valorPago)]);
+    const txt = [["Resumo da folha para a contabilidade"], [], ...linhas, [], ["Guias", "Valor", "Vencimento", "Status", "Pago em", "Valor pago"], ...gs].map(l => l.join(";")).join("\r\n");
+    baixarArquivo(txt, "contabilidade-" + alvo.slice(0, 7) + ".csv");
+  };
+  const Linha = ({
+    rot,
+    val,
+    forte,
+    cor
+  }) => /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      borderTop: "1px solid #1A2F4A",
+      padding: "6px 0",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.cinza
+    }
+  }, rot), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: forte ? 700 : 400,
+      color: cor || C.branco,
+      fontVariantNumeric: "tabular-nums"
+    }
+  }, brl(val)));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83E\uDDFE Contabilidade \xB7 custo da equipe"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap"
+    },
+    className: "no-print"
+  }, /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: "auto",
+      padding: "9px 12px",
+      fontSize: 13
+    },
+    value: alvo,
+    onChange: e => setComp(e.target.value)
+  }, (comps.length ? comps : [alvo]).map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, rotuloComp(c)))), /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      width: "auto",
+      padding: "9px 12px",
+      fontSize: 13
+    },
+    value: regime,
+    onChange: e => setRegime(e.target.value)
+  }, Object.entries(REGIMES_EMPRESA).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v.label))), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "9px 14px",
+      fontSize: 13
+    },
+    onClick: csvContador
+  }, "\u2B07 Resumo pro contador"))), folhas.length === 0 ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: C.cinza,
+      marginTop: 10,
+      lineHeight: 1.6
+    }
+  }, "Nenhuma folha gerada nesta compet\xEAncia. Gere a folha em Folha de pagamento e o custo aparece aqui.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+      gap: 10,
+      marginTop: 12
+    }
+  }, [["Salário bruto", custo.bruto, C.branco], ["Encargos por fora", custo.encargos, C.amarelo], ["Provisões do mês", custo.provisoes, C.azul], ["Custo total", custo.custoTotal, C.dourado]].map(([rot, val, cor]) => /*#__PURE__*/React.createElement("div", {
+    key: rot,
+    style: {
+      background: C.vidro,
+      border: "1px solid " + C.borda,
+      borderRadius: 12,
+      padding: "10px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.cinza
+    }
+  }, rot), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 18,
+      color: cor,
+      fontVariantNumeric: "tabular-nums"
+    }
+  }, brl(val))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Como chega nesse n\xFAmero (", custo.pessoas, " pessoa(s))"), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Sal\xE1rio bruto da equipe",
+    val: custo.bruto
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "INSS descontado do colaborador",
+    val: -custo.inssRetido
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "IRRF descontado do colaborador",
+    val: -custo.irrfRetido
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "L\xEDquido que entra na conta deles",
+    val: custo.liquido,
+    forte: true
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "FGTS 8% (empresa)",
+    val: custo.fgts
+  }), custo.inssPatronal > 0 && /*#__PURE__*/React.createElement(Linha, {
+    rot: "INSS patronal 20%",
+    val: custo.inssPatronal
+  }), custo.rat > 0 && /*#__PURE__*/React.createElement(Linha, {
+    rot: "RAT",
+    val: custo.rat
+  }), custo.terceiros > 0 && /*#__PURE__*/React.createElement(Linha, {
+    rot: "Terceiros (Sistema S, Sal\xE1rio-educa\xE7\xE3o)",
+    val: custo.terceiros
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Provis\xE3o de 13\xBA (1/12)",
+    val: custo.decimo
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Provis\xE3o de f\xE9rias (1/12)",
+    val: custo.ferias
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Provis\xE3o do 1/3 de f\xE9rias",
+    val: custo.tercoFerias
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Encargos sobre as provis\xF5es",
+    val: custo.encargosProvisao
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Sai do caixa neste m\xEAs",
+    val: custo.custoCaixa,
+    forte: true,
+    cor: C.amarelo
+  }), /*#__PURE__*/React.createElement(Linha, {
+    rot: "Custo total com as provis\xF5es",
+    val: custo.custoTotal,
+    forte: true,
+    cor: C.dourado
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Guias de ", rotuloComp(alvo)), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      margin: "6px 0 0",
+      lineHeight: 1.6
+    }
+  }, "O pagamento em si acontece no banco ou com a contabilidade \u2014 o app n\xE3o paga guia e n\xE3o emite c\xF3digo de barras. Aqui fica a prova: data, valor e comprovante."), guiasMes.length === 0 ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: C.cinza,
+      marginTop: 8
+    }
+  }, "Nenhuma guia gerada. Elas nascem quando a folha da compet\xEAncia \xE9 fechada.") : guiasMes.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.id,
+    style: {
+      borderTop: "1px solid #1A2F4A",
+      padding: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
+      alignItems: "center",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, g.tipo), " \xB7 ", brl(g.valor), " \xB7 vence ", fmtData(g.vencimento), g.pagoEm ? " · pago em " + fmtData(g.pagoEm) : "", g.valorPago != null ? " · valor pago " + brl(g.valorPago) : ""), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, g.status === "paga" ? /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#123B24", C.verde)
+  }, "PAGA") : /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3B2A12", C.amarelo)
+  }, "A PAGAR"), g.comprovante && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => rodar(() => onAbrir(g.comprovante.path), "Comprovante aberto em outra aba.")
+  }, "Comprovante"), g.status !== "paga" && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      borderColor: C.verde,
+      color: C.verde,
+      padding: "5px 12px",
+      fontSize: 12
+    },
+    onClick: () => {
+      setPagando(g.id);
+      setPag({
+        pagoEm: hojeStr(),
+        valorPago: String(g.valor),
+        observacao: ""
+      });
+      setComprovante(null);
+      setMsg(null);
+    }
+  }, "Registrar pagamento"))), pagando === g.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: {
+      ...S.input,
+      width: 155
+    },
+    value: pag.pagoEm,
+    onChange: e => setPag({
+      ...pag,
+      pagoEm: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 140
+    },
+    placeholder: "Valor pago",
+    value: pag.valorPago,
+    onChange: e => setPag({
+      ...pag,
+      valorPago: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...S.btnGhost,
+      cursor: "pointer",
+      padding: "10px 14px",
+      fontSize: 13
+    }
+  }, comprovante ? "Comprovante: " + comprovante.nome : "Anexar comprovante", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,.pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const p = validarArquivo(f);
+      if (p) {
+        setMsg({
+          ok: false,
+          txt: p
+        });
+        return;
+      }
+      setComprovante({
+        nome: f.name,
+        file: f
+      });
+    }
+  })), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 180
+    },
+    placeholder: "Observa\xE7\xE3o",
+    value: pag.observacao,
+    onChange: e => setPag({
+      ...pag,
+      observacao: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "8px 14px",
+      fontSize: 13,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado,
+    onClick: () => rodar(async () => {
+      await onRegistrarPagamento(g.id, {
+        ...pag,
+        comprovante: comprovante?.file || null
+      });
+      setPagando(null);
+    }, "Pagamento registrado com data e comprovante.")
+  }, "Salvar pagamento"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 13
+    },
+    onClick: () => setPagando(null)
+  }, "Cancelar")))), aPagar.length > 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.amarelo,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, aPagar.length, " guia(s) sem pagamento registrado, somando ", brl(aPagar.reduce((s, g) => s + g.valor, 0)), ".")), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: msg.ok ? C.verde : C.vermelho,
+      marginTop: 8
+    }
+  }, msg.txt), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.cinza,
+      margin: "12px 0 0",
+      lineHeight: 1.6
+    }
+  }, AVISO_FOLHA, " As provis\xF5es seguem a regra geral (1/12 do bruto para o 13\xBA, 1/12 para f\xE9rias e 1/36 para o ter\xE7o) e servem pra voc\xEA saber quanto guardar \u2014 o lan\xE7amento cont\xE1bil \xE9 feito pela contabilidade."));
 }
 function TelaHolerite({
   user,
@@ -10765,6 +12364,12 @@ const TABELAS_OPCIONAIS = [{
 }, {
   nome: "aceites",
   para: "aceite do código de conduta e do espelho"
+}, {
+  nome: "candidatos",
+  para: "recrutamento e currículos"
+}, {
+  nome: "documentos_rh",
+  para: "documentos do colaborador"
 }];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -10810,7 +12415,65 @@ create policy "aceites: dono cuida" on public.aceites
 drop policy if exists "aceites: gestor le" on public.aceites;
 create policy "aceites: gestor le" on public.aceites
   for select to authenticated using (exists (
-    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+create table if not exists public.candidatos (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  email text,
+  telefone text,
+  cargo text,
+  origem text,
+  status text not null default 'recebido',
+  curriculo_url text,
+  observacao text,
+  contratado_usuario_id uuid references public.usuarios (id) on delete set null,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  atualizado_em timestamptz not null default now()
+);
+
+create table if not exists public.documentos_rh (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid references public.usuarios (id) on delete cascade,
+  candidato_id uuid references public.candidatos (id) on delete cascade,
+  tipo text not null,
+  arquivo_url text not null,
+  nome_original text,
+  observacao text,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  constraint documentos_rh_tem_dono check (usuario_id is not null or candidato_id is not null)
+);
+
+-- Exame agendado (data prevista) x exame realizado (data e resultado).
+alter table public.exames_ocupacionais add column if not exists status text not null default 'realizado';
+alter table public.exames_ocupacionais add column if not exists data_prevista date;
+
+-- Pagamento da guia: data, valor pago e comprovante guardado.
+alter table public.guias_fiscais add column if not exists pago_em date;
+alter table public.guias_fiscais add column if not exists valor_pago numeric(12,2);
+alter table public.guias_fiscais add column if not exists comprovante_url text;
+alter table public.guias_fiscais add column if not exists observacao text;
+
+alter table public.candidatos enable row level security;
+alter table public.documentos_rh enable row level security;
+
+-- Recrutamento e documentos sao do gestor; o colaborador le os proprios documentos.
+drop policy if exists "candidatos: gestor cuida" on public.candidatos;
+create policy "candidatos: gestor cuida" on public.candidatos
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: gestor cuida" on public.documentos_rh;
+create policy "documentos: gestor cuida" on public.documentos_rh
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: dono le o proprio" on public.documentos_rh;
+create policy "documentos: dono le o proprio" on public.documentos_rh
+  for select to authenticated using (usuario_id = auth.uid());`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */
@@ -11336,7 +12999,6 @@ function TelaGestor({
   onGerarFolha,
   onEditarFolha,
   onFecharFolha,
-  onMarcarGuiaPaga,
   onCriarAdiant,
   onCancelarAdiant,
   rescisoes,
@@ -11344,6 +13006,16 @@ function TelaGestor({
   onCriarRescisao,
   onConfirmarRescisao,
   onCriarExame,
+  onAgendarExame,
+  onConcluirExame,
+  candidatos,
+  documentosRH,
+  onCriarCandidato,
+  onMudarStatusCandidato,
+  onContratarCandidato,
+  onAnexarDocumento,
+  onAbrirArquivo,
+  onRegistrarPagamentoGuia,
   consImagem,
   aceites,
   demo
@@ -11627,7 +13299,6 @@ function TelaGestor({
     onGerarFolha,
     onEditarFolha,
     onFecharFolha,
-    onMarcarGuiaPaga,
     onCriarAdiant,
     onCancelarAdiant
   }), /*#__PURE__*/React.createElement(SecaoRescisao, {
@@ -11638,7 +13309,30 @@ function TelaGestor({
   }), /*#__PURE__*/React.createElement(SecaoExames, {
     usuarios: usuarios,
     exames: examesOcupacionais,
-    onCriarExame: onCriarExame
+    onCriarExame: onCriarExame,
+    onAgendar: onAgendarExame,
+    onConcluir: onConcluirExame,
+    onAbrir: onAbrirArquivo
+  }), /*#__PURE__*/React.createElement(SecaoRecrutamento, {
+    candidatos: candidatos,
+    onCriar: onCriarCandidato,
+    onMudarStatus: onMudarStatusCandidato,
+    onContratar: onContratarCandidato,
+    onAbrir: onAbrirArquivo,
+    demo: demo
+  }), /*#__PURE__*/React.createElement(SecaoDocumentos, {
+    usuarios: usuarios,
+    documentos: documentosRH,
+    exames: examesOcupacionais,
+    onAnexar: onAnexarDocumento,
+    onAbrir: onAbrirArquivo
+  }), /*#__PURE__*/React.createElement(SecaoContabilidade, {
+    usuarios: usuarios,
+    folhasPg: folhasPg,
+    guias: guias,
+    onRegistrarPagamento: onRegistrarPagamentoGuia,
+    onAbrir: onAbrirArquivo,
+    demo: demo
   }), /*#__PURE__*/React.createElement(SecaoLocais, {
     locais: locais,
     onCriar: onCriarLocal,
@@ -11673,6 +13367,8 @@ function TelaGestor({
       guias,
       rescisoes,
       exames: examesOcupacionais,
+      candidatos,
+      documentos: documentosRH,
       consImagem,
       aceites,
       locais,
@@ -11863,7 +13559,7 @@ document.addEventListener("DOMContentLoaded", function () {
      O service worker guarda somente o casco do app (index.html, React, icones).
      Nenhuma chamada ao Supabase passa pelo cache: dado de ponto nao fica gravado ali. -->
 <script>
-window.__APP_VERSAO = '2026.07.26-2';
+window.__APP_VERSAO = '2026.07.26-3';
 (function () {
   var instalado = false;
   try {
