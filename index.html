@@ -2750,7 +2750,6 @@ function legendaLembretes(status, instalado) {
    Function lembretes-push percorre essa lista nos horarios de batida.
    Sem inscricao, o lembrete volta a depender do app aberto. */
 const VAPID_PUBLICA = "BNN_ZavXeLShPczVpCz0WWFXR77-IoZ4qgJ7bGDjN92NMU5aIwnoAJVsCELo1n7vYha6fF8B_BRpIAgpTV_2Z5M";
-
 function b64UrlParaBytes(txt) {
   const b64 = (txt + "=".repeat((4 - txt.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(b64);
@@ -2758,7 +2757,6 @@ function b64UrlParaBytes(txt) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
-
 function bytesParaB64Url(buffer) {
   const bytes = new Uint8Array(buffer);
   let txt = "";
@@ -2781,12 +2779,17 @@ async function registrarPush(token, uid, demo) {
     // se a chave VAPID mudou, a inscricao antiga nao serve mais
     if (insc && insc.options && insc.options.applicationServerKey) {
       if (bytesParaB64Url(insc.options.applicationServerKey) !== VAPID_PUBLICA) {
-        try { await insc.unsubscribe(); } catch {}
+        try {
+          await insc.unsubscribe();
+        } catch {}
         insc = null;
       }
     }
     if (!insc) {
-      insc = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64UrlParaBytes(VAPID_PUBLICA) });
+      insc = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: b64UrlParaBytes(VAPID_PUBLICA)
+      });
     }
     const dados = insc.toJSON ? insc.toJSON() : {};
     const chaves = dados.keys || {};
@@ -3484,7 +3487,9 @@ function AppInterno() {
   const [atualizacaoPronta, setAtualizacaoPronta] = useState(false);
   useEffect(() => {
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    const ouvir = (ev) => { if (ev.data && ev.data.tipo === "ATUALIZACAO_PRONTA") setAtualizacaoPronta(true); };
+    const ouvir = ev => {
+      if (ev.data && ev.data.tipo === "ATUALIZACAO_PRONTA") setAtualizacaoPronta(true);
+    };
     navigator.serviceWorker.addEventListener("message", ouvir);
     return () => navigator.serviceWorker.removeEventListener("message", ouvir);
   }, []);
@@ -6292,6 +6297,7 @@ function Login({
     }
   }, EMPRESA.nome), " \xB7 CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), EMPRESA.endereco, " \xB7 CEP ", EMPRESA.cep, /*#__PURE__*/React.createElement("br", null), EMPRESA.ramo)));
 }
+
 /* Relogio com vida propria. Antes o horario ficava no estado do topo do app,
    entao o app INTEIRO era redesenhado 1x por segundo - em celular fraco e isso
    que da a sensacao de travamento. Agora so este pedacinho pisca a cada
@@ -6320,7 +6326,6 @@ function RelogioVivo() {
     month: "long"
   })));
 }
-
 function TelaPonto({
   user,
   relogio,
