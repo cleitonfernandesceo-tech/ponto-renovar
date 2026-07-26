@@ -374,6 +374,21 @@ async function sbUpload(token, uid, file) {
   if (!r.ok) throw new Error(`Upload falhou (${r.status}): ${await r.text()}`);
   return path; // gravado em anexo_url; leitura via URL assinada (gestor/dono, conforme policies)
 }
+// O bucket "anexos" e privado: pra abrir um arquivo o app pede uma URL assinada,
+// que vale poucos minutos. Assim o link nao pode ser repassado por engano nem
+// indexado, e a leitura continua valendo as policies (dono da pasta ou gestor).
+async function sbUrlAssinada(token, path, segundos = 120) {
+  const r = await fetch(`${SUPA.url}/storage/v1/object/sign/anexos/${path}`, {
+    method: "POST",
+    headers: { apikey: SUPA.anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: segundos }),
+  });
+  if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+  const d = await r.json();
+  const rel = d.signedURL || d.signedUrl;
+  if (!rel) throw new Error("O servidor não devolveu o link do arquivo.");
+  return `${SUPA.url}/storage/v1${rel.startsWith("/") ? "" : "/"}${rel}`;
+}
 const sbRpc = (t, fn, args) => sbFetch(t, `/rest/v1/rpc/${fn}`, { method: "POST", body: args });
 async function sbSignUp(email, password) {
   const r = await fetch(`${SUPA.url}/auth/v1/signup`, {
@@ -772,8 +787,52 @@ function calcRescisao(u, dataDesligStr, motivoKey, avisoTipo) {
    };
 }
 const AVISO_RESCISAO = "Calculo de apoio a decisao gerencial (CLT arts. 477/478/487, Lei 12.506/2011, Lei 8.036/90 art. 18 par.1). Ferias vencidas nao gozadas devem ser confirmadas manualmente pelo gestor. Nao substitui o TRCT oficial, a homologacao (quando exigida) nem o calculo definitivo do contador com o extrato real do FGTS.";
-const TIPOS_EXAME = { admissional: "Admissional", periodico: "Periodico", retorno_trabalho: "Retorno ao trabalho", mudanca_funcao: "Mudanca de funcao", demissional: "Demissional" };
+/* --------- custo real da equipe: encargos e provisoes ---------
+   O liquido do holerite nao e o que a empresa gasta. Alem do bruto entram FGTS,
+   provisao de 13o e de ferias com 1/3 e - fora do Simples - INSS patronal, RAT
+   e terceiros. O regime e escolhido na tela porque muda tudo: no Simples
+   Nacional a parte patronal do INSS ja esta dentro do DAS, entao somar 20% ali
+   inventaria um custo que a empresa nao tem. Numeros de apoio: quem fecha a
+   apuracao e a contabilidade. */
+const REGIMES_EMPRESA = {
+  simples: { label: "Simples Nacional — INSS patronal já vai no DAS", inssPatronal: 0, rat: 0, terceiros: 0 },
+  normal: { label: "Lucro presumido ou real — INSS patronal por fora", inssPatronal: 0.2, rat: 0.02, terceiros: 0.058 },
+};
+function custoDaEquipe(folhas = [], regimeKey = "simples") {
+  const reg = REGIMES_EMPRESA[regimeKey] || REGIMES_EMPRESA.simples;
+  const soma = (campo) => r2(folhas.reduce((s, f) => s + (+f[campo] || 0), 0));
+  const bruto = soma("salario");
+  const aliquotaPatronal = TABELAS_2026.fgtsPatronal + reg.inssPatronal + reg.rat + reg.terceiros;
+  const fgts = r2(bruto * TABELAS_2026.fgtsPatronal);
+  const inssPatronal = r2(bruto * reg.inssPatronal);
+  const rat = r2(bruto * reg.rat);
+  const terceiros = r2(bruto * reg.terceiros);
+  const encargos = r2(fgts + inssPatronal + rat + terceiros);
+  // Provisao mensal: 1/12 do bruto pro 13o, 1/12 pras ferias e 1/36 pro terco.
+  const decimo = r2(bruto / 12);
+  const ferias = r2(bruto / 12);
+  const tercoFerias = r2(bruto / 36);
+  const encargosProvisao = r2((decimo + ferias + tercoFerias) * aliquotaPatronal);
+  const provisoes = r2(decimo + ferias + tercoFerias + encargosProvisao);
+  return {
+    pessoas: folhas.length, regime: regimeKey, regimeLabel: reg.label,
+    bruto, liquido: soma("liquido"), inssRetido: soma("inss"), irrfRetido: soma("irrf"),
+    fgts, inssPatronal, rat, terceiros, encargos,
+    decimo, ferias, tercoFerias, encargosProvisao, provisoes,
+    custoCaixa: r2(bruto + encargos), custoTotal: r2(bruto + encargos + provisoes),
+  };
+}
+const TIPOS_EXAME = { admissional: "Admissional", periodico: "Periódico", retorno_trabalho: "Retorno ao trabalho", mudanca_funcao: "Mudança de função", demissional: "Demissional" };
 const RESULTADOS_EXAME = { apto: "Apto", apto_com_restricao: "Apto com restricao", inapto: "Inapto" };
+/* --------- recrutamento, documentos e agendamento de exame ---------
+   Curriculo e documentos vao pro bucket privado "anexos", igual aos atestados.
+   Candidato nao tem login, entao o arquivo dele fica na pasta do gestor que subiu. */
+const STATUS_CANDIDATO = { recebido: "Currículo recebido", entrevista: "Em entrevista", aprovado: "Aprovado", contratado: "Contratado", reprovado: "Não seguiu" };
+const ORDEM_CANDIDATO = ["recebido", "entrevista", "aprovado", "contratado", "reprovado"];
+const TIPOS_DOCUMENTO = { curriculo: "Currículo", identidade: "RG ou CNH", cpf: "CPF", ctps: "Carteira de trabalho", residencia: "Comprovante de residência", contrato: "Contrato assinado", aso: "ASO do exame", dependentes: "Documento de dependente", outro: "Outro documento" };
+// Pasta de admissao: o minimo que a empresa precisa guardar de cada contratacao.
+const DOCS_ADMISSAO = ["identidade", "cpf", "ctps", "residencia", "contrato"];
+const STATUS_EXAME = { agendado: "Agendado", realizado: "Realizado" };
 
 const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(0, 7);
 // Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
@@ -834,8 +893,10 @@ const mapFolhaPg = (r) => ({
 });
 const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
 const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.data_desligamento || "").slice(0, 10), motivo: r.motivo, motivoLabel: MOTIVOS_RESCISAO[r.motivo]?.label || r.motivo, avisoTipo: r.aviso_tipo, calculo: r.calculo || null, totalProventos: +r.total_proventos || 0, totalDescontos: +r.total_descontos || 0, liquido: +r.valor_liquido || 0, status: r.status, criadoEm: r.criado_em, confirmadoEm: r.confirmado_em });
-const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, criadoEm: r.criado_em });
-const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status });
+const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, status: r.status || "realizado", dataPrevista: (r.data_prevista || "").slice(0, 10), criadoEm: r.criado_em });
+const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status, pagoEm: (r.pago_em || "").slice(0, 10), valorPago: r.valor_pago == null ? null : +r.valor_pago, comprovante: r.comprovante_url ? { nome: r.comprovante_url.split("/").pop().replace(/^\d+_/, ""), path: r.comprovante_url } : null, observacao: r.observacao || "" });
+const mapCandidato = (r) => ({ id: r.id, nome: r.nome, email: r.email || "", telefone: r.telefone || "", cargo: r.cargo || "", origem: r.origem || "", status: r.status || "recebido", statusLabel: STATUS_CANDIDATO[r.status] || r.status, curriculo: r.curriculo_url ? { nome: r.curriculo_url.split("/").pop().replace(/^\d+_/, ""), path: r.curriculo_url } : null, observacao: r.observacao || "", contratadoUserId: r.contratado_usuario_id || null, criadoEm: r.criado_em, atualizadoEm: r.atualizado_em });
+const mapDocumento = (r) => ({ id: r.id, userId: r.usuario_id || null, candidatoId: r.candidato_id || null, tipo: r.tipo, tipoLabel: TIPOS_DOCUMENTO[r.tipo] || r.tipo, arquivo: { nome: r.nome_original || String(r.arquivo_url).split("/").pop().replace(/^\d+_/, ""), path: r.arquivo_url }, observacao: r.observacao || "", criadoEm: r.criado_em });
 
 const mapConsImagem = (r) => ({ userId: r.usuario_id, cftvCiente: !!r.cftv_ciente, autorizada: !!r.imagem_autorizada, atualizadoEm: r.atualizado_em });
 
@@ -1989,6 +2050,8 @@ function AppInterno() {
   const [guias, setGuias] = useState([]);
    const [rescisoes, setRescisoes] = useState([]);
    const [examesOcupacionais, setExamesOcupacionais] = useState([]);
+  const [candidatos, setCandidatos] = useState([]); // recrutamento: curriculo e etapas
+  const [documentosRH, setDocumentosRH] = useState([]); // pasta de documentos por pessoa
   const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
   const [consImagem, setConsImagem] = useState([]); // termo de imagem: ciência do CFTV + autorização pra divulgação
@@ -2170,6 +2233,20 @@ function AppInterno() {
           const rows = await sbSelect(token, "aceites", "select=*");
           setAceites(rows.map(mapAceite));
         } catch (e) { console.warn("[aceites]", e.message); }
+      })();
+      // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
+      // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "candidatos", "select=*&order=criado_em.desc");
+          setCandidatos(rows.map(mapCandidato));
+        } catch (e) { console.warn("[candidatos]", e.message); }
+      })();
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "documentos_rh", "select=*&order=criado_em.desc");
+          setDocumentosRH(rows.map(mapDocumento));
+        } catch (e) { console.warn("[documentos rh]", e.message); }
       })();
     } catch (e) {
       setErroDados(mensagemAmigavel(e, "ao carregar seus dados"));
@@ -2795,14 +2872,6 @@ function AppInterno() {
     catch (e) { setErroDados(`Folha fechada, mas o registro na trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
   };
 
-  const marcarGuiaPaga = async (id) => {
-    if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, { status: "paga" });
-    setGuias(gs => gs.map(g => g.id === id ? { ...g, status: "paga" } : g));
-    const gg = guias.find(x => x.id === id);
-    try { await auditar("guia_paga", `${user.nome} marcou como PAGA a guia ${gg?.tipo || id} de ${gg ? brl(gg.valor) : "?"} (competência ${gg?.competencia?.slice(0, 7) || "?"})`); }
-    catch (e) { console.warn("[auditoria guia]", e.message); }
-  };
-
   const criarAdiantamento = async (dados) => {
     const valor = numeroValido(dados.valor, { min: 0.01 });
     if (valor === null) throw new Error("Informe um valor válido (maior que zero).");
@@ -2881,6 +2950,114 @@ function AppInterno() {
       return novo;
    };
    
+   /* ---------- recrutamento, documentos e agenda de exame ---------- */
+   // O curriculo e os documentos vao pro bucket privado. O candidato nao tem
+   // login, entao o arquivo dele fica na pasta do gestor que subiu — e so o
+   // gestor abre. Documento nunca e apagado por aqui: some do painel, fica no banco.
+   const registrarDocumento = async (dados) => {
+     if (!dados.tipo || !TIPOS_DOCUMENTO[dados.tipo]) throw new Error("Escolha o tipo do documento.");
+     if (!dados.userId && !dados.candidatoId) throw new Error("Escolha de quem é o documento.");
+     const path = dados.path || (dados.arquivo ? await sbUpload(sessao.token, user.id, dados.arquivo) : null);
+     if (!path) throw new Error("Anexe o arquivo do documento.");
+     const linha = { usuario_id: dados.userId || null, candidato_id: dados.candidatoId || null, tipo: dados.tipo, arquivo_url: path, nome_original: (dados.nomeOriginal || dados.arquivo?.name || "").slice(0, 180) || null, observacao: limparTexto(dados.observacao, LIMITES.obs) || null, criado_por: user.id };
+     let novo;
+     if (demo) novo = mapDocumento({ id: `d${Date.now()}`, ...linha, criado_em: iso(new Date()) });
+     else { const [row] = await sbInsert(sessao.token, "documentos_rh", [linha]); novo = mapDocumento(row); }
+     setDocumentosRH((ds) => [novo, ...ds]);
+     const dono = dados.userId ? (usuarios.find((u) => u.id === dados.userId)?.nome || "colaborador") : (candidatos.find((c) => c.id === dados.candidatoId)?.nome || "candidato");
+     try { await auditar("documento_anexado", `${user.nome} anexou ${TIPOS_DOCUMENTO[dados.tipo]} de ${dono}`); }
+     catch (e) { console.warn("[auditoria documento]", e.message); }
+     return novo;
+   };
+
+   const abrirDocumento = async (path) => {
+     if (demo) throw new Error("Na demonstração os arquivos são fictícios: não há nada pra abrir.");
+     const url = await sbUrlAssinada(sessao.token, path);
+     window.open(url, "_blank", "noopener,noreferrer");
+   };
+
+   const criarCandidato = async (dados) => {
+     const nome = limparTexto(dados.nome, LIMITES.nome);
+     if (!nome || nome.length < 2) throw new Error("Informe o nome do candidato.");
+     const email = limparTexto(dados.email, LIMITES.email).toLowerCase();
+     if (email && !emailValido(email)) throw new Error("E-mail do candidato inválido.");
+     const path = dados.curriculo ? await sbUpload(sessao.token, user.id, dados.curriculo) : null;
+     const linha = { nome, email: email || null, telefone: limparTexto(dados.telefone, 40) || null, cargo: limparTexto(dados.cargo, LIMITES.cargo) || null, origem: limparTexto(dados.origem, LIMITES.cargo) || null, status: "recebido", curriculo_url: path, observacao: limparTexto(dados.observacao, LIMITES.obs) || null, criado_por: user.id };
+     let novo;
+     if (demo) novo = mapCandidato({ id: `c${Date.now()}`, ...linha, criado_em: iso(new Date()), atualizado_em: iso(new Date()) });
+     else { const [row] = await sbInsert(sessao.token, "candidatos", [linha]); novo = mapCandidato(row); }
+     setCandidatos((cs) => [novo, ...cs]);
+     if (path) { try { await registrarDocumento({ candidatoId: novo.id, tipo: "curriculo", path, nomeOriginal: dados.curriculo.name }); } catch (e) { console.warn("[curriculo na pasta]", e.message); } }
+     try { await auditar("candidato_criado", `${user.nome} cadastrou o candidato ${nome}${linha.cargo ? " para " + linha.cargo : ""}${path ? " com currículo anexado" : " sem currículo"}`); }
+     catch (e) { console.warn("[auditoria candidato]", e.message); }
+     return novo;
+   };
+
+   const mudarStatusCandidato = async (id, status) => {
+     if (!STATUS_CANDIDATO[status]) throw new Error("Etapa inválida.");
+     const agora = iso(new Date());
+     if (!demo) await sbUpdate(sessao.token, "candidatos", `id=eq.${id}`, { status, atualizado_em: agora });
+     setCandidatos((cs) => cs.map((c) => c.id === id ? { ...c, status, statusLabel: STATUS_CANDIDATO[status], atualizadoEm: agora } : c));
+     const c = candidatos.find((x) => x.id === id);
+     try { await auditar("candidato_etapa", `${user.nome} moveu ${c?.nome || id} para ${STATUS_CANDIDATO[status]}`); }
+     catch (e) { console.warn("[auditoria etapa]", e.message); }
+   };
+
+   // Contratar = criar o convite ja com os dados do candidato. O acesso nasce
+   // quando a pessoa usa o convite e escolhe a propria senha: o app nunca
+   // cria conta por ela nem guarda senha de ninguem.
+   const contratarCandidato = async (cand, dados) => {
+     const conv = await criarConvite({ nome: cand.nome, email: dados.email || cand.email, cargo: dados.cargo || cand.cargo, tipo: "colaborador", dataAdmissao: dados.dataAdmissao });
+     await mudarStatusCandidato(cand.id, "contratado");
+     return conv;
+   };
+
+   // Exame agendado: data prevista, sem resultado. Vira realizado quando o ASO chega.
+   const agendarExame = async (dados) => {
+     if (!uuidValido(dados.userId) && !demo) throw new Error("Colaborador inválido.");
+     if (!TIPOS_EXAME[dados.tipo]) throw new Error("Tipo de exame inválido.");
+     if (!dataValida(dados.data)) throw new Error("Data prevista inválida.");
+     const linha = { usuario_id: dados.userId, tipo: dados.tipo, data_exame: dados.data, data_prevista: dados.data, status: "agendado", resultado: null, clinica: limparTexto(dados.clinica, LIMITES.nome) || null, observacao: limparTexto(dados.observacao, LIMITES.obs) || null, criado_por: user.id };
+     let novo;
+     if (demo) novo = mapExame({ id: `ex${Date.now()}`, ...linha, criado_em: iso(new Date()) });
+     else { const [row] = await sbInsert(sessao.token, "exames_ocupacionais", [linha]); novo = mapExame(row); }
+     setExamesOcupacionais((es) => [novo, ...es]);
+     const nomeCol = usuarios.find((u) => u.id === dados.userId)?.nome || dados.userId;
+     try { await auditar("exame_agendado", `${user.nome} agendou exame ${TIPOS_EXAME[dados.tipo]} de ${nomeCol} para ${fmtData(dados.data)}${linha.clinica ? " na " + linha.clinica : ""}`); }
+     catch (e) { console.warn("[auditoria exame agendado]", e.message); }
+     return novo;
+   };
+
+   const concluirExame = async (id, dados) => {
+     if (!dataValida(dados.data)) throw new Error("Informe a data em que o exame foi feito.");
+     if (!RESULTADOS_EXAME[dados.resultado]) throw new Error("Informe o resultado do exame.");
+     const path = dados.anexo ? await sbUpload(sessao.token, user.id, dados.anexo) : null;
+     const patch = { status: "realizado", data_exame: dados.data, resultado: dados.resultado };
+     if (path) patch.anexo_url = path;
+     if (!demo) await sbUpdate(sessao.token, "exames_ocupacionais", `id=eq.${id}`, patch);
+     setExamesOcupacionais((es) => es.map((e) => e.id === id ? { ...e, status: "realizado", data: dados.data, resultado: dados.resultado, resultadoLabel: RESULTADOS_EXAME[dados.resultado], anexo: path ? { nome: dados.anexo.name, path } : e.anexo } : e));
+     const ex = examesOcupacionais.find((e) => e.id === id);
+     if (ex?.userId && path) { try { await registrarDocumento({ userId: ex.userId, tipo: "aso", path, nomeOriginal: dados.anexo.name }); } catch (e) { console.warn("[aso na pasta]", e.message); } }
+     const nomeCol = usuarios.find((u) => u.id === ex?.userId)?.nome || "colaborador";
+     try { await auditar("exame_concluido", `${user.nome} lançou o resultado do exame ${ex?.tipoLabel || ""} de ${nomeCol}: ${RESULTADOS_EXAME[dados.resultado]}`); }
+     catch (e) { console.warn("[auditoria exame concluido]", e.message); }
+   };
+
+   // A guia nao e paga aqui dentro: o pagamento acontece no banco ou com a
+   // contabilidade. O app guarda a prova (data, valor e comprovante).
+   const registrarPagamentoGuia = async (id, dados) => {
+     const g = guias.find((x) => x.id === id);
+     if (!dataValida(dados.pagoEm)) throw new Error("Informe a data do pagamento.");
+     const valor = numeroValido(dados.valorPago, { min: 0.01 });
+     if (valor === null) throw new Error("Informe o valor pago (maior que zero).");
+     const path = dados.comprovante ? await sbUpload(sessao.token, user.id, dados.comprovante) : null;
+     const patch = { status: "paga", pago_em: dados.pagoEm, valor_pago: valor, observacao: limparTexto(dados.observacao, LIMITES.obs) || null };
+     if (path) patch.comprovante_url = path;
+     if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, patch);
+     setGuias((gs) => gs.map((x) => x.id === id ? { ...x, status: "paga", pagoEm: dados.pagoEm, valorPago: valor, observacao: patch.observacao || "", comprovante: path ? { nome: dados.comprovante.name, path } : x.comprovante } : x));
+     try { await auditar("guia_paga", `${user.nome} registrou o pagamento da guia ${g?.tipo || id} de ${brl(valor)} em ${fmtData(dados.pagoEm)}${path ? " com comprovante anexado" : " sem comprovante"}`); }
+     catch (e) { console.warn("[auditoria pagamento guia]", e.message); }
+   };
    /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
     const mapa = {
@@ -3135,7 +3312,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, consImagem, aceites, demo }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, consImagem, aceites, demo }} />
           )}
         </main>
       </div>
@@ -4439,11 +4616,12 @@ function ModalConfirm({ titulo, texto, rotuloOk = "Confirmar", onConfirmar, onCa
    falha visível) e destacadas na trilha. São as que mexem em dinheiro, acesso ou registro de jornada. */
 const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada",
   "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto",
-  "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado"];
+  "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado",
+  "exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado"];
 
 const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
 
-function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant }) {
+function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }) {
   const hoje = new Date();
   const [comp, setComp] = useState(`${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`);
   const compData = comp + "-01";
@@ -4557,10 +4735,11 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
       {guiasMes.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Guias fiscais de {comp}</div>
+          <p style={{ fontSize: 11.5, color: C.cinza, margin: "4px 0 0" }}>O pagamento é registrado em Contabilidade, com data, valor e comprovante.</p>
           {guiasMes.map(g => (
             <div key={g.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "7px 0", fontSize: 13 }}>
               <span><b>{g.tipo}</b> · {brl(g.valor)} · vence {fmtData(g.vencimento)}</span>
-              {g.status === "paga" ? <span style={S.tag("#123B24", C.verde)}>PAGA</span> : <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onMarcarGuiaPaga(g.id), "Guia marcada como paga.")}>Marcar paga</button>}
+              {g.status === "paga" ? <span style={S.tag("#123B24", C.verde)}>PAGA</span> : <span style={S.tag("#3B2A12", C.amarelo)}>A PAGAR</span>}
             </div>
           ))}
         </div>
@@ -4591,7 +4770,406 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
   );
 }
 
-function SecaoRescisao({ usuarios, rescisoes, onCriarRescisao, onConfirmarRescisao }) { const h = React.createElement; const nome = (id) => usuarios.find(u => u.id === id)?.nome || id; const [form, setForm] = useState({ userId: "", dataDeslig: "", motivo: "dispensa_sem_justa_causa", avisoTipo: "indenizado" }); const [resultado, setResultado] = useState(null); const [msg, setMsg] = useState(null); const [ocupado, setOcupado] = useState(false); const [confirmando, setConfirmando] = useState(null); const motivoInfo = MOTIVOS_RESCISAO[form.motivo]; const calcular = async () => { if (!form.userId || !form.dataDeslig) { setMsg({ ok: false, txt: "Escolha o colaborador e a data de desligamento." }); return; } setOcupado(true); setMsg(null); try { const novo = await onCriarRescisao(form); setResultado(novo); setMsg({ ok: true, txt: "Cálculo gerado como rascunho." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; const confirmar = async (id) => { setOcupado(true); try { await onConfirmarRescisao(id); setConfirmando(null); setMsg({ ok: true, txt: "Rescisão confirmada." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; return h("div", { style: { ...S.card, marginTop: 14 } }, h("div", { style: { ...S.display, fontSize: 15, color: C.cinza } }, "Rescisão — cálculo de verbas (desligamento)"), h("p", { style: { fontSize: 11, color: C.cinza, margin: "6px 0 0" } }, AVISO_RESCISAO), h("div", { style: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" } }, h("select", { style: { ...S.input, width: 200 }, value: form.userId, onChange: e => setForm({ ...form, userId: e.target.value }) }, h("option", { value: "" }, "Colaborador…"), usuarios.filter(u => u.ativo !== false).map(u => h("option", { key: u.id, value: u.id }, u.nome))), h("input", { type: "date", style: { ...S.input, width: 170 }, value: form.dataDeslig, onChange: e => setForm({ ...form, dataDeslig: e.target.value }) }), h("select", { style: { ...S.input, width: 260 }, value: form.motivo, onChange: e => setForm({ ...form, motivo: e.target.value }) }, Object.entries(MOTIVOS_RESCISAO).map(([k, v]) => h("option", { key: k, value: k }, v.label))), motivoInfo.avisoDevido ? h("select", { style: { ...S.input, width: 160 }, value: form.avisoTipo, onChange: e => setForm({ ...form, avisoTipo: e.target.value }) }, h("option", { value: "indenizado" }, "Aviso indenizado"), h("option", { value: "trabalhado" }, "Aviso trabalhado")) : null, h("button", { style: { ...S.btn, opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: calcular }, ocupado ? "Calculando…" : "Calcular rescisão")), msg ? h("p", { style: { fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 } }, msg.txt) : null, resultado ? h("div", { style: { background: C.grafite, borderRadius: 10, padding: 14, marginTop: 12 } }, h("div", { style: { ...S.display, fontSize: 14, color: C.amarelo } }, nome(resultado.userId) + " · " + resultado.motivoLabel + " · desligamento " + fmtData(resultado.dataDeslig)), h("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 8 } }, h("tbody", null, [["Saldo de salário", resultado.calculo.verbas.saldoSalario], ["Aviso prévio indenizado", resultado.calculo.verbas.valorAviso], ["13º proporcional", resultado.calculo.verbas.decimoProp], ["Férias proporcionais", resultado.calculo.verbas.feriasProp], ["1/3 de férias proporcionais", resultado.calculo.verbas.tercoFeriasProp], ["Multa FGTS", resultado.calculo.verbas.multaFgts], ["INSS", -resultado.calculo.verbas.inssRescisao], ["IRRF", -resultado.calculo.verbas.irrfRescisao]].filter(([, v]) => v !== 0).map(([l, v]) => h("tr", { key: l, style: { borderTop: "1px solid #1E3450" } }, h("td", { style: { padding: 6 } }, l), h("td", { style: { padding: 6, textAlign: "right", color: v < 0 ? C.vermelho : C.branco } }, brl(v)))), h("tr", { style: { borderTop: "2px solid #2A4568", fontWeight: 700 } }, h("td", { style: { padding: 6 } }, "LÍQUIDO ESTIMADO"), h("td", { style: { padding: 6, textAlign: "right", color: C.verde, fontSize: 16 } }, brl(resultado.liquido))))), h("div", { style: { fontSize: 12, color: C.cinza, marginTop: 8 } }, "FGTS estimado (8% patronal acumulado): " + brl(resultado.calculo.verbas.fgtsEstimado) + " · direito a saque FGTS: " + (resultado.calculo.direitos.saqueFgts ? Math.round(resultado.calculo.direitos.saqueFgtsPct * 100) + "%" : "não") + " · seguro-desemprego: " + (resultado.calculo.direitos.seguroDesemprego ? "sim" : "não")), resultado.status === "rascunho" ? h("button", { style: { ...S.btn, marginTop: 10, padding: "8px 16px", fontSize: 13 }, disabled: ocupado, onClick: () => setConfirmando(resultado.id) }, "Confirmar rescisão e desativar colaborador") : null) : null, confirmando ? h(ModalConfirm, { titulo: "Confirmar rescisão?", texto: "O colaborador será desativado no sistema e a rescisão marcada como confirmada.", rotuloOk: "Confirmar rescisão", ocupado: ocupado, onCancelar: () => setConfirmando(null), onConfirmar: () => confirmar(confirmando) }) : null, rescisoes.length > 0 ? h("div", { style: { marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 } }, h("div", { style: { ...S.display, fontSize: 13, color: C.cinza } }, "Rescisões registradas"), rescisoes.map(r => h("div", { key: r.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10 } }, h("span", null, nome(r.userId) + " · " + r.motivoLabel + " · desligamento " + fmtData(r.dataDeslig) + " · líquido " + brl(r.liquido)), h(Badge, { st: r.status === "confirmado" ? "aprovado" : "pendente" })))) : null); }function SecaoExames({ usuarios, exames, onCriarExame }) { const h = React.createElement; const nome = (id) => usuarios.find(u => u.id === id)?.nome || id; const [form, setForm] = useState({ userId: "", tipo: "admissional", data: "", resultado: "", clinica: "", observacao: "" }); const [anexo, setAnexo] = useState(null); const [msg, setMsg] = useState(null); const [ocupado, setOcupado] = useState(false); const registrar = async () => { if (!form.userId || !form.data) { setMsg({ ok: false, txt: "Escolha o colaborador e a data do exame." }); return; } setOcupado(true); setMsg(null); try { await onCriarExame({ ...form, anexo: anexo?.file || null }); setForm({ userId: "", tipo: "admissional", data: "", resultado: "", clinica: "", observacao: "" }); setAnexo(null); setMsg({ ok: true, txt: "Exame registrado." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; return h("div", { style: { ...S.card, marginTop: 14 } }, h("div", { style: { ...S.display, fontSize: 15, color: C.cinza } }, "Exames ocupacionais (admissional, periódico, demissional…)"), h("div", { style: { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" } }, h("select", { style: { ...S.input, width: 190 }, value: form.userId, onChange: e => setForm({ ...form, userId: e.target.value }) }, h("option", { value: "" }, "Colaborador…"), usuarios.map(u => h("option", { key: u.id, value: u.id }, u.nome))), h("select", { style: { ...S.input, width: 170 }, value: form.tipo, onChange: e => setForm({ ...form, tipo: e.target.value }) }, Object.entries(TIPOS_EXAME).map(([k, v]) => h("option", { key: k, value: k }, v))), h("input", { type: "date", style: { ...S.input, width: 160 }, value: form.data, onChange: e => setForm({ ...form, data: e.target.value }) }), h("select", { style: { ...S.input, width: 170 }, value: form.resultado, onChange: e => setForm({ ...form, resultado: e.target.value }) }, h("option", { value: "" }, "Resultado (opcional)"), Object.entries(RESULTADOS_EXAME).map(([k, v]) => h("option", { key: k, value: k }, v))), h("input", { style: { ...S.input, width: 170 }, placeholder: "Clínica", value: form.clinica, onChange: e => setForm({ ...form, clinica: e.target.value }) }), h("label", { style: { ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 } }, anexo ? "Anexo: " + anexo.nome : "Anexar ASO", h("input", { type: "file", accept: "image/*,.pdf", style: { display: "none" }, onChange: e => { const f = e.target.files[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } setAnexo({ nome: f.name, file: f }); } })), h("input", { style: { ...S.input, width: 200 }, placeholder: "Observação", value: form.observacao, onChange: e => setForm({ ...form, observacao: e.target.value }) }), h("button", { style: { ...S.btn, opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: registrar }, ocupado ? "Registrando…" : "Registrar exame")), msg ? h("p", { style: { fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 } }, msg.txt) : null, exames.length > 0 ? h("div", { style: { marginTop: 12, borderTop: "1px solid #1E3450", paddingTop: 10 } }, exames.map(ex => h("div", { key: ex.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10, flexWrap: "wrap" } }, h("span", null, nome(ex.userId) + " · " + ex.tipoLabel + " · " + fmtData(ex.data) + (ex.resultadoLabel ? " · " + ex.resultadoLabel : " · resultado pendente") + (ex.clinica ? " · " + ex.clinica : "") + (ex.observacao ? " · " + ex.observacao : ""))))) : null); }function TelaHolerite({ user, folhasPg, adiantamentos }) {
+function SecaoRescisao({ usuarios, rescisoes, onCriarRescisao, onConfirmarRescisao }) { const h = React.createElement; const nome = (id) => usuarios.find(u => u.id === id)?.nome || id; const [form, setForm] = useState({ userId: "", dataDeslig: "", motivo: "dispensa_sem_justa_causa", avisoTipo: "indenizado" }); const [resultado, setResultado] = useState(null); const [msg, setMsg] = useState(null); const [ocupado, setOcupado] = useState(false); const [confirmando, setConfirmando] = useState(null); const motivoInfo = MOTIVOS_RESCISAO[form.motivo]; const calcular = async () => { if (!form.userId || !form.dataDeslig) { setMsg({ ok: false, txt: "Escolha o colaborador e a data de desligamento." }); return; } setOcupado(true); setMsg(null); try { const novo = await onCriarRescisao(form); setResultado(novo); setMsg({ ok: true, txt: "Cálculo gerado como rascunho." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; const confirmar = async (id) => { setOcupado(true); try { await onConfirmarRescisao(id); setConfirmando(null); setMsg({ ok: true, txt: "Rescisão confirmada." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; return h("div", { style: { ...S.card, marginTop: 14 } }, h("div", { style: { ...S.display, fontSize: 15, color: C.cinza } }, "Rescisão — cálculo de verbas (desligamento)"), h("p", { style: { fontSize: 11, color: C.cinza, margin: "6px 0 0" } }, AVISO_RESCISAO), h("div", { style: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" } }, h("select", { style: { ...S.input, width: 200 }, value: form.userId, onChange: e => setForm({ ...form, userId: e.target.value }) }, h("option", { value: "" }, "Colaborador…"), usuarios.filter(u => u.ativo !== false).map(u => h("option", { key: u.id, value: u.id }, u.nome))), h("input", { type: "date", style: { ...S.input, width: 170 }, value: form.dataDeslig, onChange: e => setForm({ ...form, dataDeslig: e.target.value }) }), h("select", { style: { ...S.input, width: 260 }, value: form.motivo, onChange: e => setForm({ ...form, motivo: e.target.value }) }, Object.entries(MOTIVOS_RESCISAO).map(([k, v]) => h("option", { key: k, value: k }, v.label))), motivoInfo.avisoDevido ? h("select", { style: { ...S.input, width: 160 }, value: form.avisoTipo, onChange: e => setForm({ ...form, avisoTipo: e.target.value }) }, h("option", { value: "indenizado" }, "Aviso indenizado"), h("option", { value: "trabalhado" }, "Aviso trabalhado")) : null, h("button", { style: { ...S.btn, opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: calcular }, ocupado ? "Calculando…" : "Calcular rescisão")), msg ? h("p", { style: { fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 } }, msg.txt) : null, resultado ? h("div", { style: { background: C.grafite, borderRadius: 10, padding: 14, marginTop: 12 } }, h("div", { style: { ...S.display, fontSize: 14, color: C.amarelo } }, nome(resultado.userId) + " · " + resultado.motivoLabel + " · desligamento " + fmtData(resultado.dataDeslig)), h("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 8 } }, h("tbody", null, [["Saldo de salário", resultado.calculo.verbas.saldoSalario], ["Aviso prévio indenizado", resultado.calculo.verbas.valorAviso], ["13º proporcional", resultado.calculo.verbas.decimoProp], ["Férias proporcionais", resultado.calculo.verbas.feriasProp], ["1/3 de férias proporcionais", resultado.calculo.verbas.tercoFeriasProp], ["Multa FGTS", resultado.calculo.verbas.multaFgts], ["INSS", -resultado.calculo.verbas.inssRescisao], ["IRRF", -resultado.calculo.verbas.irrfRescisao]].filter(([, v]) => v !== 0).map(([l, v]) => h("tr", { key: l, style: { borderTop: "1px solid #1E3450" } }, h("td", { style: { padding: 6 } }, l), h("td", { style: { padding: 6, textAlign: "right", color: v < 0 ? C.vermelho : C.branco } }, brl(v)))), h("tr", { style: { borderTop: "2px solid #2A4568", fontWeight: 700 } }, h("td", { style: { padding: 6 } }, "LÍQUIDO ESTIMADO"), h("td", { style: { padding: 6, textAlign: "right", color: C.verde, fontSize: 16 } }, brl(resultado.liquido))))), h("div", { style: { fontSize: 12, color: C.cinza, marginTop: 8 } }, "FGTS estimado (8% patronal acumulado): " + brl(resultado.calculo.verbas.fgtsEstimado) + " · direito a saque FGTS: " + (resultado.calculo.direitos.saqueFgts ? Math.round(resultado.calculo.direitos.saqueFgtsPct * 100) + "%" : "não") + " · seguro-desemprego: " + (resultado.calculo.direitos.seguroDesemprego ? "sim" : "não")), resultado.status === "rascunho" ? h("button", { style: { ...S.btn, marginTop: 10, padding: "8px 16px", fontSize: 13 }, disabled: ocupado, onClick: () => setConfirmando(resultado.id) }, "Confirmar rescisão e desativar colaborador") : null) : null, confirmando ? h(ModalConfirm, { titulo: "Confirmar rescisão?", texto: "O colaborador será desativado no sistema e a rescisão marcada como confirmada.", rotuloOk: "Confirmar rescisão", ocupado: ocupado, onCancelar: () => setConfirmando(null), onConfirmar: () => confirmar(confirmando) }) : null, rescisoes.length > 0 ? h("div", { style: { marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 } }, h("div", { style: { ...S.display, fontSize: 13, color: C.cinza } }, "Rescisões registradas"), rescisoes.map(r => h("div", { key: r.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10 } }, h("span", null, nome(r.userId) + " · " + r.motivoLabel + " · desligamento " + fmtData(r.dataDeslig) + " · líquido " + brl(r.liquido)), h(Badge, { st: r.status === "confirmado" ? "aprovado" : "pendente" })))) : null); }/* Exames ocupacionais (NR-7). Duas coisas diferentes numa tela: AGENDAR o que
+   ainda vai acontecer (data prevista, sem resultado) e LANCAR o que ja aconteceu
+   com o ASO em anexo. O agendado alimenta a Agenda do RH; o realizado zera o prazo. */
+function SecaoExames({ usuarios, exames = [], onCriarExame, onAgendar, onConcluir, onAbrir }) {
+  const nome = (id) => usuarios.find((u) => u.id === id)?.nome || "colaborador";
+  const [modo, setModo] = useState("agendar");
+  const [form, setForm] = useState({ userId: "", tipo: "admissional", data: "", resultado: "", clinica: "", observacao: "" });
+  const [anexo, setAnexo] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [concluindo, setConcluindo] = useState(null);
+  const [fim2, setFim2] = useState({ data: hojeStr(), resultado: "apto" });
+  const [anexoFim, setAnexoFim] = useState(null);
+  const limpar = () => { setForm({ userId: "", tipo: "admissional", data: "", resultado: "", clinica: "", observacao: "" }); setAnexo(null); };
+  const rodar = async (fn, okTxt) => { setOcupado(true); setMsg(null); try { await fn(); setMsg({ ok: true, txt: okTxt }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } };
+  const enviar = () => {
+    if (!form.userId || !form.data) { setMsg({ ok: false, txt: "Escolha o colaborador e a data." }); return; }
+    if (modo === "agendar") return rodar(async () => { await onAgendar({ ...form }); limpar(); }, "Exame agendado. Ele já aparece na Agenda do RH.");
+    if (!form.resultado) { setMsg({ ok: false, txt: "Informe o resultado do exame que já foi feito." }); return; }
+    return rodar(async () => { await onCriarExame({ ...form, anexo: anexo?.file || null }); limpar(); }, "Exame registrado.");
+  };
+  const pegarArquivo = (e, set) => { const f = e.target.files?.[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } set({ nome: f.name, file: f }); };
+  const agendados = exames.filter((ex) => ex.status === "agendado").sort((a, b) => (a.data < b.data ? -1 : 1));
+  const feitos = exames.filter((ex) => ex.status !== "agendado").sort((a, b) => (a.data < b.data ? 1 : -1));
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🩺 Exames ocupacionais</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        Admissional antes do primeiro dia, periódico conforme o PCMSO e demissional no desligamento (NR-7). Agende o que está por vir e guarde o ASO de cada um.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        {[["agendar", "Agendar exame"], ["registrar", "Lançar exame já feito"]].map(([k, r]) => (
+          <button key={k} style={modo === k ? { ...S.btn, padding: "7px 14px", fontSize: 12.5 } : { ...S.btnGhost, padding: "7px 14px", fontSize: 12.5 }} onClick={() => { setModo(k); setMsg(null); }}>{r}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <select style={{ ...S.input, width: 190 }} value={form.userId} onChange={(e) => setForm({ ...form, userId: e.target.value })}>
+          <option value="">Colaborador…</option>
+          {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+        </select>
+        <select style={{ ...S.input, width: 180 }} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+          {Object.entries(TIPOS_EXAME).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <input type="date" style={{ ...S.input, width: 160 }} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+        {modo === "registrar" && (
+          <select style={{ ...S.input, width: 190 }} value={form.resultado} onChange={(e) => setForm({ ...form, resultado: e.target.value })}>
+            <option value="">Resultado…</option>
+            {Object.entries(RESULTADOS_EXAME).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        )}
+        <input style={{ ...S.input, width: 180 }} placeholder="Clínica" value={form.clinica} onChange={(e) => setForm({ ...form, clinica: e.target.value })} />
+        {modo === "registrar" && (
+          <label style={{ ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 }}>
+            {anexo ? "ASO: " + anexo.nome : "Anexar ASO"}
+            <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={(e) => pegarArquivo(e, setAnexo)} />
+          </label>
+        )}
+        <input style={{ ...S.input, width: 200 }} placeholder="Observação" value={form.observacao} onChange={(e) => setForm({ ...form, observacao: e.target.value })} />
+        <button style={{ ...S.btn, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={enviar}>{ocupado ? "Salvando…" : modo === "agendar" ? "Agendar" : "Registrar exame"}</button>
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      {agendados.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Agendados</div>
+          {agendados.map((ex) => (
+            <div key={ex.id} style={{ borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <span>{nome(ex.userId)} · {ex.tipoLabel} · {fmtData(ex.data)}{ex.clinica ? " · " + ex.clinica : ""}</span>
+                <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={S.tag("#3B2A12", C.amarelo)}>AGENDADO</span>
+                  <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => { setConcluindo(ex.id); setFim2({ data: hojeStr(), resultado: "apto" }); setAnexoFim(null); setMsg(null); }}>Lançar resultado</button>
+                </span>
+              </div>
+              {concluindo === ex.id && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                  <input type="date" style={{ ...S.input, width: 155 }} value={fim2.data} onChange={(e) => setFim2({ ...fim2, data: e.target.value })} />
+                  <select style={{ ...S.input, width: 190 }} value={fim2.resultado} onChange={(e) => setFim2({ ...fim2, resultado: e.target.value })}>
+                    {Object.entries(RESULTADOS_EXAME).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                  <label style={{ ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 }}>
+                    {anexoFim ? "ASO: " + anexoFim.nome : "Anexar ASO"}
+                    <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={(e) => pegarArquivo(e, setAnexoFim)} />
+                  </label>
+                  <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => { await onConcluir(ex.id, { ...fim2, anexo: anexoFim?.file || null }); setConcluindo(null); }, "Resultado lançado. O prazo do próximo exame já foi recalculado.")}>Salvar resultado</button>
+                  <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setConcluindo(null)}>Cancelar</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {feitos.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Realizados</div>
+          {feitos.map((ex) => (
+            <div key={ex.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10, flexWrap: "wrap" }}>
+              <span>{nome(ex.userId)} · {ex.tipoLabel} · {fmtData(ex.data)} · {ex.resultadoLabel || "resultado pendente"}{ex.clinica ? " · " + ex.clinica : ""}{ex.observacao ? " · " + ex.observacao : ""}</span>
+              {ex.anexo && <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => onAbrir(ex.anexo.path)}>Abrir ASO</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+/* Recrutamento: o curriculo entra aqui, o candidato anda pelas etapas e, quando
+   for contratado, o convite ja sai preenchido. O app nunca cria conta por ninguem:
+   a pessoa usa o convite e escolhe a propria senha. Curriculo de quem nao foi
+   contratado tambem tem prazo de guarda (LGPD art. 15): descarte quando nao servir mais. */
+function SecaoRecrutamento({ candidatos = [], onCriar, onMudarStatus, onContratar, onAbrir, demo }) {
+  const [form, setForm] = useState({ nome: "", email: "", telefone: "", cargo: "", origem: "", observacao: "" });
+  const [curriculo, setCurriculo] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [filtro, setFiltro] = useState("todos");
+  const [contratando, setContratando] = useState(null);
+  const [adm, setAdm] = useState({ dataAdmissao: hojeStr(), cargo: "" });
+  const [convite, setConvite] = useState(null);
+  const rodar = async (fn, okTxt) => { setOcupado(true); setMsg(null); try { await fn(); if (okTxt) setMsg({ ok: true, txt: okTxt }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } };
+  const lista = filtro === "todos" ? candidatos : candidatos.filter((c) => c.status === filtro);
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🗂 Recrutamento e currículos</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        Guarde o currículo, acompanhe a etapa de cada candidato e transforme o aprovado em convite de acesso com um clique. Os arquivos ficam em área privada: só o gestor abre.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...S.input, width: 190 }} placeholder="Nome do candidato" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
+        <input style={{ ...S.input, width: 200 }} placeholder="E-mail" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        <input style={{ ...S.input, width: 150 }} placeholder="Telefone" value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} />
+        <input style={{ ...S.input, width: 170 }} placeholder="Cargo pretendido" value={form.cargo} onChange={(e) => setForm({ ...form, cargo: e.target.value })} />
+        <input style={{ ...S.input, width: 150 }} placeholder="Como chegou" value={form.origem} onChange={(e) => setForm({ ...form, origem: e.target.value })} />
+        <label style={{ ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 }}>
+          {curriculo ? "Currículo: " + curriculo.nome : "Anexar currículo"}
+          <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } setCurriculo({ nome: f.name, file: f }); }} />
+        </label>
+        <input style={{ ...S.input, width: 200 }} placeholder="Observação" value={form.observacao} onChange={(e) => setForm({ ...form, observacao: e.target.value })} />
+        <button style={{ ...S.btn, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => {
+          await onCriar({ ...form, curriculo: curriculo?.file || null });
+          setForm({ nome: "", email: "", telefone: "", cargo: "", origem: "", observacao: "" });
+          setCurriculo(null);
+        }, "Candidato cadastrado.")}>{ocupado ? "Salvando…" : "Cadastrar candidato"}</button>
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      {convite && (
+        <div style={{ ...S.card, marginTop: 12, background: "#0F2A1C", borderColor: "#1E5B3A" }}>
+          <div style={{ fontSize: 13, color: C.verde, fontWeight: 700 }}>Convite criado para {convite.nome}</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>Ele está na lista de convites, em Equipe. Mande o link pra pessoa: ela escolhe a própria senha ao entrar.</p>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+        {[["todos", "Todos"]].concat(ORDEM_CANDIDATO.map((k) => [k, STATUS_CANDIDATO[k]])).map(([k, r]) => (
+          <button key={k} style={filtro === k ? { ...S.btn, padding: "6px 12px", fontSize: 12 } : { ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setFiltro(k)}>
+            {r} {k === "todos" ? candidatos.length : candidatos.filter((c) => c.status === k).length}
+          </button>
+        ))}
+      </div>
+      {lista.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: C.cinza, marginTop: 12 }}>Nenhum candidato nessa etapa.</p>
+      ) : lista.map((c) => (
+        <div key={c.id} style={{ borderTop: "1px solid #1E3450", padding: "9px 0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>{c.nome} {c.cargo ? <span style={{ color: C.cinza, fontWeight: 400 }}>· {c.cargo}</span> : null}</div>
+              <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 2 }}>
+                {[c.email, c.telefone, c.origem ? "veio de " + c.origem : "", "cadastrado em " + fmtData(String(c.criadoEm).slice(0, 10))].filter(Boolean).join(" · ")}
+              </div>
+              {c.observacao ? <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 2 }}>{c.observacao}</div> : null}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={S.tag(c.status === "contratado" ? "#123B24" : c.status === "reprovado" ? "#3B1220" : "#132A47", c.status === "contratado" ? C.verde : c.status === "reprovado" ? C.vermelho : C.azul)}>{c.statusLabel}</span>
+              {c.curriculo && <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onAbrir(c.curriculo.path))}>Abrir currículo</button>}
+              <select style={{ ...S.input, width: 170, padding: "7px 10px", fontSize: 12.5 }} value={c.status} onChange={(e) => rodar(() => onMudarStatus(c.id, e.target.value), "Etapa atualizada.")}>
+                {ORDEM_CANDIDATO.map((k) => <option key={k} value={k}>{STATUS_CANDIDATO[k]}</option>)}
+              </select>
+              {c.status !== "contratado" && (
+                <button style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => { setContratando(c.id); setAdm({ dataAdmissao: hojeStr(), cargo: c.cargo || "" }); setMsg(null); }}>Contratar</button>
+              )}
+            </div>
+          </div>
+          {contratando === c.id && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+              <input type="date" style={{ ...S.input, width: 160 }} value={adm.dataAdmissao} onChange={(e) => setAdm({ ...adm, dataAdmissao: e.target.value })} />
+              <input style={{ ...S.input, width: 180 }} placeholder="Cargo na admissão" value={adm.cargo} onChange={(e) => setAdm({ ...adm, cargo: e.target.value })} />
+              <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => {
+                const conv = await onContratar(c, adm);
+                setConvite({ nome: c.nome });
+                setContratando(null);
+                return conv;
+              }, "Convite criado e candidato marcado como contratado.")}>Criar convite de acesso</button>
+              <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setContratando(null)}>Cancelar</button>
+              <span style={{ fontSize: 11.5, color: C.cinza }}>O e-mail usado será {c.email || "o que estiver no cadastro"}.</span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* Pasta de documentos de cada pessoa, com o checklist da admissao. O app diz o
+   que falta; nao inventa exigencia: a lista e a basica de contratacao no Brasil e
+   pode ser ajustada em DOCS_ADMISSAO conforme o que a contabilidade pedir. */
+function SecaoDocumentos({ usuarios = [], documentos = [], exames = [], onAnexar, onAbrir }) {
+  const equipe = usuarios.filter((u) => u.ativo);
+  const [quem, setQuem] = useState("");
+  const [tipo, setTipo] = useState("identidade");
+  const [arquivo, setArquivo] = useState(null);
+  const [obs, setObs] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const alvo = quem || equipe[0]?.id || "";
+  const meus = documentos.filter((d) => d.userId === alvo);
+  const tem = (t) => meus.some((d) => d.tipo === t);
+  const admissional = exames.some((e) => e.userId === alvo && e.tipo === "admissional" && e.status !== "agendado");
+  const faltando = DOCS_ADMISSAO.filter((t) => !tem(t));
+  const rodar = async (fn, okTxt) => { setOcupado(true); setMsg(null); try { await fn(); setMsg({ ok: true, txt: okTxt }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } };
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>📁 Documentos e pasta de admissão</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        Um lugar só pra guardar documento de contratação, contrato assinado e ASO. Guarde apenas o necessário e por tempo definido (LGPD art. 6º, I e III).
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <select style={{ ...S.input, width: 200 }} value={alvo} onChange={(e) => setQuem(e.target.value)}>
+          {equipe.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+        </select>
+        <select style={{ ...S.input, width: 210 }} value={tipo} onChange={(e) => setTipo(e.target.value)}>
+          {Object.entries(TIPOS_DOCUMENTO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <label style={{ ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 }}>
+          {arquivo ? "Arquivo: " + arquivo.nome : "Escolher arquivo"}
+          <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } setArquivo({ nome: f.name, file: f }); }} />
+        </label>
+        <input style={{ ...S.input, width: 190 }} placeholder="Observação" value={obs} onChange={(e) => setObs(e.target.value)} />
+        <button style={{ ...S.btn, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => {
+          await onAnexar({ userId: alvo, tipo, arquivo: arquivo?.file || null, observacao: obs });
+          setArquivo(null); setObs("");
+        }, "Documento guardado.")}>{ocupado ? "Enviando…" : "Guardar documento"}</button>
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+        <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Checklist da admissão</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {DOCS_ADMISSAO.map((t) => (
+            <span key={t} style={S.tag(tem(t) ? "#123B24" : "#3B2A12", tem(t) ? C.verde : C.amarelo)}>{tem(t) ? "✓ " : "• "}{TIPOS_DOCUMENTO[t]}</span>
+          ))}
+          <span style={S.tag(admissional ? "#123B24" : "#3B2A12", admissional ? C.verde : C.amarelo)}>{admissional ? "✓ " : "• "}Exame admissional</span>
+        </div>
+        <p style={{ fontSize: 11.5, color: faltando.length || !admissional ? C.amarelo : C.verde, margin: "8px 0 0", lineHeight: 1.6 }}>
+          {faltando.length === 0 && admissional ? "Pasta completa." : "Falta: " + faltando.map((t) => TIPOS_DOCUMENTO[t]).concat(admissional ? [] : ["exame admissional"]).join(", ") + "."}
+        </p>
+      </div>
+      {meus.length > 0 && (
+        <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Arquivos guardados</div>
+          {meus.map((d) => (
+            <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10, flexWrap: "wrap" }}>
+              <span><b>{d.tipoLabel}</b> · {d.arquivo.nome} · {fmtData(String(d.criadoEm).slice(0, 10))}{d.observacao ? " · " + d.observacao : ""}</span>
+              <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onAbrir(d.arquivo.path), "Arquivo aberto em outra aba.")}>Abrir</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+/* Contabilidade: o que a equipe custa de verdade e o que precisa ser recolhido.
+   Tres numeros que ninguem enxerga no holerite: encargos por fora do bruto,
+   provisao de 13o e ferias (dinheiro que ja e devido, mesmo sem ter saido) e o
+   custo total. O regime muda a conta e vem escolhido aqui em cima, porque no
+   Simples Nacional a parte patronal do INSS ja esta dentro do DAS.
+   Numero de apoio a decisao: a apuracao oficial e a da contabilidade. */
+function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegistrarPagamento, onAbrir, demo }) {
+  const nome = (id) => usuarios.find((u) => u.id === id)?.nome || "colaborador";
+  const comps = Array.from(new Set(folhasPg.map((f) => f.competencia).concat(guias.map((g) => g.competencia)))).filter(Boolean).sort().reverse();
+  const [comp, setComp] = useState("");
+  const [regime, setRegime] = useState("simples");
+  const [pagando, setPagando] = useState(null);
+  const [pag, setPag] = useState({ pagoEm: hojeStr(), valorPago: "", observacao: "" });
+  const [comprovante, setComprovante] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const alvo = comp || comps[0] || compDe(new Date());
+  const folhas = folhasPg.filter((f) => f.competencia === alvo);
+  const custo = useMemo(() => custoDaEquipe(folhas, regime), [folhas, regime]);
+  const guiasMes = guias.filter((g) => g.competencia === alvo);
+  const aPagar = guiasMes.filter((g) => g.status !== "paga");
+  const rodar = async (fn, okTxt) => { setOcupado(true); setMsg(null); try { await fn(); setMsg({ ok: true, txt: okTxt }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } };
+  const csvContador = () => {
+    const num = (v) => String(r2(+v || 0)).replace(".", ",");
+    const linhas = [["Competencia", rotuloComp(alvo)], ["Regime", custo.regimeLabel], ["Pessoas", custo.pessoas],
+      ["Salario bruto", num(custo.bruto)], ["INSS retido do colaborador", num(custo.inssRetido)], ["IRRF retido", num(custo.irrfRetido)],
+      ["Liquido pago", num(custo.liquido)], ["FGTS 8%", num(custo.fgts)], ["INSS patronal", num(custo.inssPatronal)],
+      ["RAT", num(custo.rat)], ["Terceiros", num(custo.terceiros)], ["Total de encargos", num(custo.encargos)],
+      ["Provisao 13o", num(custo.decimo)], ["Provisao ferias", num(custo.ferias)], ["Provisao 1/3 de ferias", num(custo.tercoFerias)],
+      ["Encargos sobre provisoes", num(custo.encargosProvisao)], ["Total provisionado", num(custo.provisoes)],
+      ["Custo de caixa do mes", num(custo.custoCaixa)], ["Custo total com provisoes", num(custo.custoTotal)]];
+    const gs = guiasMes.map((g) => [g.tipo, num(g.valor), g.vencimento || "", g.status, g.pagoEm || "", g.valorPago == null ? "" : num(g.valorPago)]);
+    const txt = [["Resumo da folha para a contabilidade"], [], ...linhas, [], ["Guias", "Valor", "Vencimento", "Status", "Pago em", "Valor pago"], ...gs]
+      .map((l) => l.join(";")).join("\r\n");
+    baixarArquivo(txt, "contabilidade-" + alvo.slice(0, 7) + ".csv");
+  };
+  const Linha = ({ rot, val, forte, cor }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, borderTop: "1px solid #1A2F4A", padding: "6px 0", fontSize: 13 }}>
+      <span style={{ color: C.cinza }}>{rot}</span>
+      <span style={{ fontWeight: forte ? 700 : 400, color: cor || C.branco, fontVariantNumeric: "tabular-nums" }}>{brl(val)}</span>
+    </div>
+  );
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🧾 Contabilidade · custo da equipe</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} className="no-print">
+          <select style={{ ...S.input, width: "auto", padding: "9px 12px", fontSize: 13 }} value={alvo} onChange={(e) => setComp(e.target.value)}>
+            {(comps.length ? comps : [alvo]).map((c) => <option key={c} value={c}>{rotuloComp(c)}</option>)}
+          </select>
+          <select style={{ ...S.input, width: "auto", padding: "9px 12px", fontSize: 13 }} value={regime} onChange={(e) => setRegime(e.target.value)}>
+            {Object.entries(REGIMES_EMPRESA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} onClick={csvContador}>⬇ Resumo pro contador</button>
+        </div>
+      </div>
+      {folhas.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: C.cinza, marginTop: 10, lineHeight: 1.6 }}>Nenhuma folha gerada nesta competência. Gere a folha em Folha de pagamento e o custo aparece aqui.</p>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginTop: 12 }}>
+            {[["Salário bruto", custo.bruto, C.branco], ["Encargos por fora", custo.encargos, C.amarelo], ["Provisões do mês", custo.provisoes, C.azul], ["Custo total", custo.custoTotal, C.dourado]].map(([rot, val, cor]) => (
+              <div key={rot} style={{ background: C.vidro, border: "1px solid " + C.borda, borderRadius: 12, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11, color: C.cinza }}>{rot}</div>
+                <div style={{ ...S.display, fontSize: 18, color: cor, fontVariantNumeric: "tabular-nums" }}>{brl(val)}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Como chega nesse número ({custo.pessoas} pessoa(s))</div>
+            <Linha rot="Salário bruto da equipe" val={custo.bruto} />
+            <Linha rot="INSS descontado do colaborador" val={-custo.inssRetido} />
+            <Linha rot="IRRF descontado do colaborador" val={-custo.irrfRetido} />
+            <Linha rot="Líquido que entra na conta deles" val={custo.liquido} forte />
+            <Linha rot="FGTS 8% (empresa)" val={custo.fgts} />
+            {custo.inssPatronal > 0 && <Linha rot="INSS patronal 20%" val={custo.inssPatronal} />}
+            {custo.rat > 0 && <Linha rot="RAT" val={custo.rat} />}
+            {custo.terceiros > 0 && <Linha rot="Terceiros (Sistema S, Salário-educação)" val={custo.terceiros} />}
+            <Linha rot="Provisão de 13º (1/12)" val={custo.decimo} />
+            <Linha rot="Provisão de férias (1/12)" val={custo.ferias} />
+            <Linha rot="Provisão do 1/3 de férias" val={custo.tercoFerias} />
+            <Linha rot="Encargos sobre as provisões" val={custo.encargosProvisao} />
+            <Linha rot="Sai do caixa neste mês" val={custo.custoCaixa} forte cor={C.amarelo} />
+            <Linha rot="Custo total com as provisões" val={custo.custoTotal} forte cor={C.dourado} />
+          </div>
+        </>
+      )}
+      <div style={{ marginTop: 16, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+        <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Guias de {rotuloComp(alvo)}</div>
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>
+          O pagamento em si acontece no banco ou com a contabilidade — o app não paga guia e não emite código de barras. Aqui fica a prova: data, valor e comprovante.
+        </p>
+        {guiasMes.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: C.cinza, marginTop: 8 }}>Nenhuma guia gerada. Elas nascem quando a folha da competência é fechada.</p>
+        ) : guiasMes.map((g) => (
+          <div key={g.id} style={{ borderTop: "1px solid #1A2F4A", padding: "8px 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
+              <span><b>{g.tipo}</b> · {brl(g.valor)} · vence {fmtData(g.vencimento)}{g.pagoEm ? " · pago em " + fmtData(g.pagoEm) : ""}{g.valorPago != null ? " · valor pago " + brl(g.valorPago) : ""}</span>
+              <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {g.status === "paga" ? <span style={S.tag("#123B24", C.verde)}>PAGA</span> : <span style={S.tag("#3B2A12", C.amarelo)}>A PAGAR</span>}
+                {g.comprovante && <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onAbrir(g.comprovante.path), "Comprovante aberto em outra aba.")}>Comprovante</button>}
+                {g.status !== "paga" && <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "5px 12px", fontSize: 12 }} onClick={() => { setPagando(g.id); setPag({ pagoEm: hojeStr(), valorPago: String(g.valor), observacao: "" }); setComprovante(null); setMsg(null); }}>Registrar pagamento</button>}
+              </span>
+            </div>
+            {pagando === g.id && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                <input type="date" style={{ ...S.input, width: 155 }} value={pag.pagoEm} onChange={(e) => setPag({ ...pag, pagoEm: e.target.value })} />
+                <input style={{ ...S.input, width: 140 }} placeholder="Valor pago" value={pag.valorPago} onChange={(e) => setPag({ ...pag, valorPago: e.target.value })} />
+                <label style={{ ...S.btnGhost, cursor: "pointer", padding: "10px 14px", fontSize: 13 }}>
+                  {comprovante ? "Comprovante: " + comprovante.nome : "Anexar comprovante"}
+                  <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } setComprovante({ nome: f.name, file: f }); }} />
+                </label>
+                <input style={{ ...S.input, width: 180 }} placeholder="Observação" value={pag.observacao} onChange={(e) => setPag({ ...pag, observacao: e.target.value })} />
+                <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => { await onRegistrarPagamento(g.id, { ...pag, comprovante: comprovante?.file || null }); setPagando(null); }, "Pagamento registrado com data e comprovante.")}>Salvar pagamento</button>
+                <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setPagando(null)}>Cancelar</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {aPagar.length > 0 && (
+          <p style={{ fontSize: 12, color: C.amarelo, margin: "10px 0 0", lineHeight: 1.6 }}>
+            {aPagar.length} guia(s) sem pagamento registrado, somando {brl(aPagar.reduce((s, g) => s + g.valor, 0))}.
+          </p>
+        )}
+      </div>
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "12px 0 0", lineHeight: 1.6 }}>
+        {AVISO_FOLHA} As provisões seguem a regra geral (1/12 do bruto para o 13º, 1/12 para férias e 1/36 para o terço) e servem pra você saber quanto guardar — o lançamento contábil é feito pela contabilidade.
+      </p>
+    </div>
+  );
+}
+function TelaHolerite({ user, folhasPg, adiantamentos }) {
   const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
   return (
     <div>
@@ -4729,6 +5307,8 @@ function SecaoConformidade({ usuarios, registros }) {
 const TABELAS_OPCIONAIS = [
   { nome: "consentimentos_imagem", para: "termo de imagem e CFTV" },
   { nome: "aceites", para: "aceite do código de conduta e do espelho" },
+  { nome: "candidatos", para: "recrutamento e currículos" },
+  { nome: "documentos_rh", para: "documentos do colaborador" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -4774,7 +5354,65 @@ create policy "aceites: dono cuida" on public.aceites
 drop policy if exists "aceites: gestor le" on public.aceites;
 create policy "aceites: gestor le" on public.aceites
   for select to authenticated using (exists (
-    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+create table if not exists public.candidatos (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  email text,
+  telefone text,
+  cargo text,
+  origem text,
+  status text not null default 'recebido',
+  curriculo_url text,
+  observacao text,
+  contratado_usuario_id uuid references public.usuarios (id) on delete set null,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  atualizado_em timestamptz not null default now()
+);
+
+create table if not exists public.documentos_rh (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid references public.usuarios (id) on delete cascade,
+  candidato_id uuid references public.candidatos (id) on delete cascade,
+  tipo text not null,
+  arquivo_url text not null,
+  nome_original text,
+  observacao text,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  constraint documentos_rh_tem_dono check (usuario_id is not null or candidato_id is not null)
+);
+
+-- Exame agendado (data prevista) x exame realizado (data e resultado).
+alter table public.exames_ocupacionais add column if not exists status text not null default 'realizado';
+alter table public.exames_ocupacionais add column if not exists data_prevista date;
+
+-- Pagamento da guia: data, valor pago e comprovante guardado.
+alter table public.guias_fiscais add column if not exists pago_em date;
+alter table public.guias_fiscais add column if not exists valor_pago numeric(12,2);
+alter table public.guias_fiscais add column if not exists comprovante_url text;
+alter table public.guias_fiscais add column if not exists observacao text;
+
+alter table public.candidatos enable row level security;
+alter table public.documentos_rh enable row level security;
+
+-- Recrutamento e documentos sao do gestor; o colaborador le os proprios documentos.
+drop policy if exists "candidatos: gestor cuida" on public.candidatos;
+create policy "candidatos: gestor cuida" on public.candidatos
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: gestor cuida" on public.documentos_rh;
+create policy "documentos: gestor cuida" on public.documentos_rh
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: dono le o proprio" on public.documentos_rh;
+create policy "documentos: dono le o proprio" on public.documentos_rh
+  for select to authenticated using (usuario_id = auth.uid());`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */
@@ -5019,7 +5657,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, consImagem, aceites, demo }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, consImagem, aceites, demo }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -5124,16 +5762,19 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
       </div>
       <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} />
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
-      <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant }} />
+      <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
        <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
-       <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} />
+       <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
+       <SecaoRecrutamento candidatos={candidatos} onCriar={onCriarCandidato} onMudarStatus={onMudarStatusCandidato} onContratar={onContratarCandidato} onAbrir={onAbrirArquivo} demo={demo} />
+       <SecaoDocumentos usuarios={usuarios} documentos={documentosRH} exames={examesOcupacionais} onAnexar={onAnexarDocumento} onAbrir={onAbrirArquivo} />
+       <SecaoContabilidade usuarios={usuarios} folhasPg={folhasPg} guias={guias} onRegistrarPagamento={onRegistrarPagamentoGuia} onAbrir={onAbrirArquivo} demo={demo} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
       <SecaoAgendaRH usuarios={usuarios} exames={examesOcupacionais} ferias={ferias} />
       <SecaoConformidade usuarios={usuarios} registros={registros} />
       <SecaoAceites usuarios={usuarios} aceites={aceites} />
       <SecaoDiagnostico demo={demo} />
-      <SecaoBackup demo={demo} dados={{ usuarios, registros, faltas, justificativas, atestados, ferias, folgas, folhasPg, adiantamentos, guias, rescisoes, exames: examesOcupacionais, consImagem, aceites, locais, logs }} />
+      <SecaoBackup demo={demo} dados={{ usuarios, registros, faltas, justificativas, atestados, ferias, folgas, folhasPg, adiantamentos, guias, rescisoes, exames: examesOcupacionais, candidatos, documentos: documentosRH, consImagem, aceites, locais, logs }} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
