@@ -10,11 +10,14 @@
    batidas, folha, atestados). Nenhum dado de colaborador fica guardado aqui;
    a fila offline de batidas continua sendo responsabilidade do proprio app.
 
-   index.html usa REDE PRIMEIRO (com 5s de paciencia): quem tem internet ve
-   sempre a versao mais nova; o cache so entra em cena se a rede falhar.
+   index.html usa CASCO PRIMEIRO (stale-while-revalidate): abre na hora com o
+   que ja esta no aparelho e busca a versao nova em segundo plano. Isso tira o
+   tempo de espera do carregamento em rede de loja/celular. Quando a copia nova
+   fica pronta, o service worker avisa as abas abertas (ATUALIZACAO_PRONTA) e
+   quem decide o momento de recarregar e o app - nunca no meio de uma batida.
    ========================================================================= */
 
-const VERSAO = '2026.07.26-1';
+const VERSAO = '2026.07.26-2';
 const CACHE = 'ponto-renovar-' + VERSAO;
 const CASCO = [
   './', './index.html', './manifest.json',
@@ -113,6 +116,37 @@ async function redePrimeiro(req) {
   return new Response(SEM_REDE, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
+/* Casco primeiro: responde com o index.html guardado e revalida por tras.
+   Sem cache ainda (primeiro acesso do aparelho) cai no redePrimeiro. */
+async function cascoPrimeiro(req) {
+  const cache = await caches.open(CACHE);
+  const salvo = (await cache.match('./index.html')) || (await cache.match('./'));
+  if (!salvo) return redePrimeiro(req);
+  revalidarCasco(req, salvo);
+  return salvo;
+}
+
+/* Assinatura da resposta do GitHub Pages: se etag/data/tamanho nao mudaram,
+   o casco continua igual e nao ha motivo pra avisar ninguem. */
+function marcaDaResposta(r) {
+  if (!r || !r.headers) return '';
+  return (r.headers.get('etag') || '') + '|' + (r.headers.get('last-modified') || '') + '|' + (r.headers.get('content-length') || '');
+}
+
+async function revalidarCasco(req, salvo) {
+  try {
+    const nova = await fetch(new Request(req.url, { cache: 'reload', credentials: 'same-origin' }));
+    if (!nova || !nova.ok) return;
+    const cache = await caches.open(CACHE);
+    await cache.put('./index.html', nova.clone());
+    if (marcaDaResposta(nova) === marcaDaResposta(salvo)) return;
+    const abas = await self.clients.matchAll({ type: 'window' });
+    for (const aba of abas) {
+      try { aba.postMessage({ tipo: 'ATUALIZACAO_PRONTA', versao: VERSAO }); } catch (e) { /* aba fechando */ }
+    }
+  } catch (e) { /* sem rede: segue com o casco guardado */ }
+}
+
 async function cachePrimeiro(req) {
   const cache = await caches.open(CACHE);
   const salvo = await cache.match(req);
@@ -132,7 +166,7 @@ self.addEventListener('fetch', (ev) => {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return;
   if (url.hostname.endsWith('supabase.co')) return; // dados e autenticacao: sempre rede
   if (req.mode === 'navigate' || req.destination === 'document') {
-    ev.respondWith(redePrimeiro(req));
+    ev.respondWith(cascoPrimeiro(req));
     return;
   }
   if (url.origin === self.location.origin || url.hostname === 'unpkg.com') {
