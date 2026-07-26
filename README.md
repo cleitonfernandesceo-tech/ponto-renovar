@@ -61,6 +61,45 @@ Janela padrao: `AGENDA_JANELA_DIAS` = 120 dias. No maximo 2 periodos de ferias
 atrasados por pessoa, pra lista nao virar rolagem infinita.
 Gestor e inativos ficam fora. O cartao nao grava nada.
 
+## RH: recrutamento, documentos e exames (painel do gestor)
+
+Tres cartoes que fecham o ciclo da contratacao:
+
+- **Recrutamento e curriculos**: cadastra o candidato, guarda o curriculo,
+  move ele pelas etapas (`STATUS_CANDIDATO`) e, no botao Contratar, cria o
+  CONVITE ja preenchido. O app nunca cria conta nem guarda senha: a pessoa
+  usa o convite e escolhe a propria senha.
+- **Documentos e pasta de admissao**: guarda documento por colaborador e
+  mostra o checklist de `DOCS_ADMISSAO` (identidade, CPF, CTPS, residencia,
+  contrato) mais o exame admissional. Diz o que falta, nao bloqueia nada.
+- **Exames ocupacionais**: separa AGENDAR (data prevista, `status` agendado)
+  de LANCAR RESULTADO (data real, resultado e ASO anexado). O agendado
+  alimenta a Agenda do RH; o realizado zera o prazo do periodico.
+
+Arquivo fica no bucket privado `anexos`. Pra abrir, o app pede uma URL
+assinada de 120 segundos (`sbUrlAssinada`) — nada de link publico. Candidato
+nao tem login, entao o arquivo dele fica na pasta do gestor que subiu.
+
+## Contabilidade: custo real da equipe
+
+`custoDaEquipe(folhas, regime)` e uma funcao pura no bloco de motores, com
+teste unitario. Ela mostra o que o holerite esconde:
+
+- encargos por fora do bruto: FGTS 8% e, fora do Simples, INSS patronal 20%,
+  RAT e terceiros;
+- provisao mensal de 13o (1/12), ferias (1/12) e o terco (1/36), com os
+  encargos dessas provisoes;
+- custo de caixa do mes e custo total.
+
+O regime e escolhido na tela (`REGIMES_EMPRESA`) porque muda tudo: no Simples
+Nacional a parte patronal do INSS ja esta dentro do DAS, e somar 20% ali
+inventaria um custo que a empresa nao tem. Padrao: Simples.
+
+As guias nascem quando a folha da competencia e fechada. O app NAO paga guia
+e NAO emite codigo de barras: o pagamento acontece no banco ou com a
+contabilidade, e aqui fica a prova (data, valor pago e comprovante anexado).
+O resumo da competencia sai em CSV pro contador.
+
 ## Rede de seguranca (sem tela branca)
 
 O `App` exportado e apenas uma casca: ele devolve `<RedeDeSeguranca><AppInterno /></RedeDeSeguranca>`.
@@ -158,6 +197,64 @@ drop policy if exists "aceites: gestor le" on public.aceites;
 create policy "aceites: gestor le" on public.aceites
   for select to authenticated using (exists (
     select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+create table if not exists public.candidatos (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  email text,
+  telefone text,
+  cargo text,
+  origem text,
+  status text not null default 'recebido',
+  curriculo_url text,
+  observacao text,
+  contratado_usuario_id uuid references public.usuarios (id) on delete set null,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  atualizado_em timestamptz not null default now()
+);
+
+create table if not exists public.documentos_rh (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid references public.usuarios (id) on delete cascade,
+  candidato_id uuid references public.candidatos (id) on delete cascade,
+  tipo text not null,
+  arquivo_url text not null,
+  nome_original text,
+  observacao text,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  constraint documentos_rh_tem_dono check (usuario_id is not null or candidato_id is not null)
+);
+
+-- Exame agendado (data prevista) x exame realizado (data e resultado).
+alter table public.exames_ocupacionais add column if not exists status text not null default 'realizado';
+alter table public.exames_ocupacionais add column if not exists data_prevista date;
+
+-- Pagamento da guia: data, valor pago e comprovante guardado.
+alter table public.guias_fiscais add column if not exists pago_em date;
+alter table public.guias_fiscais add column if not exists valor_pago numeric(12,2);
+alter table public.guias_fiscais add column if not exists comprovante_url text;
+alter table public.guias_fiscais add column if not exists observacao text;
+
+alter table public.candidatos enable row level security;
+alter table public.documentos_rh enable row level security;
+
+-- Recrutamento e documentos sao do gestor; o colaborador le os proprios documentos.
+drop policy if exists "candidatos: gestor cuida" on public.candidatos;
+create policy "candidatos: gestor cuida" on public.candidatos
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: gestor cuida" on public.documentos_rh;
+create policy "documentos: gestor cuida" on public.documentos_rh
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "documentos: dono le o proprio" on public.documentos_rh;
+create policy "documentos: dono le o proprio" on public.documentos_rh
+  for select to authenticated using (usuario_id = auth.uid());
 ```
 
 ## Push de servidor (lembrete com o app fechado)
