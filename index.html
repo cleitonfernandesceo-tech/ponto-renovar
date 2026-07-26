@@ -2981,56 +2981,72 @@ function MedidorPremio({
    branco/fundo 16.2 · branco/card 14.8 · cinza/card 6.2 · laranja/card 6.1 · verde/card 6.9 ·
    vermelho/card 5.7 · texto escuro sobre botão laranja 7.2.
    O vermelho anterior (#E5484D) reprovava em AA (4.05 no card) — trocado por #F87171. */
+/* Paleta. As chaves antigas seguem valendo em todas as telas: o que mudou e
+   que "grafite" deixou de ser marrom (era um tom terroso, provavel engano de
+   digitacao) e virou o azul-ardosia do tema; e entraram tokens de borda,
+   sombra e vidro pra nao ficar cor solta espalhada pelo arquivo. */
 const C = {
   preto: "#0D1B2A",
   carvao: "#10233B",
-  grafite: "#2E1D12",
+  grafite: "#152840",
   amarelo: "#FF7A1A",
   vermelho: "#F87171",
   verde: "#35C26E",
   cinza: "#8FA3BF",
-  branco: "#F5F7FA"
+  branco: "#F5F7FA",
+  azul: "#4C9AFF",
+  dourado: "#F5C36B",
+  borda: "#1E3450",
+  bordaForte: "#2A4568",
+  vidro: "rgba(255,255,255,0.04)",
+  sombra: "0 10px 28px rgba(0,0,0,0.30)",
+  sombraForte: "0 18px 44px rgba(0,0,0,0.45)"
 };
+/* Estilos base. Mexer aqui muda o app todo de uma vez: cartao, botao e campo
+   ganharam profundidade (degrade sutil + sombra) e canto um pouco mais macio. */
 const S = {
   app: {
     minHeight: "100vh",
-    background: C.preto,
+    background: "radial-gradient(1100px 520px at 50% -8%, rgba(255,122,26,0.10), transparent 60%), radial-gradient(900px 460px at 8% 4%, rgba(76,154,255,0.07), transparent 62%), " + C.preto,
     color: C.branco,
-    fontFamily: "'Inter','Segoe UI',system-ui,sans-serif"
+    fontFamily: "-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif"
   },
   display: {
-    fontFamily: "'Oswald','Arial Narrow',sans-serif",
+    fontFamily: "'Oswald','Arial Narrow',-apple-system,'Segoe UI',system-ui,sans-serif",
     textTransform: "uppercase",
-    letterSpacing: "0.04em"
+    letterSpacing: "0.02em",
+    fontWeight: 700
   },
   card: {
-    background: C.carvao,
-    border: "1px solid #1E3450",
-    borderRadius: 14,
-    padding: 20
+    background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012)), " + C.carvao,
+    border: "1px solid " + C.borda,
+    borderRadius: 16,
+    padding: 20,
+    boxShadow: C.sombra
   },
   btn: {
-    background: C.amarelo,
-    color: "#111",
+    background: "linear-gradient(135deg, #FF8F35, #F06A05)",
+    color: "#141007",
     fontWeight: 700,
     border: "none",
-    borderRadius: 10,
+    borderRadius: 12,
     padding: "12px 20px",
     cursor: "pointer",
-    fontSize: 15
+    fontSize: 15,
+    boxShadow: "0 8px 20px rgba(255,122,26,0.26)"
   },
   btnGhost: {
-    background: "transparent",
+    background: C.vidro,
     color: C.branco,
-    border: "1px solid #2A4568",
-    borderRadius: 10,
+    border: "1px solid " + C.bordaForte,
+    borderRadius: 12,
     padding: "10px 16px",
     cursor: "pointer"
   },
   input: {
     background: C.grafite,
-    border: "1px solid #2A4568",
-    borderRadius: 10,
+    border: "1px solid " + C.bordaForte,
+    borderRadius: 12,
     padding: "12px 14px",
     color: C.branco,
     width: "100%",
@@ -3043,6 +3059,7 @@ const S = {
     padding: "3px 10px",
     fontSize: 12,
     fontWeight: 700,
+    letterSpacing: "0.03em",
     display: "inline-block"
   })
 };
@@ -3461,8 +3478,11 @@ function AppInterno() {
   const [relogio, setRelogio] = useState(new Date());
   const [salvando, setSalvando] = useState(false);
   const [erroDados, setErroDados] = useState(null);
+  /* Este tick nao serve pra mostrar as horas (quem mostra e o componente do
+     relogio, que se atualiza sozinho): ele so mantem frescas as contas que
+     olham o "agora" durante o render. 20s em vez de 1s = 20x menos re-render. */
   useEffect(() => {
-    const t = setInterval(() => setRelogio(new Date()), 1000);
+    const t = setInterval(() => setRelogio(new Date()), 20000);
     return () => clearInterval(t);
   }, []);
   const log = (acao, detalhe) => {
@@ -6229,6 +6249,35 @@ function Login({
     }
   }, EMPRESA.nome), " \xB7 CNPJ ", EMPRESA.cnpj, /*#__PURE__*/React.createElement("br", null), EMPRESA.endereco, " \xB7 CEP ", EMPRESA.cep, /*#__PURE__*/React.createElement("br", null), EMPRESA.ramo)));
 }
+/* Relogio com vida propria. Antes o horario ficava no estado do topo do app,
+   entao o app INTEIRO era redesenhado 1x por segundo - em celular fraco e isso
+   que da a sensacao de travamento. Agora so este pedacinho pisca a cada
+   segundo; o resto da tela redesenha a cada 20 segundos. */
+function RelogioVivo() {
+  const [agora, setAgora] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setAgora(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 64,
+      color: C.amarelo,
+      lineHeight: 1
+    }
+  }, agora.toLocaleTimeString("pt-BR")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.cinza,
+      marginTop: 6
+    }
+  }, agora.toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long"
+  })));
+}
+
 function TelaPonto({
   user,
   relogio,
@@ -6482,23 +6531,7 @@ function TelaPonto({
       textAlign: "center",
       padding: 34
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.display,
-      fontSize: 64,
-      color: C.amarelo,
-      lineHeight: 1
-    }
-  }, relogio.toLocaleTimeString("pt-BR")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: C.cinza,
-      marginTop: 6
-    }
-  }, relogio.toLocaleDateString("pt-BR", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long"
-  })), !fluxoPonto && /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement(RelogioVivo, null), !fluxoPonto && /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
       marginTop: 24,
