@@ -14,7 +14,7 @@
    sempre a versao mais nova; o cache so entra em cena se a rede falhar.
    ========================================================================= */
 
-const VERSAO = '2026.07.25-3';
+const VERSAO = '2026.07.26-1';
 const CACHE = 'ponto-renovar-' + VERSAO;
 const CASCO = [
   './', './index.html', './manifest.json',
@@ -73,6 +73,24 @@ self.addEventListener('notificationclick', (ev) => {
     }
     try { await self.clients.openWindow(alvo); } catch (e) {}
   })());
+});
+
+/* Push de servidor (Edge Function lembretes-push, no Supabase): e o unico
+   caminho para o aviso chegar com o app FECHADO. O payload vem em JSON:
+   { titulo, corpo, etapa, url }. Todo push assinado precisa gerar aviso
+   visivel, entao ha texto de reserva se o payload vier vazio. */
+self.addEventListener('push', (ev) => {
+  var d = {};
+  try { d = ev.data ? ev.data.json() : {}; } catch (e) { d = {}; }
+  const dia = new Date().toISOString().slice(0, 10);
+  ev.waitUntil(self.registration.showNotification(d.titulo || 'Ponto Renovar', {
+    body: d.corpo || 'Abra o Ponto Renovar para ver o lembrete.',
+    tag: (d.etapa || 'lembrete') + '-' + dia, // 1 aviso por etapa/dia em cada aparelho
+    lang: 'pt-BR',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    data: { url: (d && d.url) || './' }
+  }));
 });
 
 function guardar(cache, req, resp) {
