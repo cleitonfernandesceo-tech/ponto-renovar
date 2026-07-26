@@ -3478,6 +3478,17 @@ function AppInterno() {
   const [relogio, setRelogio] = useState(new Date());
   const [salvando, setSalvando] = useState(false);
   const [erroDados, setErroDados] = useState(null);
+  /* O service worker avisa quando acabou de baixar uma versao nova do app
+     (ATUALIZACAO_PRONTA). Nao recarregamos sozinhos: quem esta batendo ponto
+     nao pode ter a tela trocada no meio - quem escolhe a hora e o usuario. */
+  const [atualizacaoPronta, setAtualizacaoPronta] = useState(false);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const ouvir = (ev) => { if (ev.data && ev.data.tipo === "ATUALIZACAO_PRONTA") setAtualizacaoPronta(true); };
+    navigator.serviceWorker.addEventListener("message", ouvir);
+    return () => navigator.serviceWorker.removeEventListener("message", ouvir);
+  }, []);
+
   /* Este tick nao serve pra mostrar as horas (quem mostra e o componente do
      relogio, que se atualiza sozinho): ele so mantem frescas as contas que
      olham o "agora" durante o render. 20s em vez de 1s = 20x menos re-render. */
@@ -5391,7 +5402,39 @@ function AppInterno() {
     },
     onClick: () => setAviso(null),
     "aria-label": "Fechar aviso"
-  }, "Fechar")), carregandoSecundarios && /*#__PURE__*/React.createElement("div", {
+  }, "Fechar")), atualizacaoPronta && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginBottom: 14,
+      padding: 12,
+      borderLeft: "4px solid " + C.azul,
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 13,
+      lineHeight: 1.55
+    }
+  }, "Uma vers\xE3o nova do app j\xE1 est\xE1 pronta neste aparelho."), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "6px 14px",
+      fontSize: 12
+    },
+    onClick: () => window.location.reload()
+  }, "Atualizar agora"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => setAtualizacaoPronta(false),
+    "aria-label": "Adiar atualiza\xE7\xE3o"
+  }, "Depois")), carregandoSecundarios && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginBottom: 14,
