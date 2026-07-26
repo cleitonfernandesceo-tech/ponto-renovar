@@ -1585,7 +1585,7 @@ function legendaLembretes(status, instalado) {
 const VAPID_PUBLICA = "BNN_ZavXeLShPczVpCz0WWFXR77-IoZ4qgJ7bGDjN92NMU5aIwnoAJVsCELo1n7vYha6fF8B_BRpIAgpTV_2Z5M";
 
 function b64UrlParaBytes(txt) {
-  const b64 = (txt + "=".repeat((4 - (txt.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  const b64 = (txt + "=".repeat((4 - txt.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
