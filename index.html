@@ -57,7 +57,95 @@
 <link rel="preconnect" href="https://bdbxjdkjeeobaxulfqkb.supabase.co" crossorigin>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<style>html,body,#root{margin:0;padding:0;background:#0D1B2A}</style>
+<style>
+/* =====================================================================
+   Ponto Renovar - camada visual global. A aparencia de cada tela vem dos
+   estilos inline do React (ponto-renovar.jsx); aqui ficam so as regras
+   que valem pro app inteiro: foco visivel, reacao ao toque, tabelas,
+   barra de rolagem e area segura do iPhone.
+   Nada aqui mexe em posicao ou tamanho de caixa, pra nao brigar com o
+   layout ja testado - e estilo inline sempre ganha da folha de estilo,
+   entao estas regras agem somente onde o app nao definiu nada.
+   ===================================================================== */
+
+/* --- base --- */
+html,body,#root{margin:0;padding:0;background:#0D1B2A}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{
+  color:#F5F7FA;
+  font-variant-numeric:tabular-nums;              /* relogio e horarios param de dancar */
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  overscroll-behavior-y:none;                     /* sem puxar a pagina no celular */
+  -webkit-tap-highlight-color:rgba(255,122,26,.16);
+}
+/* iPhone de tela borda a borda: o conteudo sai de baixo do notch */
+#root{
+  padding-top:env(safe-area-inset-top);
+  padding-right:env(safe-area-inset-right);
+  padding-bottom:env(safe-area-inset-bottom);
+  padding-left:env(safe-area-inset-left);
+}
+::selection{background:rgba(255,122,26,.30);color:#fff}
+img{max-width:100%}
+
+/* --- foco visivel: teclado e leitor de tela --- */
+:focus{outline:none}
+:focus-visible{outline:2px solid #FF7A1A;outline-offset:2px}
+
+/* --- botoes: resposta imediata ao toque, sem mudar o layout --- */
+button{
+  font:inherit;color:inherit;-webkit-appearance:none;
+  transition:transform .14s ease,filter .18s ease,box-shadow .2s ease,background-color .2s ease,opacity .18s ease;
+}
+button:not(:disabled){cursor:pointer}
+button:not(:disabled):hover{filter:brightness(1.08)}
+button:not(:disabled):active{transform:translateY(1px) scale(.995)}
+button:disabled{cursor:not-allowed}
+
+/* --- campos --- */
+input,select,textarea{
+  font:inherit;color:inherit;
+  transition:border-color .18s ease,box-shadow .18s ease,background-color .18s ease;
+}
+input:focus,select:focus,textarea:focus{
+  border-color:#FF7A1A !important;
+  box-shadow:0 0 0 4px rgba(255,122,26,.15);
+}
+input::placeholder,textarea::placeholder{color:#7B8FA9;opacity:1}
+input[type=checkbox],input[type=radio]{accent-color:#FF7A1A;cursor:pointer}
+input[type=date],input[type=time],input[type=month]{color-scheme:dark}
+
+/* --- tabelas: espelho de ponto, folha, equipe --- */
+table{border-collapse:collapse}
+thead th{
+  position:sticky;top:0;z-index:1;background:#132A45;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#A9BCD6;
+}
+tbody tr{transition:background-color .15s ease}
+tbody tr:nth-child(even){background:rgba(255,255,255,.02)}
+tbody tr:hover{background:rgba(255,122,26,.06)}
+
+/* --- barra de rolagem discreta --- */
+*{scrollbar-width:thin;scrollbar-color:#27466A transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#27466A;border-radius:999px;border:2px solid #0D1B2A}
+::-webkit-scrollbar-thumb:hover{background:#FF7A1A}
+
+/* --- entrada suave da tela, respeitando quem pediu menos animacao --- */
+@keyframes prSobe{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+#root>div{animation:prSobe .3s ease both}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+
+/* --- impressao de relatorio: papel branco e sem botoes --- */
+@media print{
+  body{background:#fff;color:#111}
+  button{display:none !important}
+}
+</style>
 <script>
 /* Anti-clickjacking possível numa página estática: X-Frame-Options e CSP frame-ancestors
    SÓ funcionam como cabeçalho HTTP real, que o GitHub Pages não deixa configurar.
@@ -11689,7 +11777,7 @@ document.addEventListener("DOMContentLoaded", function () {
      O service worker guarda somente o casco do app (index.html, React, icones).
      Nenhuma chamada ao Supabase passa pelo cache: dado de ponto nao fica gravado ali. -->
 <script>
-window.__APP_VERSAO = '2026.07.26-1';
+window.__APP_VERSAO = '2026.07.26-2';
 (function () {
   var instalado = false;
   try {
