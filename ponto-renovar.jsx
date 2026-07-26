@@ -894,7 +894,7 @@ const mapFolhaPg = (r) => ({
 const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
 const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.data_desligamento || "").slice(0, 10), motivo: r.motivo, motivoLabel: MOTIVOS_RESCISAO[r.motivo]?.label || r.motivo, avisoTipo: r.aviso_tipo, calculo: r.calculo || null, totalProventos: +r.total_proventos || 0, totalDescontos: +r.total_descontos || 0, liquido: +r.valor_liquido || 0, status: r.status, criadoEm: r.criado_em, confirmadoEm: r.confirmado_em });
 const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, status: r.status || "realizado", dataPrevista: (r.data_prevista || "").slice(0, 10), criadoEm: r.criado_em });
-const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status, pagoEm: (r.pago_em || "").slice(0, 10), valorPago: r.valor_pago == null ? null : +r.valor_pago, comprovante: r.comprovante_url ? { nome: r.comprovante_url.split("/").pop().replace(/^\d+_/, ""), path: r.comprovante_url } : null, observacao: r.observacao || "" });
+const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status, pagoEm: (r.pago_em || "").slice(0, 10), linhaDigitavel: r.linha_digitavel || "", valorPago: r.valor_pago == null ? null : +r.valor_pago, comprovante: r.comprovante_url ? { nome: r.comprovante_url.split("/").pop().replace(/^\d+_/, ""), path: r.comprovante_url } : null, observacao: r.observacao || "" });
 const mapCandidato = (r) => ({ id: r.id, nome: r.nome, email: r.email || "", telefone: r.telefone || "", cargo: r.cargo || "", origem: r.origem || "", status: r.status || "recebido", statusLabel: STATUS_CANDIDATO[r.status] || r.status, curriculo: r.curriculo_url ? { nome: r.curriculo_url.split("/").pop().replace(/^\d+_/, ""), path: r.curriculo_url } : null, observacao: r.observacao || "", contratadoUserId: r.contratado_usuario_id || null, criadoEm: r.criado_em, atualizadoEm: r.atualizado_em });
 const mapDocumento = (r) => ({ id: r.id, userId: r.usuario_id || null, candidatoId: r.candidato_id || null, tipo: r.tipo, tipoLabel: TIPOS_DOCUMENTO[r.tipo] || r.tipo, arquivo: { nome: r.nome_original || String(r.arquivo_url).split("/").pop().replace(/^\d+_/, ""), path: r.arquivo_url }, observacao: r.observacao || "", criadoEm: r.criado_em });
 
@@ -1814,6 +1814,93 @@ function prazoEmPalavras(d) {
   if (d === 0) return "vence hoje";
   if (d === 1) return "vence amanhã";
   return "faltam " + d + " dias";
+}
+
+/* Agendamento automatico de exames (NR-7 / PCMSO).
+   Admissional antes do primeiro dia, periodico na periodicidade do PCMSO e
+   demissional junto do desligamento. Esta funcao e pura: calcula o que precisa
+   existir e ainda nao existe. Quem grava e o gestor, com um clique. */
+const ESOCIAL_JANELA_DIAS = 120;
+function examesQueFaltam({ usuarios = [], exames = [], rescisoes = [], hoje = new Date() } = {}) {
+  const ref = dataLocal(dataISO(hoje));
+  const pend = [];
+  const aberto = (uid, tipo) => exames.some((e) => e.userId === uid && e.tipo === tipo && e.status === "agendado");
+  usuarios.forEach((u) => {
+    if (u.ativo === false) return;
+    const clinicos = exames.filter((e) => e.userId === u.id && e.status !== "agendado" && e.data && EXAMES_QUE_VALEM_COMO_CLINICO.includes(e.tipo));
+    if (clinicos.length === 0) {
+      if (!u.admissao || aberto(u.id, "admissional")) return;
+      const d = dataLocal(u.admissao);
+      pend.push({ userId: u.id, quem: u.nome, tipo: "admissional", tipoLabel: TIPOS_EXAME.admissional, data: dataISO(d < ref ? ref : d), motivo: "nenhum exame clinico registrado" });
+      return;
+    }
+    if (aberto(u.id, "periodico")) return;
+    const ultimo = clinicos.slice().sort((a, b) => (a.data < b.data ? 1 : -1))[0];
+    const proximo = addMeses(dataLocal(ultimo.data), AGENDA_PCMSO_MESES);
+    if (Math.round((proximo - ref) / 86400000) > AGENDA_JANELA_DIAS) return;
+    pend.push({ userId: u.id, quem: u.nome, tipo: "periodico", tipoLabel: TIPOS_EXAME.periodico, data: dataISO(proximo < ref ? ref : proximo), motivo: "ultimo exame clinico em " + ultimo.data });
+  });
+  rescisoes.forEach((r) => {
+    if (!r.dataDeslig || aberto(r.userId, "demissional")) return;
+    if (exames.some((e) => e.userId === r.userId && e.tipo === "demissional" && e.status !== "agendado")) return;
+    if (pend.some((p) => p.userId === r.userId && p.tipo === "demissional")) return;
+    const u = usuarios.find((x) => x.id === r.userId);
+    pend.push({ userId: r.userId, quem: u ? u.nome : "colaborador", tipo: "demissional", tipoLabel: TIPOS_EXAME.demissional, data: r.dataDeslig, motivo: "desligamento em " + r.dataDeslig });
+  });
+  return pend;
+}
+
+/* eSocial: a carteira digital e assinada quando o S-2200 e transmitido e a baixa
+   acontece com o S-2299. O envio e feito pela contabilidade (ou pelo gestor no
+   portal) - o app nao transmite nada. Aqui ele so mostra o que esta em aberto e
+   o prazo de cada evento, pra nenhum vencer sem ninguem ver. */
+/* Linha digitavel: 48 numeros nas guias de arrecadacao (DARF, GPS, FGTS) e 47 num
+   boleto comum. Agrupar em blocos ajuda a conferir numero por numero. */
+const agruparLinhaDigitavel = (v) => {
+  const so = String(v || "").replace(/\D/g, "");
+  const passo = so.length === 48 ? 12 : 4;
+  const partes = [];
+  for (let i = 0; i < so.length; i += passo) partes.push(so.slice(i, i + passo));
+  return partes.join(" ");
+};
+
+const EVENTOS_ESOCIAL = {
+  S2200: { codigo: "S-2200", nome: "Admissao do trabalhador", base: "enviar ate o dia imediatamente anterior ao inicio das atividades - e o evento que assina a carteira digital" },
+  S2299: { codigo: "S-2299", nome: "Desligamento", base: "enviar ate 10 dias corridos do desligamento - e o evento que da baixa na carteira" },
+  S2230: { codigo: "S-2230", nome: "Afastamento temporario", base: "atestado acima de 3 dias: ate o dia 15 do mes seguinte (acidente de trabalho e imediato)" },
+  S1200: { codigo: "S-1200 / S-1210", nome: "Remuneracao e pagamentos", base: "fechamento mensal: ate o dia 15 do mes seguinte a competencia" },
+};
+function eventosESocial({ usuarios = [], rescisoes = [], atestados = [], folhasPg = [], hoje = new Date() } = {}) {
+  const ref = dataLocal(dataISO(hoje));
+  const dias = (dt) => Math.round((dt - ref) / 86400000);
+  const dia15 = (d) => { const b = dataLocal(String(d).slice(0, 10)); return new Date(b.getFullYear(), b.getMonth() + 1, 15); };
+  const itens = [];
+  const juntar = (chave, prazo, extra) => {
+    const d = dias(prazo);
+    itens.push({ ...EVENTOS_ESOCIAL[chave], chave, prazo: dataISO(prazo), dias: d, atrasado: d < 0, ...extra });
+  };
+  usuarios.forEach((u) => {
+    if (!u.admissao || dias(dataLocal(u.admissao)) < -ESOCIAL_JANELA_DIAS) return;
+    juntar("S2200", new Date(dataLocal(u.admissao).getTime() - 86400000), { quem: u.nome, userId: u.id, detalhe: "admissao em " + fmtData(u.admissao) });
+  });
+  rescisoes.forEach((r) => {
+    if (!r.dataDeslig || dias(dataLocal(r.dataDeslig)) < -ESOCIAL_JANELA_DIAS) return;
+    const u = usuarios.find((x) => x.id === r.userId);
+    juntar("S2299", new Date(dataLocal(r.dataDeslig).getTime() + 10 * 86400000), { quem: u ? u.nome : "colaborador", userId: r.userId, detalhe: "desligamento em " + fmtData(r.dataDeslig) + (r.status === "confirmado" ? "" : " (rascunho)") });
+  });
+  atestados.forEach((a) => {
+    if (a.status !== "aprovado" || !a.data) return;
+    const d = String(a.data).slice(0, 10);
+    if (dias(dataLocal(d)) < -ESOCIAL_JANELA_DIAS) return;
+    const u = usuarios.find((x) => x.id === a.userId);
+    juntar("S2230", dia15(d), { quem: u ? u.nome : "colaborador", userId: a.userId, detalhe: "atestado de " + fmtData(d) + " - confira os dias no documento" });
+  });
+  Array.from(new Set(folhasPg.filter((f) => f.status === "fechada").map((f) => f.competencia))).forEach((c) => {
+    const qtd = folhasPg.filter((f) => f.competencia === c && f.status === "fechada").length;
+    juntar("S1200", dia15(c), { quem: qtd + " colaborador(es)", detalhe: "folha fechada da competencia " + rotuloComp(c) });
+  });
+  itens.sort((a, b) => (a.prazo < b.prazo ? -1 : a.prazo > b.prazo ? 1 : 0));
+  return itens;
 }
 
 function MedidorPremio({ m }) {
@@ -2916,6 +3003,8 @@ function AppInterno() {
       setRescisoes(rs => [novo, ...rs]);
       try { await auditar("rescisao_criada", `${user.nome} calculou rescisao de ${u.nome} - motivo: ${motivoInfo.label} - desligamento ${fmtData(dados.dataDeslig)} - liquido estimado ${brl(calc.liquido)} (rascunho)`); }
       catch (e) { setErroDados(`Calculo salvo, mas a trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
+      // O demissional entra na agenda sozinho: a NR-7 exige ASO no desligamento.
+      await agendarExameAuto({ userId: u.id, tipo: "demissional", data: dados.dataDeslig, observacao: "Agendado automaticamente pela rescisao" });
       return novo;
    };
    
@@ -2947,6 +3036,10 @@ function AppInterno() {
       const nomeCol = usuarios.find(u => u.id === dados.userId)?.nome || dados.userId;
       try { await auditar("exame_ocupacional_criado", `${user.nome} registrou exame ${TIPOS_EXAME[dados.tipo]} de ${nomeCol}${dados.resultado ? ` - resultado: ${RESULTADOS_EXAME[dados.resultado]}` : " - resultado pendente"}`); }
       catch (e) { setErroDados(`Exame registrado, mas a trilha de auditoria falhou (${mensagemAmigavel(e)}).`); }
+      // Exame clinico lancado: o proximo periodico ja nasce agendado (PCMSO).
+      if (EXAMES_QUE_VALEM_COMO_CLINICO.includes(dados.tipo) && dados.resultado && dados.resultado !== "inapto") {
+         await agendarExameAuto({ userId: dados.userId, tipo: "periodico", data: dataISO(addMeses(dataLocal(dados.data), AGENDA_PCMSO_MESES)), observacao: "Proximo periodico agendado automaticamente (PCMSO)" });
+      }
       return novo;
    };
    
@@ -3028,6 +3121,13 @@ function AppInterno() {
      return novo;
    };
 
+   // Agendamento automatico: so cria se ainda nao existir um exame do mesmo tipo em aberto.
+   const agendarExameAuto = async (dados) => {
+      const { ignorarId, ...linha } = dados;
+      const jaTem = examesOcupacionais.some((e) => e.id !== ignorarId && e.userId === linha.userId && e.tipo === linha.tipo && e.status === "agendado");
+      if (jaTem) return null;
+      try { return await agendarExame(linha); } catch (e) { console.warn("[exame automatico]", e.message); return null; }
+   };
    const concluirExame = async (id, dados) => {
      if (!dataValida(dados.data)) throw new Error("Informe a data em que o exame foi feito.");
      if (!RESULTADOS_EXAME[dados.resultado]) throw new Error("Informe o resultado do exame.");
@@ -3041,6 +3141,10 @@ function AppInterno() {
      const nomeCol = usuarios.find((u) => u.id === ex?.userId)?.nome || "colaborador";
      try { await auditar("exame_concluido", `${user.nome} lançou o resultado do exame ${ex?.tipoLabel || ""} de ${nomeCol}: ${RESULTADOS_EXAME[dados.resultado]}`); }
      catch (e) { console.warn("[auditoria exame concluido]", e.message); }
+     // Fechou um exame clinico: o proximo periodico ja nasce agendado (PCMSO).
+     if (ex && EXAMES_QUE_VALEM_COMO_CLINICO.includes(ex.tipo) && dados.resultado !== "inapto") {
+        await agendarExameAuto({ userId: ex.userId, tipo: "periodico", data: dataISO(addMeses(dataLocal(dados.data), AGENDA_PCMSO_MESES)), observacao: "Proximo periodico agendado automaticamente (PCMSO)", ignorarId: id });
+     }
    };
 
    // A guia nao e paga aqui dentro: o pagamento acontece no banco ou com a
@@ -3057,6 +3161,17 @@ function AppInterno() {
      setGuias((gs) => gs.map((x) => x.id === id ? { ...x, status: "paga", pagoEm: dados.pagoEm, valorPago: valor, observacao: patch.observacao || "", comprovante: path ? { nome: dados.comprovante.name, path } : x.comprovante } : x));
      try { await auditar("guia_paga", `${user.nome} registrou o pagamento da guia ${g?.tipo || id} de ${brl(valor)} em ${fmtData(dados.pagoEm)}${path ? " com comprovante anexado" : " sem comprovante"}`); }
      catch (e) { console.warn("[auditoria pagamento guia]", e.message); }
+   };
+   // A linha digitavel vem da guia emitida no eSocial/DCTFWeb/Conectividade Social.
+   // O app guarda o numero e deixa copiar: o pagamento acontece no banco, com o gestor.
+   const salvarLinhaGuia = async (id, valor) => {
+      const so = String(valor || "").replace(/\D/g, "");
+      if (so && so.length !== 47 && so.length !== 48) throw new Error("A linha digitável tem 47 números (boleto) ou 48 (guia de arrecadação). Confira e tente de novo.");
+      const g = guias.find((x) => x.id === id);
+      if (!demo) await sbUpdate(sessao.token, "guias_fiscais", `id=eq.${id}`, { linha_digitavel: so || null });
+      setGuias((gs) => gs.map((x) => x.id === id ? { ...x, linhaDigitavel: so } : x));
+      try { await auditar("guia_linha_salva", `${user.nome} ${so ? "guardou" : "apagou"} a linha digitável da guia ${g?.tipo || id}`); }
+      catch (e) { console.warn("[auditoria linha da guia]", e.message); }
    };
    /* ---------- aprovações do gestor ---------- */
   const decidir = async (categoria, id, aprovar) => {
@@ -3312,7 +3427,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, consImagem, aceites, demo }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, demo }} />
           )}
         </main>
       </div>
@@ -4617,7 +4732,7 @@ function ModalConfirm({ titulo, texto, rotuloOk = "Confirmar", onConfirmar, onCa
 const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada",
   "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto",
   "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado",
-  "exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado"];
+  "exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado", "guia_linha_salva"];
 
 const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
 
@@ -4773,7 +4888,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
 function SecaoRescisao({ usuarios, rescisoes, onCriarRescisao, onConfirmarRescisao }) { const h = React.createElement; const nome = (id) => usuarios.find(u => u.id === id)?.nome || id; const [form, setForm] = useState({ userId: "", dataDeslig: "", motivo: "dispensa_sem_justa_causa", avisoTipo: "indenizado" }); const [resultado, setResultado] = useState(null); const [msg, setMsg] = useState(null); const [ocupado, setOcupado] = useState(false); const [confirmando, setConfirmando] = useState(null); const motivoInfo = MOTIVOS_RESCISAO[form.motivo]; const calcular = async () => { if (!form.userId || !form.dataDeslig) { setMsg({ ok: false, txt: "Escolha o colaborador e a data de desligamento." }); return; } setOcupado(true); setMsg(null); try { const novo = await onCriarRescisao(form); setResultado(novo); setMsg({ ok: true, txt: "Cálculo gerado como rascunho." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; const confirmar = async (id) => { setOcupado(true); try { await onConfirmarRescisao(id); setConfirmando(null); setMsg({ ok: true, txt: "Rescisão confirmada." }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } }; return h("div", { style: { ...S.card, marginTop: 14 } }, h("div", { style: { ...S.display, fontSize: 15, color: C.cinza } }, "Rescisão — cálculo de verbas (desligamento)"), h("p", { style: { fontSize: 11, color: C.cinza, margin: "6px 0 0" } }, AVISO_RESCISAO), h("div", { style: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" } }, h("select", { style: { ...S.input, width: 200 }, value: form.userId, onChange: e => setForm({ ...form, userId: e.target.value }) }, h("option", { value: "" }, "Colaborador…"), usuarios.filter(u => u.ativo !== false).map(u => h("option", { key: u.id, value: u.id }, u.nome))), h("input", { type: "date", style: { ...S.input, width: 170 }, value: form.dataDeslig, onChange: e => setForm({ ...form, dataDeslig: e.target.value }) }), h("select", { style: { ...S.input, width: 260 }, value: form.motivo, onChange: e => setForm({ ...form, motivo: e.target.value }) }, Object.entries(MOTIVOS_RESCISAO).map(([k, v]) => h("option", { key: k, value: k }, v.label))), motivoInfo.avisoDevido ? h("select", { style: { ...S.input, width: 160 }, value: form.avisoTipo, onChange: e => setForm({ ...form, avisoTipo: e.target.value }) }, h("option", { value: "indenizado" }, "Aviso indenizado"), h("option", { value: "trabalhado" }, "Aviso trabalhado")) : null, h("button", { style: { ...S.btn, opacity: ocupado ? 0.6 : 1 }, disabled: ocupado, onClick: calcular }, ocupado ? "Calculando…" : "Calcular rescisão")), msg ? h("p", { style: { fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 } }, msg.txt) : null, resultado ? h("div", { style: { background: C.grafite, borderRadius: 10, padding: 14, marginTop: 12 } }, h("div", { style: { ...S.display, fontSize: 14, color: C.amarelo } }, nome(resultado.userId) + " · " + resultado.motivoLabel + " · desligamento " + fmtData(resultado.dataDeslig)), h("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 8 } }, h("tbody", null, [["Saldo de salário", resultado.calculo.verbas.saldoSalario], ["Aviso prévio indenizado", resultado.calculo.verbas.valorAviso], ["13º proporcional", resultado.calculo.verbas.decimoProp], ["Férias proporcionais", resultado.calculo.verbas.feriasProp], ["1/3 de férias proporcionais", resultado.calculo.verbas.tercoFeriasProp], ["Multa FGTS", resultado.calculo.verbas.multaFgts], ["INSS", -resultado.calculo.verbas.inssRescisao], ["IRRF", -resultado.calculo.verbas.irrfRescisao]].filter(([, v]) => v !== 0).map(([l, v]) => h("tr", { key: l, style: { borderTop: "1px solid #1E3450" } }, h("td", { style: { padding: 6 } }, l), h("td", { style: { padding: 6, textAlign: "right", color: v < 0 ? C.vermelho : C.branco } }, brl(v)))), h("tr", { style: { borderTop: "2px solid #2A4568", fontWeight: 700 } }, h("td", { style: { padding: 6 } }, "LÍQUIDO ESTIMADO"), h("td", { style: { padding: 6, textAlign: "right", color: C.verde, fontSize: 16 } }, brl(resultado.liquido))))), h("div", { style: { fontSize: 12, color: C.cinza, marginTop: 8 } }, "FGTS estimado (8% patronal acumulado): " + brl(resultado.calculo.verbas.fgtsEstimado) + " · direito a saque FGTS: " + (resultado.calculo.direitos.saqueFgts ? Math.round(resultado.calculo.direitos.saqueFgtsPct * 100) + "%" : "não") + " · seguro-desemprego: " + (resultado.calculo.direitos.seguroDesemprego ? "sim" : "não")), resultado.status === "rascunho" ? h("button", { style: { ...S.btn, marginTop: 10, padding: "8px 16px", fontSize: 13 }, disabled: ocupado, onClick: () => setConfirmando(resultado.id) }, "Confirmar rescisão e desativar colaborador") : null) : null, confirmando ? h(ModalConfirm, { titulo: "Confirmar rescisão?", texto: "O colaborador será desativado no sistema e a rescisão marcada como confirmada.", rotuloOk: "Confirmar rescisão", ocupado: ocupado, onCancelar: () => setConfirmando(null), onConfirmar: () => confirmar(confirmando) }) : null, rescisoes.length > 0 ? h("div", { style: { marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 } }, h("div", { style: { ...S.display, fontSize: 13, color: C.cinza } }, "Rescisões registradas"), rescisoes.map(r => h("div", { key: r.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1A2F4A", padding: "7px 0", fontSize: 13, gap: 10 } }, h("span", null, nome(r.userId) + " · " + r.motivoLabel + " · desligamento " + fmtData(r.dataDeslig) + " · líquido " + brl(r.liquido)), h(Badge, { st: r.status === "confirmado" ? "aprovado" : "pendente" })))) : null); }/* Exames ocupacionais (NR-7). Duas coisas diferentes numa tela: AGENDAR o que
    ainda vai acontecer (data prevista, sem resultado) e LANCAR o que ja aconteceu
    com o ASO em anexo. O agendado alimenta a Agenda do RH; o realizado zera o prazo. */
-function SecaoExames({ usuarios, exames = [], onCriarExame, onAgendar, onConcluir, onAbrir }) {
+function SecaoExames({ usuarios, exames = [], rescisoes = [], onCriarExame, onAgendar, onConcluir, onAbrir }) {
   const nome = (id) => usuarios.find((u) => u.id === id)?.nome || "colaborador";
   const [modo, setModo] = useState("agendar");
   const [form, setForm] = useState({ userId: "", tipo: "admissional", data: "", resultado: "", clinica: "", observacao: "" });
@@ -4792,14 +4907,27 @@ function SecaoExames({ usuarios, exames = [], onCriarExame, onAgendar, onConclui
     return rodar(async () => { await onCriarExame({ ...form, anexo: anexo?.file || null }); limpar(); }, "Exame registrado.");
   };
   const pegarArquivo = (e, set) => { const f = e.target.files?.[0]; if (!f) return; const p = validarArquivo(f); if (p) { setMsg({ ok: false, txt: p }); return; } set({ nome: f.name, file: f }); };
+  const pendentes = useMemo(() => examesQueFaltam({ usuarios, exames, rescisoes }), [usuarios, exames, rescisoes]);
+  const agendarTudo = () => rodar(async () => {
+    for (const p of pendentes) await onAgendar({ userId: p.userId, tipo: p.tipo, data: p.data, clinica: "", observacao: "Agendado automaticamente pela agenda do PCMSO" });
+  }, pendentes.length + " exame(s) agendados automaticamente.");
   const agendados = exames.filter((ex) => ex.status === "agendado").sort((a, b) => (a.data < b.data ? -1 : 1));
   const feitos = exames.filter((ex) => ex.status !== "agendado").sort((a, b) => (a.data < b.data ? 1 : -1));
   return (
     <div style={{ ...S.card, marginTop: 14 }}>
       <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🩺 Exames ocupacionais</div>
       <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
-        Admissional antes do primeiro dia, periódico conforme o PCMSO e demissional no desligamento (NR-7). Agende o que está por vir e guarde o ASO de cada um.
+        Admissional antes do primeiro dia, periódico conforme o PCMSO e demissional no desligamento (NR-7). O app já agenda sozinho: ao lançar um ASO clínico ele marca o próximo periódico, e ao calcular uma rescisão ele marca o demissional.
       </p>
+      {pendentes.length > 0 && (
+        <div style={{ background: "#3B2A12", border: "1px solid " + C.amarelo, borderRadius: 12, padding: "10px 12px", marginBottom: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 12.5, color: C.amarelo, lineHeight: 1.5, flex: 1, minWidth: 220 }}>
+            <b>{pendentes.length} exame(s) esperando agendamento.</b>{" "}
+            {pendentes.slice(0, 4).map((p) => p.quem + " · " + p.tipoLabel + " · " + fmtData(p.data)).join("  |  ")}{pendentes.length > 4 ? "  …" : ""}
+          </div>
+          <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={agendarTudo}>Agendar automaticamente</button>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         {[["agendar", "Agendar exame"], ["registrar", "Lançar exame já feito"]].map(([k, r]) => (
           <button key={k} style={modo === k ? { ...S.btn, padding: "7px 14px", fontSize: 12.5 } : { ...S.btnGhost, padding: "7px 14px", fontSize: 12.5 }} onClick={() => { setModo(k); setMsg(null); }}>{r}</button>
@@ -5044,13 +5172,19 @@ function SecaoDocumentos({ usuarios = [], documentos = [], exames = [], onAnexar
    custo total. O regime muda a conta e vem escolhido aqui em cima, porque no
    Simples Nacional a parte patronal do INSS ja esta dentro do DAS.
    Numero de apoio a decisao: a apuracao oficial e a da contabilidade. */
-function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegistrarPagamento, onAbrir, demo }) {
+function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegistrarPagamento, onSalvarLinha, onAbrir, demo }) {
   const nome = (id) => usuarios.find((u) => u.id === id)?.nome || "colaborador";
   const comps = Array.from(new Set(folhasPg.map((f) => f.competencia).concat(guias.map((g) => g.competencia)))).filter(Boolean).sort().reverse();
   const [comp, setComp] = useState("");
   const [regime, setRegime] = useState("simples");
   const [pagando, setPagando] = useState(null);
   const [pag, setPag] = useState({ pagoEm: hojeStr(), valorPago: "", observacao: "" });
+  const [linhaDe, setLinhaDe] = useState(null);
+  const [linhaTxt, setLinhaTxt] = useState("");
+  const copiarLinha = async (v) => {
+    try { await navigator.clipboard.writeText(String(v || "")); setMsg({ ok: true, txt: "Linha digitável copiada — cole no app do banco pra pagar." }); }
+    catch (e) { setMsg({ ok: false, txt: "Não deu pra copiar sozinho. Selecione o número na tela e copie na mão." }); }
+  };
   const [comprovante, setComprovante] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -5128,7 +5262,7 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
       <div style={{ marginTop: 16, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
         <div style={{ ...S.display, fontSize: 13, color: C.cinza }}>Guias de {rotuloComp(alvo)}</div>
         <p style={{ fontSize: 11.5, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>
-          O pagamento em si acontece no banco ou com a contabilidade — o app não paga guia e não emite código de barras. Aqui fica a prova: data, valor e comprovante.
+          O app não paga guia nem emite código de barras: a guia nasce no eSocial/DCTFWeb/Conectividade Social. Cole aqui a linha digitável, copie no banco pra pagar e volte pra registrar data, valor e comprovante.
         </p>
         {guiasMes.length === 0 ? (
           <p style={{ fontSize: 12.5, color: C.cinza, marginTop: 8 }}>Nenhuma guia gerada. Elas nascem quando a folha da competência é fechada.</p>
@@ -5141,6 +5275,23 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
                 {g.comprovante && <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => rodar(() => onAbrir(g.comprovante.path), "Comprovante aberto em outra aba.")}>Comprovante</button>}
                 {g.status !== "paga" && <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "5px 12px", fontSize: 12 }} onClick={() => { setPagando(g.id); setPag({ pagoEm: hojeStr(), valorPago: String(g.valor), observacao: "" }); setComprovante(null); setMsg(null); }}>Registrar pagamento</button>}
               </span>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 6, fontSize: 12.5 }}>
+              {linhaDe === g.id ? (
+                <>
+                  <input style={{ ...S.input, width: 300, fontVariantNumeric: "tabular-nums" }} placeholder="Linha digitável (47 ou 48 números)" value={linhaTxt} onChange={(e) => setLinhaTxt(e.target.value)} />
+                  <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(async () => { await onSalvarLinha(g.id, linhaTxt); setLinhaDe(null); }, "Linha digitável guardada.")}>Salvar</button>
+                  <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setLinhaDe(null)}>Cancelar</button>
+                </>
+              ) : g.linhaDigitavel ? (
+                <>
+                  <span style={{ color: C.cinza, fontVariantNumeric: "tabular-nums", wordBreak: "break-all" }}>{agruparLinhaDigitavel(g.linhaDigitavel)}</span>
+                  <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => copiarLinha(g.linhaDigitavel)}>Copiar</button>
+                  <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => { setLinhaDe(g.id); setLinhaTxt(g.linhaDigitavel); setMsg(null); }}>Trocar</button>
+                </>
+              ) : (
+                <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => { setLinhaDe(g.id); setLinhaTxt(""); setMsg(null); }}>+ Guardar a linha digitável pra pagar no banco</button>
+              )}
             </div>
             {pagando === g.id && (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
@@ -5227,6 +5378,58 @@ function TelaHolerite({ user, folhasPg, adiantamentos }) {
    férias e o limite do contrato de experiência. É só leitura e cálculo —
    nada é gravado e nada bloqueia o app.
    ═══════════════════════════════════════════════════════════════ */
+/* eSocial: e la que a carteira digital e assinada (S-2200) e recebe baixa (S-2299).
+   O app nao transmite nada - ele mostra o que esta em aberto, o prazo de cada evento
+   e monta o checklist pra mandar pra contabilidade. */
+function SecaoESocial({ usuarios = [], rescisoes = [], atestados = [], folhasPg = [] }) {
+  const [tudo, setTudo] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const itens = useMemo(() => eventosESocial({ usuarios, rescisoes, atestados, folhasPg, hoje: new Date() }), [usuarios, rescisoes, atestados, folhasPg]);
+  const atrasados = itens.filter((i) => i.atrasado).length;
+  const mostrados = tudo ? itens : itens.slice(0, 8);
+  const baixar = () => {
+    const limpo = (v) => String(v == null ? "" : v).replace(/;/g, ",");
+    const linhas = itens.map((i) => [i.codigo, i.nome, i.quem, i.detalhe, fmtData(i.prazo), i.atrasado ? "ATRASADO" : prazoEmPalavras(i.dias)].map(limpo));
+    const txt = [["Checklist do eSocial - Ponto Renovar"], [], ["Evento", "O que e", "Quem", "Detalhe", "Prazo", "Situacao"], ...linhas]
+      .map((l) => l.join(";")).join("\r\n");
+    baixarArquivo(txt, "esocial-checklist.csv");
+    setMsg("Checklist baixado. Mande pra contabilidade junto do resumo da folha.");
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 14, borderLeft: "4px solid " + (atrasados ? C.vermelho : C.verde) }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>📨 eSocial · carteira assinada e baixa</div>
+        <button style={{ ...S.btnGhost, fontSize: 12, padding: "8px 14px" }} onClick={baixar}>⬇ Checklist do eSocial</button>
+      </div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        A carteira é assinada quando o evento S-2200 é transmitido, e a baixa acontece com o S-2299. Quem transmite é a contabilidade (ou você, no portal do eSocial) — o app não envia nada, ele só vigia os prazos pra nada vencer.
+      </p>
+      {itens.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: C.cinza }}>Nenhum evento em aberto pelo que está cadastrado: sem admissão recente, sem desligamento e sem folha fechada esperando envio.</p>
+      ) : mostrados.map((it, i) => (
+        <div key={i} style={{ borderTop: "1px solid #1E3450", padding: "8px 0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}><span style={S.tag("#12243B", C.azul)}>{it.codigo}</span> {it.quem}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: it.atrasado ? C.vermelho : it.dias <= 10 ? C.amarelo : C.cinza }}>{fmtData(it.prazo)} · {prazoEmPalavras(it.dias)}</div>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.branco, marginTop: 3, lineHeight: 1.5 }}>{it.nome}</div>
+          {it.detalhe && <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 2 }}>{it.detalhe}</div>}
+          <div style={{ fontSize: 11, color: C.cinza, marginTop: 2, lineHeight: 1.5 }}>{it.base}</div>
+        </div>
+      ))}
+      {itens.length > 8 && (
+        <button style={{ ...S.btnGhost, fontSize: 12, padding: "8px 14px", marginTop: 10 }} onClick={() => setTudo(!tudo)}>
+          {tudo ? "Mostrar só os 8 primeiros" : "Ver todos os " + itens.length + " eventos"}
+        </button>
+      )}
+      {msg && <p style={{ fontSize: 12, color: C.verde, margin: "10px 0 0" }}>{msg}</p>}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>
+        Prazos pela regra geral: S-2200 até o dia anterior ao início do trabalho, S-2299 em até 10 dias corridos do desligamento, S-2230 e S-1200/S-1210 até o dia 15 do mês seguinte. Confirme com a contabilidade — ela é quem transmite e responde pelos eventos.
+      </p>
+    </div>
+  );
+}
+
 function SecaoAgendaRH({ usuarios, exames, ferias }) {
   const [tudo, setTudo] = useState(false);
   const itens = useMemo(() => agendaRH({ usuarios, exames, ferias, hoje: new Date() }), [usuarios, exames, ferias]);
@@ -5394,6 +5597,7 @@ alter table public.guias_fiscais add column if not exists pago_em date;
 alter table public.guias_fiscais add column if not exists valor_pago numeric(12,2);
 alter table public.guias_fiscais add column if not exists comprovante_url text;
 alter table public.guias_fiscais add column if not exists observacao text;
+alter table public.guias_fiscais add column if not exists linha_digitavel text;
 
 alter table public.candidatos enable row level security;
 alter table public.documentos_rh enable row level security;
@@ -5658,7 +5862,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, consImagem, aceites, demo }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, demo }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -5765,10 +5969,11 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
       <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
        <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
-       <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
+       <SecaoExames usuarios={usuarios} exames={examesOcupacionais} rescisoes={rescisoes} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
        <SecaoRecrutamento candidatos={candidatos} onCriar={onCriarCandidato} onMudarStatus={onMudarStatusCandidato} onContratar={onContratarCandidato} onAbrir={onAbrirArquivo} demo={demo} />
        <SecaoDocumentos usuarios={usuarios} documentos={documentosRH} exames={examesOcupacionais} onAnexar={onAnexarDocumento} onAbrir={onAbrirArquivo} />
-       <SecaoContabilidade usuarios={usuarios} folhasPg={folhasPg} guias={guias} onRegistrarPagamento={onRegistrarPagamentoGuia} onAbrir={onAbrirArquivo} demo={demo} />
+       <SecaoContabilidade usuarios={usuarios} folhasPg={folhasPg} guias={guias} onRegistrarPagamento={onRegistrarPagamentoGuia} onSalvarLinha={onSalvarLinhaGuia} onAbrir={onAbrirArquivo} demo={demo} />
+      <SecaoESocial usuarios={usuarios} rescisoes={rescisoes} atestados={atestados} folhasPg={folhasPg} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
       <SecaoAgendaRH usuarios={usuarios} exames={examesOcupacionais} ferias={ferias} />
