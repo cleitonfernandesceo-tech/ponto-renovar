@@ -3368,7 +3368,7 @@ function AppInterno() {
     });
     setUser(perfil);
     await carregarDados(token, perfil);
-    setTela("ponto");
+    setTela(telaInicial()); // respeita o atalho ./?ir=<tela> da tela de inicio
   };
 
   /* Carregamento em DUAS FASES.
@@ -3731,7 +3731,7 @@ function AppInterno() {
       detalhe: "Modo demonstração (dados locais, nada é persistido)"
     }]);
     setUser(u);
-    setTela("ponto");
+    setTela(telaInicial());
   };
   const sair = () => {
     setUser(null);

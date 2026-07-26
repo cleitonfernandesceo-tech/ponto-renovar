@@ -1970,7 +1970,7 @@ function AppInterno() {
     setSessao({ token, uid });
     setUser(perfil);
     await carregarDados(token, perfil);
-    setTela("ponto");
+    setTela(telaInicial());   // respeita o atalho ./?ir=<tela> da tela de inicio
   };
 
   /* Carregamento em DUAS FASES.
@@ -2192,7 +2192,7 @@ function AppInterno() {
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
     setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
     setLogs([{ ts: iso(new Date()), userId: "sistema", acao: "boot", detalhe: "Modo demonstração (dados locais, nada é persistido)" }]);
-    setUser(u); setTela("ponto");
+    setUser(u); setTela(telaInicial());
   };
 
   const sair = () => {

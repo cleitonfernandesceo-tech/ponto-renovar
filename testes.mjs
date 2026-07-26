@@ -295,6 +295,8 @@ t("os atalhos usam caminho relativo (subpasta do GitHub Pages)",
   (manifest?.shortcuts || []).every((a) => String(a.url || "").startsWith("./")));
 t("os atalhos têm ícone existente", (manifest?.shortcuts || []).every((a) => (a.icons || []).every((i) => existsSync(i.src))));
 t("o app abre na tela pedida pelo atalho (?ir=)", /useState\(telaInicial\)/.test(src) && /function telaInicial/.test(blocoNotif));
+t("o atalho sobrevive ao login: nem o acesso normal nem a demonstracao voltam pra tela de ponto",
+  (src.match(/setTela\(telaInicial\(\)\)/g) || []).length === 2);
 
 // ══════════════════════════════════════════════════════════════
 secao("Agenda do RH: exames, ferias e experiencia");
