@@ -4974,7 +4974,8 @@ function SecaoRecrutamento({ candidatos = [], onCriar, onMudarStatus, onContrata
    que falta; nao inventa exigencia: a lista e a basica de contratacao no Brasil e
    pode ser ajustada em DOCS_ADMISSAO conforme o que a contabilidade pedir. */
 function SecaoDocumentos({ usuarios = [], documentos = [], exames = [], onAnexar, onAbrir }) {
-  const equipe = usuarios.filter((u) => u.ativo);
+  // No banco o inativo vem com ativo=false; na demonstracao o campo nem existe.
+  const equipe = usuarios.filter((u) => u.ativo !== false);
   const [quem, setQuem] = useState("");
   const [tipo, setTipo] = useState("identidade");
   const [arquivo, setArquivo] = useState(null);
