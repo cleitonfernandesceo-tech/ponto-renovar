@@ -238,6 +238,26 @@ t('versão do sw.js e do index.html combinam (senão o cache velho gruda)',
   !!vSw && vSw === vHtml, (vSw || '?') + ' / ' + (vHtml || '?'));
 
 // ==============================================================
+secao('Velocidade e acabamento visual');
+t('o service worker abre o app com o casco guardado (nao espera a rede)',
+  swTxt.includes('async function cascoPrimeiro') && swTxt.includes('ev.respondWith(cascoPrimeiro(req))'));
+t('quando a versao nova fica pronta, o service worker avisa as abas abertas',
+  swTxt.includes('ATUALIZACAO_PRONTA') && swTxt.includes('async function revalidarCasco'));
+t('o relogio tem componente proprio nos dois arquivos (nao redesenha o app todo)',
+  src.includes('function RelogioVivo()') && src.includes('<RelogioVivo />') &&
+  htmlPub.includes('function RelogioVivo()') && htmlPub.includes('React.createElement(RelogioVivo, null)'));
+t('o tick geral caiu de 1s para 20s (20x menos re-render em celular fraco)',
+  /setRelogio\(new Date\(\)\), 20000\)/.test(src) && !/setRelogio\(new Date\(\)\), 1000\)/.test(src) &&
+  /setRelogio\(new Date\(\)\), 20000\)/.test(htmlPub));
+t('index.html traz a camada visual global (foco, toque, area segura, animacao)',
+  htmlPub.includes(':focus-visible') && htmlPub.includes('env(safe-area-inset-top)') &&
+  htmlPub.includes('prefers-reduced-motion') && htmlPub.includes('scrollbar-width:thin'));
+t('paleta e estilos base com os tokens novos, iguais nos dois arquivos',
+  src.includes('grafite: "#152840"') && htmlPub.includes('grafite: "#152840"') &&
+  src.includes('boxShadow: C.sombra') && htmlPub.includes('boxShadow: C.sombra') &&
+  src.includes('sombraForte') && htmlPub.includes('sombraForte'));
+
+// ==============================================================
 secao('Diagnostico do sistema e SQL das tabelas opcionais');
 const sqlBloco = (src.match(/const SQL_TABELAS_OPCIONAIS = `([\s\S]*?)`;/) || [])[1] || '';
 t('o painel do gestor exibe o cartão de diagnóstico', src.includes('<SecaoDiagnostico demo={demo} />'));
