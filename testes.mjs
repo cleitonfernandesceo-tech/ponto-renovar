@@ -38,7 +38,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   validarFracionamento, periodoAquisitivo, FRAC, impactoMudancaIntervalo, MUDANCA_INTERVALO,
   mensagemAmigavel, limparTexto, emailValido, uuidValido, dataValida, numeroValido, validarArquivo,
   nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF,
-  agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial };`;
+  agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial,
+  custoDaEquipe, REGIMES_EMPRESA, STATUS_CANDIDATO, TIPOS_DOCUMENTO, DOCS_ADMISSAO, STATUS_EXAME };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -427,6 +428,63 @@ t("o aceite do espelho grava pela chave unica usuario_id,tipo,referencia",
   && src.includes("'usuario_id,tipo,referencia'"));
 t("a mensagem nova tambem esta no index.html publicado",
   htmlPub.includes("pgrst205"));
+
+
+secao("RH: recrutamento, documentos e exame agendado");
+t("existem as etapas do candidato, do curriculo recebido ao contratado",
+  m.STATUS_CANDIDATO.recebido && m.STATUS_CANDIDATO.contratado && m.STATUS_CANDIDATO.reprovado);
+t("a pasta de admissao cobra identidade, CPF, CTPS, residencia e contrato",
+  ["identidade", "cpf", "ctps", "residencia", "contrato"].every((k) => m.DOCS_ADMISSAO.includes(k)));
+t("todo tipo da pasta de admissao tem rotulo em portugues",
+  m.DOCS_ADMISSAO.every((k) => typeof m.TIPOS_DOCUMENTO[k] === "string" && m.TIPOS_DOCUMENTO[k].length > 2));
+t("exame tem os dois estados: agendado e realizado", m.STATUS_EXAME.agendado && m.STATUS_EXAME.realizado);
+t("o painel do gestor tem recrutamento, documentos e contabilidade",
+  src.includes("<SecaoRecrutamento ") && src.includes("<SecaoDocumentos ") && src.includes("<SecaoContabilidade "));
+t("as tres secoes novas existem de verdade",
+  /function SecaoRecrutamento\(/.test(src) && /function SecaoDocumentos\(/.test(src) && /function SecaoContabilidade\(/.test(src));
+t("agendar e concluir exame sao acoes separadas",
+  /const agendarExame = async/.test(src) && /const concluirExame = async/.test(src));
+t("contratar candidato cria CONVITE e nunca conta com senha",
+  /const contratarCandidato = async[\s\S]{0,400}criarConvite\(/.test(src)
+  && !/sbSignUp/.test(src.slice(src.indexOf("const contratarCandidato"), src.indexOf("const agendarExame"))));
+t("arquivo privado abre por URL assinada com prazo curto",
+  /async function sbUrlAssinada/.test(src) && /expiresIn: segundos/.test(src) && /segundos = 120/.test(src));
+t("as acoes novas entram na trilha de auditoria sensivel",
+  ["exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado"]
+    .every((a) => src.includes('"' + a + '"')));
+t("o backup passou a levar candidatos e documentos",
+  ["candidatos", "documentos"].every((k) => new RegExp("<SecaoBackup[^>]*" + k).test(src.replace(/\n/g, " "))));
+t("o SQL do diagnostico cria candidatos e documentos_rh com RLS",
+  src.includes("create table if not exists public.candidatos")
+  && src.includes("create table if not exists public.documentos_rh")
+  && src.includes("alter table public.candidatos enable row level security"));
+
+secao("Contabilidade: encargos, provisoes e guia paga");
+const cSimples = m.custoDaEquipe([{ salario: 10000, liquido: 8500, inss: 1100, irrf: 400 }], "simples");
+const cNormal = m.custoDaEquipe([{ salario: 10000, liquido: 8500, inss: 1100, irrf: 400 }], "normal");
+t("no Simples so entra FGTS por fora do bruto (INSS patronal vai no DAS)",
+  cSimples.fgts === 800 && cSimples.inssPatronal === 0 && cSimples.encargos === 800, `encargos ${cSimples.encargos}`);
+t("provisao do mes: 1/12 do 13o, 1/12 de ferias e 1/36 do terco",
+  cSimples.decimo === 833.33 && cSimples.ferias === 833.33 && cSimples.tercoFerias === 277.78);
+t("provisao carrega os encargos dela junto", cSimples.encargosProvisao === 155.56 && cSimples.provisoes === 2100,
+  `provisoes ${cSimples.provisoes}`);
+t("custo de caixa e custo total do Simples fecham", cSimples.custoCaixa === 10800 && cSimples.custoTotal === 12900,
+  `caixa ${cSimples.custoCaixa} / total ${cSimples.custoTotal}`);
+t("fora do Simples entram INSS patronal, RAT e terceiros",
+  cNormal.inssPatronal === 2000 && cNormal.rat === 200 && cNormal.terceiros === 580 && cNormal.encargos === 3580,
+  `encargos ${cNormal.encargos}`);
+t("fora do Simples o custo total sobe", cNormal.custoTotal === 16220.55, `total ${cNormal.custoTotal}`);
+t("os dois regimes existem e vem explicados na tela",
+  m.REGIMES_EMPRESA.simples.label.includes("Simples") && m.REGIMES_EMPRESA.normal.inssPatronal === 0.2);
+t("nenhum salario aparece se a folha da competencia estiver vazia",
+  m.custoDaEquipe([], "simples").bruto === 0 && m.custoDaEquipe([], "simples").custoTotal === 0);
+t("pagar guia grava data, valor e comprovante — e nunca paga sozinho",
+  /const registrarPagamentoGuia = async/.test(src) && /pago_em: dados.pagoEm/.test(src)
+  && /comprovante_url = path/.test(src) && !/marcarGuiaPaga/.test(src));
+t("a tela avisa que o app nao paga guia nem emite codigo de barras",
+  /o app n(ã|a)o paga guia e n(ã|a)o emite c(ó|o)digo de barras/.test(src));
+t("o resumo pro contador sai em arquivo separado", /contabilidade-" \+ alvo/.test(src) && /Resumo pro contador/.test(src));
+t("a versao nova esta nos dois arquivos", htmlPub.includes("2026.07.26-3") && swTxt.includes("2026.07.26-3"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
