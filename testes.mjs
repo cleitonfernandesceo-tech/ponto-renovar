@@ -407,6 +407,27 @@ t("o texto do erro sai no formato Nome - mensagem",
   /return nome \+ " - " \+ msg;/.test(blocoRede));
 
 console.warn = origWarn;
+secao("Tabela que falta no banco e mensagem de erro");
+// O aceite do espelho gravava em public.aceites, que nao existia no Supabase:
+// PostgREST devolvia 404/PGRST205 e o colaborador lia "Recurso nao encontrado".
+t("existe regra propria pro 404 de tabela que falta (PGRST205)",
+  src.includes("pgrst205|could not find the table|schema cache"));
+t("a regra da tabela que falta vem ANTES do 404 generico",
+  src.indexOf("pgrst205") > 0 && src.indexOf("pgrst205") < src.indexOf("Recurso não encontrado"));
+t("a mensagem diz o que falta e aponta o Diagnostico do sistema",
+  src.includes("no Diagnóstico do sistema, está o SQL pronto"));
+t("as duas tabelas opcionais continuam listadas no diagnostico",
+  src.includes('nome: "consentimentos_imagem"') && src.includes('nome: "aceites"'));
+t("o SQL do diagnostico cria as duas tabelas com RLS ligada",
+  src.includes("create table if not exists public.aceites")
+  && src.includes("create table if not exists public.consentimentos_imagem")
+  && src.includes("alter table public.aceites enable row level security"));
+t("o aceite do espelho grava pela chave unica usuario_id,tipo,referencia",
+  src.includes("unique (usuario_id, tipo, referencia)")
+  && src.includes("'usuario_id,tipo,referencia'"));
+t("a mensagem nova tambem esta no index.html publicado",
+  htmlPub.includes("pgrst205"));
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
