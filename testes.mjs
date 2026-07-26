@@ -236,6 +236,22 @@ const vHtml = (htmlPub.match(/__APP_VERSAO = '([^']+)'/) || [])[1];
 t('versão do sw.js e do index.html combinam (senão o cache velho gruda)',
   !!vSw && vSw === vHtml, (vSw || '?') + ' / ' + (vHtml || '?'));
 
+// ==============================================================
+secao('Diagnostico do sistema e SQL das tabelas opcionais');
+const sqlBloco = (src.match(/const SQL_TABELAS_OPCIONAIS = `([\s\S]*?)`;/) || [])[1] || '';
+t('o painel do gestor exibe o cartão de diagnóstico', src.includes('<SecaoDiagnostico demo={demo} />'));
+t('o SQL cria as duas tabelas opcionais',
+  /create table if not exists public\.consentimentos_imagem/.test(sqlBloco) &&
+  /create table if not exists public\.aceites/.test(sqlBloco));
+t('o SQL tem todas as colunas que os mapeadores leem',
+  ['usuario_id', 'cftv_ciente', 'imagem_autorizada', 'atualizado_em', 'tipo', 'referencia', 'status', 'observacao', 'criado_em']
+    .every((c) => sqlBloco.includes(c)));
+t('o SQL liga RLS nas duas tabelas', (sqlBloco.match(/enable row level security/g) || []).length === 2);
+t('o SQL tem a chave única usada no upsert de aceites', sqlBloco.includes('unique (usuario_id, tipo, referencia)'));
+const blocoDiag = src.slice(src.indexOf('function SecaoDiagnostico'), src.indexOf('function SecaoAceites'));
+t('o diagnóstico é só leitura (não grava nem altera nada)', !/sbInsert|sbUpsert|sbDelete|sbUpdate/.test(blocoDiag));
+t('o README traz exatamente o mesmo SQL', leia('README.md').includes(sqlBloco.trim()));
+
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

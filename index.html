@@ -5170,7 +5170,8 @@ function App() {
     onConfirmarRescisao: confirmarRescisao,
     onCriarExame: criarExame,
     consImagem,
-    aceites
+    aceites,
+    demo
   }))));
 }
 
@@ -10113,6 +10114,245 @@ function SecaoConformidade({
     }
   }, "(", a.base, ")"))))));
 }
+/* ===============================================================
+   DIAGNÓSTICO DO SISTEMA — só o gestor vê
+   Confere se o app está completo: banco no ar, tabelas opcionais criadas,
+   biometria e GPS do aparelho, atalho instalado, modo sem internet e
+   batidas ainda na fila. Tudo aqui é LEITURA — nada é alterado por aqui.
+   =============================================================== */
+const TABELAS_OPCIONAIS = [{
+  nome: "consentimentos_imagem",
+  para: "termo de imagem e CFTV"
+}, {
+  nome: "aceites",
+  para: "aceite do código de conduta e do espelho"
+}];
+
+/* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
+   Supabase — o app nunca cria tabela nem política sozinho. */
+const SQL_TABELAS_OPCIONAIS = `-- Ponto Renovar · tabelas opcionais (rode uma vez no SQL Editor do Supabase)
+-- Sem elas o app funciona, mas termo de imagem e aceites não ficam gravados.
+
+create table if not exists public.consentimentos_imagem (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  cftv_ciente boolean not null default false,
+  imagem_autorizada boolean not null default false,
+  atualizado_em timestamptz not null default now()
+);
+
+create table if not exists public.aceites (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  tipo text not null,
+  referencia text not null,
+  status text not null,
+  observacao text,
+  criado_em timestamptz not null default now(),
+  unique (usuario_id, tipo, referencia)
+);
+
+alter table public.consentimentos_imagem enable row level security;
+alter table public.aceites enable row level security;
+
+-- Cada colaborador cuida do que é dele; o gestor apenas lê.
+drop policy if exists "imagem: dono cuida" on public.consentimentos_imagem;
+create policy "imagem: dono cuida" on public.consentimentos_imagem
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "imagem: gestor le" on public.consentimentos_imagem;
+create policy "imagem: gestor le" on public.consentimentos_imagem
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "aceites: dono cuida" on public.aceites;
+create policy "aceites: dono cuida" on public.aceites
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "aceites: gestor le" on public.aceites;
+create policy "aceites: gestor le" on public.aceites
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+
+/* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
+   prova que a tabela está lá, então não precisa de sessão pra sondar. */
+async function sondarTabela(nome) {
+  try {
+    const r = await fetch(`${SUPA.url}/rest/v1/${nome}?select=*&limit=1`, {
+      headers: {
+        apikey: SUPA.anonKey,
+        Authorization: `Bearer ${SUPA.anonKey}`
+      }
+    });
+    if (r.status === 404) return "faltando";
+    if (r.ok || r.status === 401 || r.status === 403) return "ok";
+    return "erro";
+  } catch {
+    return "sem_rede";
+  }
+}
+function SecaoDiagnostico({
+  demo
+}) {
+  const [itens, setItens] = useState(null);
+  const [copiado, setCopiado] = useState("");
+  const conferir = async () => {
+    setItens(null);
+    const l = [];
+    const bio = bioDiagnostico();
+    const plataforma = bio.ok ? await bioPlataformaDisponivel() : false;
+    l.push({
+      t: "Face ID / digital neste aparelho",
+      ok: bio.ok && plataforma,
+      msg: !bio.ok ? bio.msg : plataforma ? "disponível" : "aparelho sem biometria cadastrada"
+    });
+    let geo = "o app pergunta ao registrar";
+    try {
+      const perm = await navigator.permissions?.query({
+        name: "geolocation"
+      });
+      if (perm) geo = perm.state === "granted" ? "liberada" : perm.state === "denied" ? "bloqueada nas configurações do navegador" : geo;
+    } catch {/* navegador sem Permissions API: fica no texto padrão */}
+    l.push({
+      t: "Localização (GPS)",
+      ok: !geo.startsWith("bloqueada"),
+      msg: geo
+    });
+    const pwa = typeof window !== "undefined" && window.__APP_PWA || {};
+    l.push({
+      t: "Atalho na tela inicial",
+      ok: !!pwa.instalado,
+      msg: pwa.instalado ? "instalado" : "ainda pelo navegador — Compartilhar › Adicionar à Tela de Início"
+    });
+    l.push({
+      t: "Abre sem internet",
+      ok: !!pwa.ativo,
+      msg: pwa.ativo ? "pronto" : pwa.suportado ? "preparando na próxima abertura" : pwa.suportado === false ? "navegador não suporta" : "não deu pra conferir"
+    });
+    const fila = lerFila().length;
+    l.push({
+      t: "Batidas na fila",
+      ok: fila === 0,
+      msg: fila === 0 ? "nenhuma pendente" : `${fila} esperando conexão`
+    });
+    if (demo) {
+      l.push({
+        t: "Banco de dados",
+        ok: true,
+        msg: "demonstração — nada é gravado"
+      });
+    } else {
+      const banco = await sondarTabela("usuarios");
+      l.push({
+        t: "Banco de dados",
+        ok: banco === "ok",
+        msg: banco === "ok" ? "respondendo" : banco === "sem_rede" ? "sem resposta — confira a internet" : "erro ao consultar"
+      });
+      for (const tb of TABELAS_OPCIONAIS) {
+        const e = await sondarTabela(tb.nome);
+        l.push({
+          t: `Tabela ${tb.nome}`,
+          ok: e === "ok",
+          falta: e === "faltando",
+          msg: e === "ok" ? `pronta — ${tb.para}` : e === "faltando" ? `não existe ainda: ${tb.para} só aparece na tela` : "não deu pra conferir"
+        });
+      }
+    }
+    setItens(l);
+  };
+  useEffect(() => {
+    conferir();
+  }, []);
+  const faltaTabela = (itens || []).some(i => i.falta);
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(SQL_TABELAS_OPCIONAIS);
+      setCopiado("ok");
+    } catch {
+      setCopiado("erro");
+    }
+    setTimeout(() => setCopiado(""), 6000);
+  };
+  const alertas = (itens || []).filter(i => !i.ok).length;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83E\uDE7A Diagn\xF3stico do sistema"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, !itens ? "Conferindo…" : alertas === 0 ? "Tudo no lugar neste aparelho." : `${alertas} ponto(s) a ajustar.`, typeof window !== "undefined" && window.__APP_VERSAO ? ` Versão ${window.__APP_VERSAO}.` : ""), (itens || []).map((i, k) => /*#__PURE__*/React.createElement("div", {
+    key: k,
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "baseline",
+      flexWrap: "wrap",
+      padding: "7px 0",
+      borderTop: k ? "1px solid #1E3450" : "none"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: i.ok ? C.verde : C.amarelo,
+      fontSize: 13
+    }
+  }, i.ok ? "✔" : "⚠"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: C.branco
+    }
+  }, i.t), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      flex: "1 1 140px"
+    }
+  }, i.msg))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      fontSize: 13
+    },
+    onClick: conferir
+  }, "Conferir de novo"), faltaTabela && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      fontSize: 13,
+      padding: "10px 16px"
+    },
+    onClick: copiar
+  }, "Copiar SQL das tabelas que faltam")), copiado === "ok" && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.verde,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "SQL copiado. Cole no SQL Editor do Supabase, rode e toque em \u201CConferir de novo\u201D."), copiado === "erro" && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.amarelo,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "O navegador bloqueou a c\xF3pia. O mesmo SQL est\xE1 no README do reposit\xF3rio."));
+}
 function SecaoAceites({
   usuarios,
   aceites = []
@@ -10373,7 +10613,8 @@ function TelaGestor({
   onConfirmarRescisao,
   onCriarExame,
   consImagem,
-  aceites
+  aceites,
+  demo
 }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({
     u,
@@ -10679,6 +10920,8 @@ function TelaGestor({
   }), /*#__PURE__*/React.createElement(SecaoAceites, {
     usuarios: usuarios,
     aceites: aceites
+  }), /*#__PURE__*/React.createElement(SecaoDiagnostico, {
+    demo: demo
   }), [["Justificativas", justificativas, j => `${nome(j.userId)} — ${j.texto}`], ["Atestados", atestados, a => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`], ["Férias", ferias, f => `${nome(f.userId)} — ${f.dias} dias a partir de ${fmtData(f.inicio + "T00:00:00")}`]].map(([titulo, lista, render]) => /*#__PURE__*/React.createElement("div", {
     key: titulo,
     style: {

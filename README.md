@@ -71,3 +71,55 @@ Registro eletronico de ponto conforme CLT art. 74 e Portaria MTP 671/2021; jorna
 horas e intervalos conforme CLT arts. 58, 59 e 71; ferias conforme CLT arts. 130, 134 e 135;
 tratamento de dados pessoais conforme a LGPD (Lei 13.709/2018). O app e uma ferramenta de
 apoio: nao substitui a conferencia do contador nem a homologacao/fiscalizacao trabalhista.
+
+## Tabelas opcionais (SQL)
+
+O app funciona sem estas duas tabelas, mas o **termo de imagem/CFTV** e os **aceites**
+(codigo de conduta e espelho mensal) so ficam gravados no banco depois de criar as duas.
+O proprio app avisa: *Painel do gestor -> Diagnostico do sistema* mostra o que falta e
+tem o botao **Copiar SQL**. O mesmo conteudo esta abaixo - rode uma vez no SQL Editor do Supabase.
+
+```sql
+-- Ponto Renovar · tabelas opcionais (rode uma vez no SQL Editor do Supabase)
+-- Sem elas o app funciona, mas termo de imagem e aceites não ficam gravados.
+
+create table if not exists public.consentimentos_imagem (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  cftv_ciente boolean not null default false,
+  imagem_autorizada boolean not null default false,
+  atualizado_em timestamptz not null default now()
+);
+
+create table if not exists public.aceites (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  tipo text not null,
+  referencia text not null,
+  status text not null,
+  observacao text,
+  criado_em timestamptz not null default now(),
+  unique (usuario_id, tipo, referencia)
+);
+
+alter table public.consentimentos_imagem enable row level security;
+alter table public.aceites enable row level security;
+
+-- Cada colaborador cuida do que é dele; o gestor apenas lê.
+drop policy if exists "imagem: dono cuida" on public.consentimentos_imagem;
+create policy "imagem: dono cuida" on public.consentimentos_imagem
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "imagem: gestor le" on public.consentimentos_imagem;
+create policy "imagem: gestor le" on public.consentimentos_imagem
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+drop policy if exists "aceites: dono cuida" on public.aceites;
+create policy "aceites: dono cuida" on public.aceites
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "aceites: gestor le" on public.aceites;
+create policy "aceites: gestor le" on public.aceites
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+```
