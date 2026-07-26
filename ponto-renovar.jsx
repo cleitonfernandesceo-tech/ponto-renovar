@@ -1568,12 +1568,76 @@ function appInstalado() {
 }
 
 function legendaLembretes(status, instalado) {
-  if (status === "granted") return "chegam como aviso do celular \u2714 \u2014 o app precisa estar aberto ou ter sido usado h\u00e1 pouco; n\u00e3o \u00e9 push de servidor.";
+  if (status === "granted") return "chegam como aviso do celular \u2714 \u2014 push de servidor: chega mesmo com o app fechado.";
   if (status === "denied") return "aviso do celular bloqueado nas configura\u00e7\u00f5es do navegador \u2014 o lembrete continua aparecendo dentro do app.";
   if (status === "unsupported") return instalado
     ? "este aparelho n\u00e3o permite aviso do sistema \u2014 o lembrete aparece dentro do app."
     : "adicione o app \u00e0 tela de in\u00edcio para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
   return "toque em Ativar para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
+}
+
+/* ---------- push de servidor: o aviso chega com o app FECHADO ----------
+   A chave publica VAPID abaixo diz ao navegador QUEM pode mandar aviso pra
+   este aparelho; a privada mora so nos segredos do Supabase. A inscricao do
+   navegador (endpoint + chaves) vai pra tabela push_inscricoes, e a Edge
+   Function lembretes-push percorre essa lista nos horarios de batida.
+   Sem inscricao, o lembrete volta a depender do app aberto. */
+const VAPID_PUBLICA = "BNN_ZavXeLShPczVpCz0WWFXR77-IoZ4qgJ7bGDjN92NMU5aIwnoAJVsCELo1n7vYha6fF8B_BRpIAgpTV_2Z5M";
+
+function b64UrlParaBytes(txt) {
+  const b64 = (txt + "=".repeat((4 - (txt.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function bytesParaB64Url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let txt = "";
+  for (let i = 0; i < bytes.length; i++) txt += String.fromCharCode(bytes[i]);
+  return btoa(txt).split("+").join("-").split("/").join("_").replace(/=+$/, "");
+}
+
+/* Grava (ou atualiza) a inscricao deste aparelho. Devolve um rotulo curto pra
+   log: ok, demo, sem-sessao, sem-suporte, sem-permissao, sem-chaves ou erro. */
+async function registrarPush(token, uid, demo) {
+  if (demo) return "demo";
+  if (!token || !uid) return "sem-sessao";
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return "sem-suporte";
+    if (typeof window === "undefined" || !("PushManager" in window)) return "sem-suporte";
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return "sem-permissao";
+    const reg = await navigator.serviceWorker.ready;
+    if (!reg || !reg.pushManager) return "sem-suporte";
+    let insc = await reg.pushManager.getSubscription();
+    // se a chave VAPID mudou, a inscricao antiga nao serve mais
+    if (insc && insc.options && insc.options.applicationServerKey) {
+      if (bytesParaB64Url(insc.options.applicationServerKey) !== VAPID_PUBLICA) {
+        try { await insc.unsubscribe(); } catch {}
+        insc = null;
+      }
+    }
+    if (!insc) {
+      insc = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64UrlParaBytes(VAPID_PUBLICA) });
+    }
+    const dados = insc.toJSON ? insc.toJSON() : {};
+    const chaves = dados.keys || {};
+    if (!insc.endpoint || !chaves.p256dh || !chaves.auth) return "sem-chaves";
+    await sbUpsert(token, "push_inscricoes", [{
+      usuario_id: uid,
+      endpoint: insc.endpoint,
+      p256dh: chaves.p256dh,
+      auth: chaves.auth,
+      aparelho: appInstalado() ? "app na tela de inicio" : "navegador",
+      visto_em: new Date().toISOString(),
+      falhas: 0
+    }], "endpoint");
+    return "ok";
+  } catch (e) {
+    console.warn("[push]", e && e.message);
+    return "erro";
+  }
 }
 
 /* ---------- agenda do RH: o que vence nos proximos dias ----------
@@ -2481,7 +2545,8 @@ function AppInterno() {
 
   /* ---------- lembretes de batida (enquanto o app estiver aberto) ---------- */
   const pedirPermissaoNotif = async () => {
-    try { const p = await Notification.requestPermission(); setNotifStatus(p); } catch { setNotifStatus("denied"); }
+    try { const p = await Notification.requestPermission(); setNotifStatus(p);
+      if (p === "granted") registrarPush(sessao?.token, user?.id, demo); } catch { setNotifStatus("denied"); }
   };
   useEffect(() => {
     if (!user || user.papel === "gestor" && false) return; // lembretes valem pra todos os logados
@@ -2511,6 +2576,13 @@ function AppInterno() {
     const t = setInterval(checar, 60000); // verifica a cada minuto se a batida correspondente já aconteceu
     return () => clearInterval(t);
   }, [user, registros, notifStatus, demo]);
+  /* Inscreve o aparelho no push de servidor. Roda no login e quando a
+     permissao de aviso muda; se o navegador trocar a inscricao sozinho, a
+     proxima abertura do app regrava. */
+  useEffect(() => {
+    if (!user || demo || notifStatus !== "granted") return;
+    registrarPush(sessao?.token, user.id, demo);
+  }, [user, sessao, notifStatus, demo]);
 
   /* ---------- banco de horas → folga ---------- */
   const solicitarFolga = async (horas, dataFolga) => {
@@ -4951,7 +5023,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Limites e transparência do sistema</div>
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
           <li><b>Jornada de 9h/dia</b> (8h às 18h com 1h de intervalo) + sábado de 5h = 50h semanais. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h — as 6h excedentes precisam de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
-          <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início), mas dependem do app aberto ou recém-usado — não são push de servidor.</li>
+          <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início) e chegam por push de servidor (Supabase + chaves VAPID), valendo também com o app fechado.</li>
           <li><b>Saída automática (18h/13h)</b> depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h está ativo.</li>
           <li><b>Biometria (WebAuthn)</b> comprova que quem bateu está com o aparelho cadastrado e passou pelo Face ID/digital <b>daquele aparelho</b>. Não é reconhecimento facial contra foto de referência da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto.</li>
           <li><b>Assinatura validada no servidor</b> antes de gravar a marcação — desafio de uso único, conferência de origem, flag de verificação biométrica, assinatura contra a chave pública e contador do autenticador.</li>
