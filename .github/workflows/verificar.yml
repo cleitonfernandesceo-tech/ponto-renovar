@@ -1,0 +1,46 @@
+name: Verificar app
+
+# Guarda-corpo do repositorio: roda os testes dos motores de calculo e confere
+# se o index.html publicado corresponde ao ponto-renovar.jsx.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar o Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar ferramentas de build
+        run: npm install --no-save --no-audit --no-fund esbuild @babel/core@7.24.7 @babel/preset-react@7.24.7
+
+      - name: Testes dos motores de calculo
+        run: node testes.mjs
+
+      - name: index.html em sincronia com o ponto-renovar.jsx
+        run: node build.mjs --check
+
+      - name: Gerar o index.html correto (so quando o passo acima falha)
+        if: failure()
+        run: node build.mjs
+
+      - name: Publicar o index.html gerado como artefato
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: index-html-gerado
+          path: index.html
+          retention-days: 14
