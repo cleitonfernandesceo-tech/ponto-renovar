@@ -771,6 +771,8 @@ const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.dat
 const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, criadoEm: r.criado_em });
 const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status });
 
+const mapConsImagem = (r) => ({ userId: r.usuario_id, cftvCiente: !!r.cftv_ciente, autorizada: !!r.imagem_autorizada, atualizadoEm: r.atualizado_em });
+
 const mapUser = (r, consentiu) => ({
   id: r.id, nome: r.nome, email: r.email, cpf: r.cpf, papel: r.tipo, cargo: r.cargo, matricula: r.matricula, ativo: r.ativo,
   admissao: r.data_admissao || "2020-01-01",
@@ -794,6 +796,14 @@ const USUARIOS_SEED = [
 ];
 
 // Histórico seed: Marina pontual, Rafael com atrasos recorrentes
+/* Consentimentos de imagem no modo demonstracao: Rafael NAO autorizou - serve pra
+   mostrar como o gestor enxerga quem nao pode aparecer em foto/video. */
+const CONS_IMAGEM_SEED = [
+  { userId: "u1", cftvCiente: true, autorizada: true, atualizadoEm: iso(d(-120)) },
+  { userId: "u2", cftvCiente: true, autorizada: true, atualizadoEm: iso(d(-90)) },
+  { userId: "u3", cftvCiente: true, autorizada: false, atualizadoEm: iso(d(-45)) },
+];
+
 const REGISTROS_SEED = [];
 let NSR = 1;
 const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) => {
@@ -1122,6 +1132,194 @@ function gerarAEJReal(config, vinculos, horarios, marcacoes, ausencias, periodo)
 }
 
 // Download em ISO 8859-1, conforme o leiaute (não UTF-8)
+/* ================== PDF de verdade, sem biblioteca externa ==================
+   Monta um A4 (uma pagina por colaborador) usando as fontes base do formato
+   (Helvetica/Helvetica-Bold + WinAnsiEncoding). E o mesmo desenho do recibo de
+   pagamento de salario que sai dos sistemas de contabilidade: da pra imprimir,
+   arquivar e mandar pro contador sem depender de nada instalado. */
+const PDF_W = 595, PDF_H = 842;
+const PDF_MAP = { "–": "-", "—": "-", "‘": "'", "’": "'", "“": "'", "”": "'", "•": "-", "…": "..." };
+const pdfEsc = (s) => String(s == null ? "" : s).split("").map((ch) => {
+  const c = ch.charCodeAt(0);
+  if (ch === "(" || ch === ")" || ch === "\\") return "\\" + ch;
+  if (c < 32) return " ";
+  if (c < 127) return ch;
+  if (c <= 255) return "\\" + c.toString(8).padStart(3, "0");
+  return PDF_MAP[ch] || "";
+}).join("");
+const pdfLargura = (s, size, bold) => {
+  let w = 0;
+  for (const ch of String(s == null ? "" : s)) {
+    let u;
+    if (ch >= "0" && ch <= "9") u = 556;
+    else if (" .,:;|'".indexOf(ch) >= 0) u = 278;
+    else if ("()[]-/".indexOf(ch) >= 0) u = 333;
+    else if (ch === "%") u = 889;
+    else if ("ijlt".indexOf(ch) >= 0) u = 255;
+    else if (ch === ch.toUpperCase() && ch !== ch.toLowerCase()) u = bold ? 722 : 667;
+    else u = bold ? 580 : 545;
+    w += u;
+  }
+  return (w * (size || 9)) / 1000;
+};
+function pdfPagina() {
+  const ops = [];
+  const api = {
+    txt(x, y, t, size, bold) { ops.push(`BT /${bold ? "F2" : "F1"} ${size || 9} Tf 1 0 0 1 ${r2(x)} ${r2(PDF_H - y)} Tm (${pdfEsc(t)}) Tj ET`); return api; },
+    dir(x, y, t, size, bold) { return api.txt(x - pdfLargura(t, size, bold), y, t, size, bold); },
+    centro(x, y, t, size, bold) { return api.txt(x - pdfLargura(t, size, bold) / 2, y, t, size, bold); },
+    linha(x1, y1, x2, y2, esp) { ops.push(`${esp || 0.6} w ${r2(x1)} ${r2(PDF_H - y1)} m ${r2(x2)} ${r2(PDF_H - y2)} l S`); return api; },
+    caixa(x, y, w, h, esp) { ops.push(`${esp || 0.6} w ${r2(x)} ${r2(PDF_H - y - h)} ${r2(w)} ${r2(h)} re S`); return api; },
+    fundo(x, y, w, h, cinza) { ops.push(`${cinza == null ? 0.9 : cinza} g ${r2(x)} ${r2(PDF_H - y - h)} ${r2(w)} ${r2(h)} re f 0 g`); return api; },
+    conteudo() { return ops.join("\n"); },
+  };
+  return api;
+}
+function pdfArquivo(paginas) {
+  const objs = [
+    "<</Type/Catalog/Pages 2 0 R>>",
+    "",
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>",
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold/Encoding/WinAnsiEncoding>>",
+  ];
+  const kids = [];
+  paginas.forEach((c, i) => {
+    const pag = 5 + i * 2;
+    kids.push(`${pag} 0 R`);
+    objs.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 ${PDF_W} ${PDF_H}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>>>/Contents ${pag + 1} 0 R>>`);
+    objs.push(`<</Length ${c.length}>>\nstream\n${c}\nendstream`);
+  });
+  objs[1] = `<</Type/Pages/Kids[${kids.join(" ")}]/Count ${paginas.length}>>`;
+  let pdf = "%PDF-1.4\n";
+  const offs = [];
+  objs.forEach((o, i) => { offs.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const inicioXref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => String(o).padStart(10, "0") + " 00000 n \n").join("");
+  pdf += `trailer\n<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${inicioXref}\n%%EOF`;
+  return pdf;
+}
+function baixarPDF(conteudo, nome) {
+  const bytes = new Uint8Array(conteudo.length);
+  for (let i = 0; i < conteudo.length; i++) bytes[i] = conteudo.charCodeAt(i) & 255;
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+/* Recibo de pagamento de salario: identificacao das partes, verbas com codigo e
+   referencia, totais, bases de INSS/FGTS/IRRF e linha de assinatura (CLT art. 464). */
+function pdfReciboFolha(f, u, compISO) {
+  const p = pdfPagina();
+  const x0 = 36, x1 = 559, larg = x1 - x0;
+  const cDesc = x0 + 46, cRef = 352, cVenc = 458, cDesconto = x1 - 6;
+  const comp = (compISO || "").slice(0, 7);
+  const mes = comp.slice(5, 7), ano = comp.slice(0, 4);
+  const bruto = +f.salario || 0;
+  const base = r2(bruto - (+f.faltas || 0) - (+f.atrasos || 0));
+  const fgts = r2(base * TABELAS_2026.fgtsPatronal);
+  const dep = +u?.dependentes || 0;
+  const baseIrrf = r2(Math.max(0, base - (+f.inss || 0) - dep * TABELAS_2026.irrf.porDependente));
+  const dias = +u?.salario > 0 ? Math.min(30, Math.max(1, Math.round(bruto / (+u.salario / 30)))) : 30;
+  const pct = (v) => (base > 0 ? `${((v / base) * 100).toFixed(2).replace(".", ",")}%` : "");
+  const linhas = [
+    { cod: "0001", d: "SALARIO BASE", ref: `${dias} dias`, venc: bruto },
+    { cod: "0550", d: "FALTAS E DSR", ref: `${f.diasFaltas || 0} dia(s)`, dsc: +f.faltas || 0 },
+    { cod: "0551", d: "ATRASOS ACIMA DA TOLERANCIA", ref: hmm(Math.round((+f.horasAtraso || 0) * 60)), dsc: +f.atrasos || 0 },
+    { cod: "0941", d: "ADIANTAMENTO SALARIAL", ref: "", dsc: +f.adiantamento || 0 },
+    { cod: "0950", d: "VALE-TRANSPORTE", ref: "6,00%", dsc: +f.vt || 0 },
+    { cod: "0998", d: "INSS SOBRE SALARIO", ref: pct(+f.inss || 0), dsc: +f.inss || 0 },
+    { cod: "0999", d: "IRRF SOBRE SALARIO", ref: "", dsc: +f.irrf || 0 },
+  ].filter((l) => l.cod === "0001" || l.venc || l.dsc);
+  const totVenc = r2(linhas.reduce((s, l) => s + (l.venc || 0), 0));
+  const totDsc = r2(linhas.reduce((s, l) => s + (l.dsc || 0), 0));
+  // cabecalho: empregador + titulo + competencia
+  p.caixa(x0, 34, larg, 58);
+  p.txt(x0 + 8, 50, EMPRESA.nome, 11, true);
+  p.txt(x0 + 8, 63, `CNPJ ${EMPRESA.cnpj}`, 8);
+  p.txt(x0 + 8, 74, `${EMPRESA.endereco} - CEP ${EMPRESA.cep}`, 7.5);
+  p.txt(x0 + 8, 85, EMPRESA.ramo.slice(0, 92), 7);
+  p.dir(x1 - 8, 50, "RECIBO DE PAGAMENTO DE SALARIO", 10.5, true);
+  p.dir(x1 - 8, 65, `Competencia ${mes}/${ano}`, 9.5, true);
+  p.dir(x1 - 8, 77, `Emitido em ${fmtDataHora(new Date())}`, 7.5);
+  p.dir(x1 - 8, 88, f.status === "fechada" ? "FOLHA FECHADA" : "RASCUNHO - CONFERENCIA", 7.5, true);
+  // identificacao do colaborador
+  p.caixa(x0, 98, larg, 52);
+  p.linha(x0, 124, x1, 124, 0.4);
+  const campo = (x, y, rot, val, size) => { p.txt(x, y, rot, 6.5); p.txt(x, y + 11, val || "-", size || 9); };
+  campo(x0 + 8, 108, "MATRICULA", u?.matricula);
+  campo(x0 + 88, 108, "NOME DO COLABORADOR", u?.nome, 9.5);
+  campo(x0 + 340, 108, "CPF", u?.cpf);
+  campo(x0 + 430, 108, "ADMISSAO", u?.admissao ? fmtData(u.admissao) : "-");
+  campo(x0 + 8, 134, "FUNCAO", u?.cargo || "-");
+  campo(x0 + 200, 134, "JORNADA CONTRATUAL", "9h/dia seg-sex + sabado 5h");
+  campo(x0 + 340, 134, "DEPENDENTES IRRF", String(dep));
+  campo(x0 + 430, 134, "DIAS TRABALHADOS", `${dias}`);
+  // tabela de verbas
+  let y = 162;
+  p.fundo(x0, y, larg, 15);
+  p.caixa(x0, y, larg, 15);
+  p.txt(x0 + 6, y + 10.5, "COD", 7.5, true);
+  p.txt(cDesc, y + 10.5, "DESCRICAO", 7.5, true);
+  p.dir(cRef, y + 10.5, "REFERENCIA", 7.5, true);
+  p.dir(cVenc, y + 10.5, "VENCIMENTOS", 7.5, true);
+  p.dir(cDesconto, y + 10.5, "DESCONTOS", 7.5, true);
+  y += 15;
+  const yIni = y;
+  linhas.forEach((l) => {
+    y += 14;
+    p.txt(x0 + 6, y, l.cod, 8.5);
+    p.txt(cDesc, y, l.d, 8.5);
+    p.dir(cRef, y, l.ref || "", 8.5);
+    if (l.venc) p.dir(cVenc, y, brl(l.venc), 8.5);
+    if (l.dsc) p.dir(cDesconto, y, brl(l.dsc), 8.5);
+  });
+  const yFim = Math.max(y + 6, yIni + 250);
+  p.caixa(x0, yIni, larg, yFim - yIni);
+  p.linha(cRef + 6, yIni, cRef + 6, yFim, 0.4);
+  p.linha(cVenc + 6, yIni, cVenc + 6, yFim, 0.4);
+  // totais
+  let yt = yFim;
+  p.fundo(x0, yt, larg, 16);
+  p.caixa(x0, yt, larg, 16);
+  p.txt(cDesc, yt + 11, "TOTAIS DO MES", 8, true);
+  p.dir(cVenc, yt + 11, brl(totVenc), 9, true);
+  p.dir(cDesconto, yt + 11, brl(totDsc), 9, true);
+  yt += 16;
+  p.caixa(x0, yt, larg, 22);
+  p.txt(cDesc, yt + 15, "VALOR LIQUIDO A RECEBER", 10, true);
+  p.dir(cDesconto, yt + 15, brl(f.liquido), 13, true);
+  // bases de calculo
+  yt += 32;
+  p.caixa(x0, yt, larg, 34);
+  const bases = [
+    ["SALARIO CONTRATUAL", brl(+u?.salario || bruto)],
+    ["BASE INSS", brl(base)],
+    ["BASE FGTS", brl(base)],
+    ["FGTS DO MES (8%)", brl(fgts)],
+    ["BASE IRRF", brl(baseIrrf)],
+  ];
+  bases.forEach((b, i) => {
+    const x = x0 + 8 + i * (larg / bases.length);
+    p.txt(x, yt + 12, b[0], 6.5);
+    p.txt(x, yt + 25, b[1], 9, true);
+  });
+  // declaracao e assinatura
+  yt += 52;
+  p.txt(x0, yt, "Declaro ter recebido a importancia liquida discriminada neste recibo, referente ao meu salario do mes acima.", 8.5);
+  yt += 44;
+  p.linha(x0 + 10, yt, x0 + 250, yt, 0.7);
+  p.txt(x0 + 10, yt + 11, "Assinatura do colaborador", 7.5);
+  p.linha(x0 + 300, yt, x1, yt, 0.7);
+  p.txt(x0 + 300, yt + 11, `${EMPRESA.cidade}, ____ de _______________ de ${ano}`, 7.5);
+  // rodape
+  p.txt(x0, PDF_H - 54, "Documento gerencial gerado pelo Ponto Renovar a partir das marcacoes do periodo.", 7);
+  p.txt(x0, PDF_H - 44, "Nao substitui a folha oficial do contador (eSocial, guias e obrigacoes acessorias). Tabelas 2026: INSS Portaria MPS/MF e IRRF Lei 15.270/2025.", 7);
+  p.txt(x0, PDF_H - 34, `${EMPRESA.nome} - CNPJ ${EMPRESA.cnpj}`, 7);
+  return p.conteudo();
+}
+
 function baixarArquivo(conteudo, nome) {
   const bytes = new Uint8Array([...conteudo].map((c) => Math.min(c.charCodeAt(0), 255)));
   const blob = new Blob([bytes], { type: "text/plain;charset=ISO-8859-1" });
@@ -1297,6 +1495,7 @@ export default function App() {
    const [examesOcupacionais, setExamesOcupacionais] = useState([]);
   const [rankingUsuarios, setRankingUsuarios] = useState([]); // nomes públicos p/ ranking de gamificação (todos veem)
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
+  const [consImagem, setConsImagem] = useState([]); // termo de imagem: ciência do CFTV + autorização pra divulgação
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
   const [carregandoSecundarios, setCarregandoSecundarios] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: "erro"|"ok", texto }
@@ -1445,6 +1644,14 @@ export default function App() {
           setErroDados(`${mensagemAmigavel(e, "ao carregar dados complementares")} O registro de ponto funciona normalmente.`);
         } finally { setCarregandoSecundarios(false); }
       })();
+      // Termo de imagem: tabela opcional (consentimentos_imagem). Se ainda nao existir no
+      // banco, o carregamento principal nao pode quebrar por causa disso.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "consentimentos_imagem", "select=*");
+          setConsImagem(rows.map(mapConsImagem));
+        } catch (e) { console.warn("[termo de imagem]", e.message); }
+      })();
     } catch (e) {
       setErroDados(mensagemAmigavel(e, "ao carregar seus dados"));
     }
@@ -1550,6 +1757,7 @@ export default function App() {
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
     setFolhasPg([]); setAdiantamentos([]); setGuias([]); setCredenciais([]);
+    setConsImagem(CONS_IMAGEM_SEED);
     setRankingUsuarios(USUARIOS_SEED.map(u => { const gg = calcularGamificacao(u.id, REGISTROS_SEED, FALTAS_SEED.map((f, i) => ({ id: i, ...f, justificada: false }))); return { id: u.id, nome: u.nome, papel: u.papel, pontos: gg.total, streak: gg.streak }; }));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
     setFeriadosGlobal(fdsDemo); setFeriados(fdsDemo);
@@ -2015,6 +2223,7 @@ export default function App() {
     const novo = { ...f, ...patchNums };
     const liquido = r2(novo.salario - novo.faltas - novo.atrasos - novo.inss - novo.irrf - novo.vt - novo.adiantamento);
     const patch = {
+      salario_bruto: novo.salario,
       desconto_inss: novo.inss, desconto_irrf: novo.irrf, desconto_vale_transporte: novo.vt,
       desconto_faltas: novo.faltas, desconto_atrasos: novo.atrasos, desconto_adiantamento: novo.adiantamento,
       valor_liquido: liquido,
@@ -2172,6 +2381,12 @@ export default function App() {
       setUsuarios(us => us.map(u => u.id === user.id ? { ...u, consentimentoLGPD: aceito } : u));
       log("lgpd", aceito ? "Consentimento registrado" : "Consentimento revogado");
     } catch (e) { avisar(mensagemAmigavel(e, "ao registrar o consentimento")); }
+  };
+  const salvarConsImagem = async (cftvCiente, autorizada) => {
+    const agora = iso(new Date());
+    if (!demo) await sbUpsert(sessao.token, "consentimentos_imagem", [{ usuario_id: user.id, cftv_ciente: cftvCiente, imagem_autorizada: autorizada, atualizado_em: agora }], "usuario_id");
+    setConsImagem((cs) => [...cs.filter((c) => c.userId !== user.id), { userId: user.id, cftvCiente, autorizada, atualizadoEm: agora }]);
+    log("lgpd", `Termo de imagem: CFTV ${cftvCiente ? "ciente" : "sem ciência"} · divulgação ${autorizada ? "AUTORIZADA" : "NÃO autorizada"}`);
   };
 
   /* ---------- exportações fiscais ---------- */
@@ -2374,10 +2589,10 @@ export default function App() {
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
-          {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} />}
+          {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame }} />
+            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onMarcarGuiaPaga: marcarGuiaPaga, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, consImagem }} />
           )}
         </main>
       </div>
@@ -3195,6 +3410,8 @@ function GateConsentimentoLGPD({ user, onAceitar, onSair }) {
           <br /><br />
           <b style={{ color: C.amarelo }}>Por quanto tempo guardamos:</b> os registros de ponto por <b>5 anos</b> (prazo legal); a <b>credencial biométrica</b> (identificador público, sem imagem) enquanto durar o vínculo ou até você removê-la na aba 🔐 LGPD. A geolocalização fica vinculada só à marcação correspondente.
           <br /><br />
+          <b style={{ color: C.amarelo }}>Câmeras e imagem:</b> a loja tem circuito interno de câmeras para segurança patrimonial e a empresa produz conteúdo para redes sociais. O detalhamento e a autorização de uso da sua imagem (opcional e revogável) ficam na aba 🔐 LGPD.
+          <br /><br />
           <b style={{ color: C.amarelo }}>Seus direitos:</b> você pode revogar este consentimento a qualquer momento na aba 🔐 LGPD (a revogação impede novas batidas pelo app, mas não apaga registros já exigidos por lei). Encarregado de dados (DPO): <b>dpo@renovartech.com.br</b>.
           <br /><br />
           <span style={{ color: C.cinza, fontSize: 12 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</span>
@@ -3220,6 +3437,97 @@ const CODIGO_CONDUTA = [
   { titulo: "Sigilo de informações", texto: "Dados de clientes, valores, processos internos e informações comerciais da Renovar Tech são confidenciais e não devem ser compartilhados com terceiros, inclusive após o desligamento." },
   { titulo: "Pontualidade e assiduidade", texto: "O cumprimento dos horários contratuais e o registro correto do ponto são deveres de todos os colaboradores, conforme detalhado nas seções de Ponto, Prêmio Performance e Gamificação deste sistema." },
 ];
+
+/* ---------- Termo de direito de imagem: CFTV da loja + conteudo pra redes sociais ----------
+   O CFTV e informado (seguranca patrimonial = legitimo interesse, LGPD art. 7o, IX).
+   O uso da imagem em divulgacao depende de autorizacao expressa e revogavel. */
+const TERMO_IMAGEM = [
+  { titulo: "Monitoramento por câmeras (CFTV) na loja", texto: "A loja opera circuito interno de câmeras nas áreas de atendimento, bancada/oficina, estoque e acessos, com a finalidade de segurança patrimonial, prevenção de perdas e proteção de colaboradores e clientes — tratamento fundado no legítimo interesse do controlador (LGPD art. 7º, IX) e no poder diretivo do empregador. Não existem câmeras em vestiários, banheiros, refeitório ou qualquer área de intimidade, e não há captação de áudio. As imagens têm acesso restrito à gestão, são guardadas por prazo limitado e depois eliminadas, e não servem para fiscalizar produtividade individual nem para constranger ninguém." },
+  { titulo: "Uso de imagem e voz em conteúdo de divulgação", texto: "A empresa produz fotos e vídeos na loja (atendimento, bancada, bastidores) e publica em redes sociais, site e materiais institucionais. Esse uso depende da sua autorização expressa (CF art. 5º, X e XXVIII; Código Civil arts. 20 e 21; LGPD art. 7º, I) e fica registrado aqui com data e hora. A autorização é gratuita, por prazo indeterminado enquanto não revogada, restrita a conteúdo institucional e comercial da " + EMPRESA.nome + ", sem cessão, venda ou licenciamento da sua imagem a terceiros e sem uso em contexto ofensivo, discriminatório, político-partidário ou que exponha dado pessoal sensível." },
+  { titulo: "Revogação e participação voluntária", texto: "Você pode revogar a autorização a qualquer momento nesta mesma tela, sem justificar e sem nenhum prejuízo. A partir da revogação a empresa não publica conteúdo novo com sua imagem e retira as publicações ativas que estejam sob seu controle em prazo razoável — ressalvado o que já foi compartilhado por terceiros. Participar das gravações é voluntário: recusar não afeta avaliação, prêmio, escala ou qualquer benefício." },
+  { titulo: "Sem repercussão salarial e sigilo mantido", texto: "A autorização de imagem não gera remuneração adicional e não integra o salário para nenhum efeito (CLT art. 457). Continua valendo o dever de sigilo: nada de expor dados de clientes, ordens de serviço, notas ou informações internas que apareçam em foto ou vídeo." },
+];
+
+function SecaoDireitoImagem({ user, imagem, onSalvar }) {
+  const [cftv, setCftv] = useState(!!imagem?.cftvCiente);
+  const [autoriza, setAutoriza] = useState(!!imagem?.autorizada);
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { setCftv(!!imagem?.cftvCiente); setAutoriza(!!imagem?.autorizada); }, [imagem]);
+  const mudou = cftv !== !!imagem?.cftvCiente || autoriza !== !!imagem?.autorizada;
+  const salvar = async () => {
+    setSalvando(true); setMsg(null);
+    try { await onSalvar(cftv, autoriza); setMsg({ ok: true, txt: "Escolha registrada. Você pode mudar quando quiser." }); }
+    catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e, "ao registrar o termo de imagem") }); }
+    finally { setSalvando(false); }
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📸 Termo de imagem e câmeras (CFTV)</div>
+      {TERMO_IMAGEM.map((t) => (
+        <div key={t.titulo} style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.branco }}>{t.titulo}</div>
+          <p style={{ fontSize: 12.5, color: "#C7D2E4", margin: "4px 0 0", lineHeight: 1.6 }}>{t.texto}</p>
+        </div>
+      ))}
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 14, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={cftv} onChange={(e) => setCftv(e.target.checked)} style={{ width: 18, height: 18, marginTop: 2 }} />
+        <span>Estou ciente do monitoramento por câmeras (CFTV) descrito acima.</span>
+      </label>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 8, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={autoriza} onChange={(e) => setAutoriza(e.target.checked)} style={{ width: 18, height: 18, marginTop: 2 }} />
+        <span><b>Autorizo</b> o uso da minha imagem e voz em conteúdo de divulgação da empresa (redes sociais, site e materiais), nos termos acima.</span>
+      </label>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+        <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: !mudou || salvando ? 0.6 : 1 }} disabled={!mudou || salvando} onClick={salvar}>{salvando ? "⏳…" : "Salvar minha escolha"}</button>
+        <span style={{ fontSize: 11.5, color: C.cinza }}>
+          {imagem?.atualizadoEm ? `Registrado em ${fmtDataHora(imagem.atualizadoEm)} · uso de imagem: ${imagem.autorizada ? "autorizado" : "não autorizado"}` : "Ainda sem registro — marque as opções e salve."}
+        </span>
+      </div>
+      {msg && <p style={{ fontSize: 12.5, color: msg.ok ? C.verde : C.vermelho, margin: "8px 0 0" }}>{msg.txt}</p>}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
+        A ciência do CFTV é informativa — segurança patrimonial não depende de consentimento (LGPD art. 7º, IX). A autorização de imagem é opcional e revogável a qualquer momento. Dúvidas: dpo@renovartech.com.br.
+      </p>
+    </div>
+  );
+}
+
+function SecaoImagens({ usuarios, consImagem = [] }) {
+  const cons = (id) => consImagem.find((c) => c.userId === id);
+  const equipe = usuarios.filter((u) => u.ativo !== false);
+  const sem = equipe.filter((u) => !cons(u.id)?.autorizada);
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>📸 Autorizações de imagem</div>
+      <p style={{ fontSize: 11.5, color: sem.length ? C.amarelo : C.cinza, margin: "6px 0 0", lineHeight: 1.5 }}>
+        {sem.length === 0
+          ? "Toda a equipe autorizou o uso de imagem em conteúdo de divulgação."
+          : `Antes de publicar foto ou vídeo: ${sem.map((u) => u.nome.split(" ")[0]).join(", ")} ${sem.length > 1 ? "não autorizaram" : "não autorizou"} o uso da própria imagem.`}
+      </p>
+      <div className="rolagem-x" style={{ marginTop: 8 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 6 }}>Colaborador</th><th>CFTV</th><th>Uso de imagem</th><th>Registrado em</th></tr></thead>
+          <tbody>
+            {equipe.map((u) => {
+              const c = cons(u.id);
+              return (
+                <tr key={u.id} style={{ borderTop: "1px solid #1E3450" }}>
+                  <td style={{ padding: 6, fontWeight: 700 }}>{u.nome}</td>
+                  <td style={{ color: c?.cftvCiente ? C.verde : C.cinza }}>{c?.cftvCiente ? "ciente" : "—"}</td>
+                  <td style={{ color: c?.autorizada ? C.verde : C.amarelo, fontWeight: 700 }}>{c?.autorizada ? "autorizado" : "não autorizado"}</td>
+                  <td style={{ color: C.cinza }}>{c?.atualizadoEm ? fmtDataHora(c.atualizadoEm) : "sem registro"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
+        Cada pessoa registra a própria escolha na aba 🔐 LGPD. Publicar imagem de quem não autorizou (ou de quem revogou) expõe a empresa a indenização por uso indevido (CF art. 5º, X; Código Civil art. 20).
+      </p>
+    </div>
+  );
+}
 
 function SecaoCodigoConduta() {
   return (
@@ -3279,7 +3587,7 @@ function SecaoBiometria({ credenciais, onCadastrar, onRemover }) {
   );
 }
 
-function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemoverBio }) {
+function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemoverBio, imagem, onSalvarImagem }) {
   const [aceito, setAceito] = useState(user.consentimentoLGPD);
   useEffect(() => setAceito(user.consentimentoLGPD), [user.consentimentoLGPD]);
   return (
@@ -3294,6 +3602,7 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
         </label>
       </div>
       <SecaoCodigoConduta />
+      <SecaoDireitoImagem user={user} imagem={imagem} onSalvar={onSalvarImagem} />
       {user.papel === "gestor" && (
       <div style={{ ...S.card, marginTop: 16, fontSize: 13, color: C.cinza, borderLeft: `4px solid ${C.amarelo}` }}>
         <div style={{ ...S.display, fontSize: 16, color: C.branco, marginBottom: 6 }}>⚠️ Situação fiscal dos arquivos AFD/AEJ</div>
@@ -3491,8 +3800,25 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
     catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
     finally { setOcupado(false); }
   };
+  // Recibo de pagamento em PDF (um por colaborador, no layout que o contador usa).
+  const pdfRecibos = (lista) => {
+    if (!lista.length) return;
+    const paginas = lista.map((f) => pdfReciboFolha(f, usuarios.find((u) => u.id === f.userId), compData));
+    baixarPDF(pdfArquivo(paginas), lista.length === 1 ? `recibo-${nome(lista[0].userId).split(" ")[0].toLowerCase()}-${comp}.pdf` : `recibos-folha-${comp}.pdf`);
+  };
+  // Planilha de conferencia: uma linha por colaborador, com as bases que o contador lanca.
+  const csvFolha = () => {
+    const num = (v) => String(r2(+v || 0)).replace(".", ",");
+    const cab = ["Competencia", "Matricula", "Colaborador", "CPF", "Admissao", "Bruto", "Faltas", "Atrasos", "INSS", "IRRF", "VT", "Adiantamento", "Liquido", "BaseFGTS", "FGTS8", "DiasFaltas", "HorasAtraso", "Status"];
+    const linhas = doMes.map((f) => {
+      const u = usuarios.find((x) => x.id === f.userId) || {};
+      const base = r2(f.salario - f.faltas - f.atrasos);
+      return [comp, u.matricula || "", nome(f.userId), u.cpf || "", u.admissao || "", num(f.salario), num(f.faltas), num(f.atrasos), num(f.inss), num(f.irrf), num(f.vt), num(f.adiantamento), num(f.liquido), num(base), num(base * TABELAS_2026.fgtsPatronal), f.diasFaltas || 0, num(f.horasAtraso), f.status].join(";");
+    });
+    baixarArquivo([cab.join(";"), ...linhas].join("\r\n"), `folha-${comp}.csv`);
+  };
   const salvarEdit = () => rodar(async () => {
-    await onEditarFolha(editRow.id, { faltas: +editRow.faltas || 0, atrasos: +editRow.atrasos || 0, inss: +editRow.inss || 0, irrf: +editRow.irrf || 0, vt: +editRow.vt || 0, adiantamento: +editRow.adiantamento || 0 });
+    await onEditarFolha(editRow.id, { salario: +editRow.salario || 0, faltas: +editRow.faltas || 0, atrasos: +editRow.atrasos || 0, inss: +editRow.inss || 0, irrf: +editRow.irrf || 0, vt: +editRow.vt || 0, adiantamento: +editRow.adiantamento || 0 });
     setEditRow(null);
   }, "Rascunho ajustado.");
   return (
@@ -3503,6 +3829,8 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
         <input type="month" aria-label="Competência da folha (mês/ano)" style={{ ...S.input, width: 170 }} value={comp} onChange={e => setComp(e.target.value)} />
         <button style={{ ...S.btn, padding: "8px 14px", fontSize: 13, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={() => rodar(() => onGerarFolha(compData), n => `Rascunho gerado pra ${n} colaborador(es). Confira e feche quando estiver certo.`)}>{ocupado ? "⏳…" : "Gerar folha (rascunho)"}</button>
         {temRascunho && <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "8px 14px", fontSize: 13 }} disabled={ocupado} onClick={() => setConfirmandoFechar(true)}>Fechar folha ✓</button>}
+        {doMes.length > 0 && <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => pdfRecibos(doMes)}>🖨 Recibos em PDF</button>}
+        {doMes.length > 0 && <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={csvFolha}>⬇ Planilha pro contador</button>}
       </div>
       {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
       {confirmandoFechar && (
@@ -3527,11 +3855,10 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                   <td style={{ textAlign: "left", padding: 6, fontWeight: 700 }}>{nome(f.userId)} {f.status === "fechada" ? <span style={S.tag("#123B24", C.verde)}>FECHADA</span> : <span style={S.tag("#3A2A08", C.amarelo)}>RASCUNHO</span>}</td>
                   {editRow?.id === f.id ? (
                     <>
-                      <td>{brl(f.salario)}</td>
-                      {["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].map(k => (
+                      {["salario", "faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].map(k => (
                         <td key={k}><input type="number" step="0.01" style={{ ...S.input, width: 84, padding: 6, fontSize: 12 }} value={editRow[k]} onChange={e => setEditRow({ ...editRow, [k]: e.target.value })} /></td>
                       ))}
-                      <td style={{ fontWeight: 700 }}>{brl((f.salario) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
+                      <td style={{ fontWeight: 700 }}>{brl((+editRow.salario || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
                       <td style={{ whiteSpace: "nowrap" }}><button style={{ ...S.btn, padding: "4px 10px", fontSize: 11 }} onClick={salvarEdit}>Salvar</button> <button style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow(null)}>✕</button></td>
                     </>
                   ) : (
@@ -3541,7 +3868,10 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                       <td title={`${f.horasAtraso}h além da tolerância`}>{brl(f.atrasos)}</td>
                       <td>{brl(f.inss)}</td><td>{brl(f.irrf)}</td><td>{brl(f.vt)}</td><td>{brl(f.adiantamento)}</td>
                       <td style={{ fontWeight: 700, color: C.verde }}>{brl(f.liquido)}</td>
-                      <td>{f.status === "rascunho" && <button style={{ ...S.btnGhost, padding: "4px 10px", fontSize: 11 }} onClick={() => setEditRow({ id: f.id, faltas: f.faltas, atrasos: f.atrasos, inss: f.inss, irrf: f.irrf, vt: f.vt, adiantamento: f.adiantamento })}>✎</button>}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button title="Recibo em PDF" style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => pdfRecibos([f])}>🖨</button>{" "}
+                        {f.status === "rascunho" && <button title="Editar valores" style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow({ id: f.id, salario: f.salario, faltas: f.faltas, atrasos: f.atrasos, inss: f.inss, irrf: f.irrf, vt: f.vt, adiantamento: f.adiantamento })}>✎</button>}
+                      </td>
                     </>
                   )}
                 </tr>
@@ -3688,7 +4018,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame }) {
+function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onMarcarGuiaPaga, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, consImagem }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -3797,6 +4127,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
        <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
        <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
+      <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
