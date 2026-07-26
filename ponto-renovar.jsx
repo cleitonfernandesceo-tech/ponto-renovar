@@ -184,6 +184,11 @@ const REGRAS_ERRO = [
   [/tempo esgotado|timeout|abort/i, "O servidor demorou pra responder. Tente de novo em alguns segundos."],
   [/(^|\D)5\d\d(\D|$)|service unavailable|bad gateway/i, "O servidor está indisponível no momento. Aguarde alguns minutos e tente de novo."],
   [/payload too large|413|file too large/i, "Arquivo grande demais. O limite é 8 MB."],
+  // --- estrutura do banco ---
+  // Tabela que o app usa e que ainda nao existe no Supabase: PostgREST responde 404
+  // com PGRST205. Antes caia na regra generica de 404 e o colaborador lia "Recurso nao
+  // encontrado", sem saber o que fazer. Agora a mensagem diz o que falta e quem resolve.
+  [/pgrst205|could not find the table|schema cache|42P01|relation .* does not exist/i, "Esta parte do app precisa de uma tabela que ainda não foi criada no banco. Avise o gestor: em Painel do gestor, no Diagnóstico do sistema, está o SQL pronto pra criar as tabelas que faltam."],
   [/(^|\D)404(\D|$)|not found/i, "Recurso não encontrado. Se o problema continuar, avise o gestor."],
   // --- storage ---
   [/bucket|storage/i, "Não foi possível enviar o arquivo agora. Tente de novo em instantes."],
