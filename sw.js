@@ -17,7 +17,7 @@
    quem decide o momento de recarregar e o app - nunca no meio de uma batida.
    ========================================================================= */
 
-const VERSAO = '2026.07.26-2';
+const VERSAO = '2026.07.26-3';
 const CACHE = 'ponto-renovar-' + VERSAO;
 const CASCO = [
   './', './index.html', './manifest.json',
