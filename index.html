@@ -2654,6 +2654,129 @@ function legendaLembretes(status, instalado) {
   if (status === "unsupported") return instalado ? "este aparelho n\u00e3o permite aviso do sistema \u2014 o lembrete aparece dentro do app." : "adicione o app \u00e0 tela de in\u00edcio para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
   return "toque em Ativar para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
 }
+
+/* ---------- agenda do RH: o que vence nos proximos dias ----------
+   Funcao PURA: recebe as listas e a data de referencia e devolve os itens
+   ordenados. Nao consulta o banco e nao grava nada - so calcula prazos que
+   o dono da loja costuma perder de vista.
+   Bases legais usadas: CLT art. 130/134/137 (ferias e periodo concessivo),
+   CLT art. 135 (aviso de 30 dias), CLT art. 168 e NR-7 (exames ocupacionais),
+   CLT art. 445 par. unico e 451 (contrato de experiencia). */
+const AGENDA_JANELA_DIAS = 120; // olha 4 meses pra frente
+const AGENDA_PCMSO_MESES = 12; // periodicidade padrao do exame periodico
+const AGENDA_MAX_FERIAS_POR_PESSOA = 2;
+const EXAMES_QUE_VALEM_COMO_CLINICO = ["admissional", "periodico", "retorno_trabalho", "mudanca_funcao"];
+function agendaRH({
+  usuarios = [],
+  exames = [],
+  ferias = [],
+  hoje = new Date()
+} = {}) {
+  const ref = dataLocal(dataISO(hoje));
+  const dias = dt => Math.round((dataLocal(dataISO(dt)) - ref) / 86400000);
+  const itens = [];
+  const juntar = (quando, item) => {
+    const d = dias(quando);
+    if (d > AGENDA_JANELA_DIAS) return null;
+    const reg = {
+      ...item,
+      data: dataISO(quando),
+      dias: d,
+      atrasado: d < 0
+    };
+    itens.push(reg);
+    return reg;
+  };
+  usuarios.filter(u => u && u.ativo !== false && u.papel !== "gestor").forEach(u => {
+    /* 1) exames ocupacionais */
+    const meus = exames.filter(e => e.userId === u.id && e.data && EXAMES_QUE_VALEM_COMO_CLINICO.indexOf(e.tipo) >= 0);
+    const ultimo = meus.slice().sort((a, b) => a.data < b.data ? 1 : -1)[0];
+    if (!ultimo && u.admissao) {
+      juntar(dataLocal(u.admissao), {
+        assunto: "exame",
+        quem: u.nome,
+        userId: u.id,
+        titulo: "Exame admissional não registrado no sistema",
+        base: "CLT art. 168, I e NR-7 — o admissional é feito ANTES do início do trabalho"
+      });
+    } else if (ultimo) {
+      juntar(addMeses(dataLocal(ultimo.data), AGENDA_PCMSO_MESES), {
+        assunto: "exame",
+        quem: u.nome,
+        userId: u.id,
+        titulo: "Exame periódico a vencer",
+        detalhe: "último exame clínico em " + fmtData(ultimo.data) + " (" + (ultimo.tipoLabel || ultimo.tipo) + ")",
+        base: "NR-7 — a periodicidade real é a do PCMSO da empresa; confirme com o médico do trabalho"
+      });
+    }
+
+    /* 2) ferias: periodo concessivo (12 meses depois do aquisitivo fechar) */
+    if (u.admissao) {
+      const minhas = ferias.filter(f => f.userId === u.id && f.status !== "rejeitada" && f.inicio);
+      const pendentes = [];
+      let fimAquis = addMeses(dataLocal(u.admissao), 12);
+      let guarda = 0;
+      while (fimAquis <= ref && guarda++ < 60) {
+        const limite = addMeses(fimAquis, 12);
+        const gozados = minhas.filter(f => {
+          const i = dataLocal(f.inicio);
+          return i >= fimAquis && i < addMeses(limite, 2);
+        }).reduce((s, f) => s + (+f.dias || 0), 0);
+        if (gozados < 30) {
+          pendentes.push({
+            limite,
+            gozados,
+            aquisitivoFecha: fimAquis
+          });
+        }
+        fimAquis = addMeses(fimAquis, 12);
+      }
+      pendentes.sort((a, b) => a.limite - b.limite).slice(0, AGENDA_MAX_FERIAS_POR_PESSOA).forEach(p => juntar(p.limite, {
+        assunto: "ferias",
+        quem: u.nome,
+        userId: u.id,
+        titulo: p.gozados > 0 ? "Faltam " + (30 - p.gozados) + " dia(s) de férias do período que fechou em " + fmtData(dataISO(p.aquisitivoFecha)) : "Férias do período que fechou em " + fmtData(dataISO(p.aquisitivoFecha)) + " ainda não concedidas",
+        base: "CLT art. 134 — conceder dentro dos 12 meses seguintes; passado o prazo, o pagamento é em dobro (art. 137)"
+      }));
+
+      /* 3) aviso de ferias com 30 dias de antecedencia */
+      minhas.filter(f => f.status === "aprovada" && dataLocal(f.inicio) > ref).forEach(f => juntar(new Date(dataLocal(f.inicio).getTime() - 30 * 86400000), {
+        assunto: "aviso",
+        quem: u.nome,
+        userId: u.id,
+        titulo: "Entregar o aviso de férias (início em " + fmtData(f.inicio) + ")",
+        base: "CLT art. 135 — aviso por escrito com pelo menos 30 dias de antecedência"
+      }));
+
+      /* 4) contrato de experiencia (so pra quem entrou ha pouco) */
+      const naCasa = -dias(dataLocal(u.admissao));
+      if (naCasa >= 0 && naCasa <= 120) {
+        juntar(addMeses(dataLocal(u.admissao), 3), {
+          assunto: "experiencia",
+          quem: u.nome,
+          userId: u.id,
+          titulo: "Se o contrato for de experiência, ele chega ao limite de 90 dias",
+          detalhe: "admissão em " + fmtData(u.admissao) + " · " + naCasa + " dia(s) de casa",
+          base: "CLT art. 445, parágrafo único (máx. 90 dias) e art. 451 — a prorrogação é única e precisa ocorrer antes do fim do 1º período"
+        });
+      }
+    }
+  });
+  itens.sort((a, b) => a.data < b.data ? -1 : a.data > b.data ? 1 : String(a.quem).localeCompare(String(b.quem)));
+  return itens;
+}
+function urgenciaAgenda(item) {
+  if (item.atrasado) return "atrasado";
+  if (item.dias <= 30) return "perto";
+  return "tranquilo";
+}
+function prazoEmPalavras(d) {
+  if (d < -1) return "atrasado há " + -d + " dias";
+  if (d === -1) return "venceu ontem";
+  if (d === 0) return "vence hoje";
+  if (d === 1) return "vence amanhã";
+  return "faltam " + d + " dias";
+}
 function MedidorPremio({
   m
 }) {
@@ -10089,6 +10212,113 @@ function TelaHolerite({
 /* Painel do gestor: trilha de aceites. Mostra quem aceitou o codigo de conduta na
    versao vigente e quem conferiu (ou contestou) o espelho do mes fechado. As
    divergencias abertas aparecem em destaque porque exigem analise. */
+/* ═══════════════════════════════════════════════════════════════
+   AGENDA DO RH — só o gestor vê
+   Junta num só lugar os prazos que costumam passar batido: exame
+   admissional/periódico, férias dentro do período concessivo, aviso de
+   férias e o limite do contrato de experiência. É só leitura e cálculo —
+   nada é gravado e nada bloqueia o app.
+   ═══════════════════════════════════════════════════════════════ */
+function SecaoAgendaRH({
+  usuarios,
+  exames,
+  ferias
+}) {
+  const [tudo, setTudo] = useState(false);
+  const itens = useMemo(() => agendaRH({
+    usuarios,
+    exames,
+    ferias,
+    hoje: new Date()
+  }), [usuarios, exames, ferias]);
+  const atrasados = itens.filter(i => i.atrasado).length;
+  const perto = itens.filter(i => !i.atrasado && i.dias <= 30).length;
+  const cor = {
+    atrasado: C.vermelho,
+    perto: C.amarelo,
+    tranquilo: C.cinza
+  };
+  const mostrados = tudo ? itens : itens.slice(0, 8);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14,
+      borderLeft: "4px solid " + (atrasados ? C.vermelho : perto ? C.amarelo : C.verde)
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83D\uDCC5 Agenda do RH \xB7 pr\xF3ximos ", AGENDA_JANELA_DIAS, " dias"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, itens.length === 0 ? "Nada vencendo por aqui: exames, férias e contratos estão em dia pelo que está cadastrado." : (atrasados ? atrasados + " item(ns) já no vermelho" : "nada atrasado") + " · " + perto + " vencendo em até 30 dias · " + itens.length + " no total. O cálculo usa o que está cadastrado no app — se um exame ou férias antiga não foi lançada aqui, ela aparece como pendente."), mostrados.map((it, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      borderTop: "1px solid #1E3450",
+      padding: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13
+    }
+  }, it.quem), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: cor[urgenciaAgenda(it)]
+    }
+  }, fmtData(it.data), " \xB7 ", prazoEmPalavras(it.dias))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: C.branco,
+      marginTop: 3,
+      lineHeight: 1.5
+    }
+  }, it.titulo), it.detalhe && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      marginTop: 2
+    }
+  }, it.detalhe), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: C.cinza,
+      marginTop: 2,
+      lineHeight: 1.5
+    }
+  }, it.base))), itens.length > 8 && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      fontSize: 12,
+      padding: "8px 14px",
+      marginTop: 10
+    },
+    onClick: () => setTudo(!tudo)
+  }, tudo ? "Mostrar só os 8 primeiros" : "Ver todos os " + itens.length + " itens"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.cinza,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "Prazos calculados por data: a periodicidade do exame vem do PCMSO da empresa (NR-7) e o contrato de experi\xEAncia s\xF3 existe se foi assinado assim. Confira com a contabilidade e com o m\xE9dico do trabalho antes de agir \u2014 o app n\xE3o substitui esses profissionais."));
+}
 function SecaoConformidade({
   usuarios,
   registros
@@ -11060,6 +11290,10 @@ function TelaGestor({
   }), /*#__PURE__*/React.createElement(SecaoImagens, {
     usuarios: usuarios,
     consImagem: consImagem
+  }), /*#__PURE__*/React.createElement(SecaoAgendaRH, {
+    usuarios: usuarios,
+    exames: examesOcupacionais,
+    ferias: ferias
   }), /*#__PURE__*/React.createElement(SecaoConformidade, {
     usuarios: usuarios,
     registros: registros

@@ -48,6 +48,19 @@ pedido ao service worker (`registration.showNotification`) e o construtor fica
 apenas como reserva no desktop. Tocar no aviso foca a aba do app ou abre uma nova.
 Os lembretes continuam dependendo do app aberto ou recem-usado - **nao ha push de servidor.**
 
+## Agenda do RH (painel do gestor)
+
+Cartao de leitura que calcula prazos a partir do que ja esta cadastrado:
+exame admissional/periodico (CLT 168 e NR-7), ferias dentro do periodo
+concessivo (CLT 134, com a dobra do 137), aviso de ferias de 30 dias (CLT 135)
+e o limite de 90 dias do contrato de experiencia (CLT 445/451).
+
+A funcao `agendaRH` e pura (recebe listas + data e devolve itens ordenados),
+fica no bloco de motores do `.jsx` e tem teste unitario no `testes.mjs`.
+Janela padrao: `AGENDA_JANELA_DIAS` = 120 dias. No maximo 2 periodos de ferias
+atrasados por pessoa, pra lista nao virar rolagem infinita.
+Gestor e inativos ficam fora. O cartao nao grava nada.
+
 ## Como publicar uma alteracao
 
 ```bash

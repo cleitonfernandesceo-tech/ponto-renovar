@@ -37,7 +37,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   calcINSS, calcIRRF, gerarAFDReal, gerarAEJReal, CONFIG_FISCAL, r2, agruparPorDia, minutosDia,
   validarFracionamento, periodoAquisitivo, FRAC, impactoMudancaIntervalo, MUDANCA_INTERVALO,
   mensagemAmigavel, limparTexto, emailValido, uuidValido, dataValida, numeroValido, validarArquivo,
-  nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF };`;
+  nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF,
+  agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -294,6 +295,61 @@ t("os atalhos usam caminho relativo (subpasta do GitHub Pages)",
   (manifest?.shortcuts || []).every((a) => String(a.url || "").startsWith("./")));
 t("os atalhos têm ícone existente", (manifest?.shortcuts || []).every((a) => (a.icons || []).every((i) => existsSync(i.src))));
 t("o app abre na tela pedida pelo atalho (?ir=)", /useState\(telaInicial\)/.test(src) && /function telaInicial/.test(blocoNotif));
+
+// ══════════════════════════════════════════════════════════════
+secao("Agenda do RH: exames, ferias e experiencia");
+const HOJE_AG = new Date("2026-07-25T12:00:00");
+const colab = (extra = {}) => ({ id: "u1", nome: "Teste", papel: "colaborador", ativo: true, admissao: "2024-01-10", ...extra });
+const ag = (usuarios, exames = [], ferias = []) => m.agendaRH({ usuarios, exames, ferias, hoje: HOJE_AG });
+const so = (lista, assunto) => lista.filter((x) => x.assunto === assunto);
+
+t("sem exame nenhum, cobra o admissional na data de admissao",
+  so(ag([colab()]), "exame").some((x) => x.data === "2024-01-10" && x.atrasado));
+t("exame periodico vence 12 meses depois do ultimo clinico",
+  so(ag([colab()], [{ userId: "u1", tipo: "periodico", tipoLabel: "Periodico", data: "2025-09-23" }]), "exame")
+    .some((x) => x.data === "2026-09-23" && x.dias === 60));
+t("exame com vencimento fora da janela nao polui a agenda",
+  so(ag([colab()], [{ userId: "u1", tipo: "periodico", data: "2026-02-10" }]), "exame").length === 0);
+t("gestor e inativo ficam fora da agenda",
+  ag([colab({ papel: "gestor" })]).length === 0 && ag([colab({ ativo: false })]).length === 0);
+t("ferias nao concedidas dentro do concessivo viram alerta (CLT 134/137)",
+  so(ag([colab()]), "ferias").some((x) => x.data === "2026-01-10" && /em dobro/.test(x.base)));
+t("30 dias de ferias gozados zeram o alerta do periodo",
+  so(ag([colab()], [], [{ userId: "u1", inicio: "2025-06-02", dias: 30, status: "aprovada" }]), "ferias").length === 0);
+t("ferias parciais mostram quantos dias faltam",
+  so(ag([colab()], [], [{ userId: "u1", inicio: "2025-06-02", dias: 20, status: "aprovada" }]), "ferias")
+    .some((x) => /Faltam 10 dia/.test(x.titulo)));
+t("ferias rejeitadas nao contam como gozadas",
+  so(ag([colab()], [], [{ userId: "u1", inicio: "2025-06-02", dias: 30, status: "rejeitada" }]), "ferias").length === 1);
+t("aviso de ferias aparece 30 dias antes do inicio (CLT 135)",
+  so(ag([colab()], [], [{ userId: "u1", inicio: "2026-08-20", dias: 15, status: "aprovada" }]), "aviso")
+    .some((x) => x.data === "2026-07-21"));
+t("no maximo 2 periodos de ferias atrasados por pessoa (evita lista infinita)",
+  so(ag([colab({ admissao: "2019-01-10" })]), "ferias").length === 2);
+t("limite do contrato de experiencia so aparece pra quem entrou ha pouco",
+  so(ag([colab({ admissao: "2026-06-01" })]), "experiencia").some((x) => x.data === "2026-09-01") &&
+  so(ag([colab({ admissao: "2024-01-10" })]), "experiencia").length === 0);
+t("nada passa da janela de " + m.AGENDA_JANELA_DIAS + " dias",
+  ag([colab(), colab({ id: "u2", nome: "Outro", admissao: "2026-06-15" })]).every((x) => x.dias <= m.AGENDA_JANELA_DIAS));
+t("a agenda sai ordenada por data",
+  ag([colab(), colab({ id: "u2", nome: "Outro", admissao: "2026-06-15" })]).every((x, i, l) => i === 0 || l[i - 1].data <= x.data));
+t("a agenda nao altera as listas recebidas (funcao pura)", (() => {
+  const us = [colab()], ex = [], fe = [];
+  const antes = JSON.stringify([us, ex, fe]);
+  ag(us, ex, fe); ag(us, ex, fe);
+  return JSON.stringify([us, ex, fe]) === antes;
+})());
+t("cada item traz a base legal escrita", ag([colab()]).every((x) => typeof x.base === "string" && x.base.length > 10));
+t("o prazo em palavras cobre atrasado, hoje, amanha e futuro",
+  m.prazoEmPalavras(-5) === "atrasado há 5 dias" && m.prazoEmPalavras(-1) === "venceu ontem" &&
+  m.prazoEmPalavras(0) === "vence hoje" && m.prazoEmPalavras(1) === "vence amanhã" && m.prazoEmPalavras(9) === "faltam 9 dias");
+t("a urgencia separa atrasado, perto e tranquilo",
+  m.urgenciaAgenda({ atrasado: true, dias: -3 }) === "atrasado" &&
+  m.urgenciaAgenda({ atrasado: false, dias: 10 }) === "perto" &&
+  m.urgenciaAgenda({ atrasado: false, dias: 90 }) === "tranquilo");
+t("o painel do gestor exibe a agenda do RH", src.includes("<SecaoAgendaRH usuarios={usuarios} exames={examesOcupacionais} ferias={ferias} />"));
+t("a agenda avisa que nao substitui contador nem medico do trabalho",
+  /não substitui esses profissionais/.test(src.slice(src.indexOf("function SecaoAgendaRH"), src.indexOf("function SecaoConformidade"))));
 
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
