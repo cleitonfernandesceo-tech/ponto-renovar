@@ -159,3 +159,90 @@ create policy "aceites: gestor le" on public.aceites
   for select to authenticated using (exists (
     select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
 ```
+
+## Push de servidor (lembrete com o app fechado)
+
+O lembrete de batida chega como aviso do celular mesmo com o app fechado.
+Quem dispara e uma Edge Function no Supabase - nao o navegador. As pecas:
+
+| Peca | Onde | Papel |
+| --- | --- | --- |
+| `push` + `showNotification` | `sw.js` | exibe o aviso que vem do servidor (no iPhone so o service worker consegue) |
+| `VAPID_PUBLICA` e `registrarPush()` | `ponto-renovar.jsx` | inscreve o aparelho e grava a inscricao em `push_inscricoes` |
+| `lembretes-push` | Edge Function | decide quem esta devendo batida e assina o envio com a chave VAPID |
+| `cron.schedule('lembretes-push')` | banco (pg_cron + pg_net) | chama a funcao as 8h, 9h, 12h e 13h de Brasilia |
+| `push_lembretes_log` | banco | trava de 1 aviso por pessoa/dia/etapa (o cron pode repetir sem risco) |
+
+Regras espelhadas do app: 8h e 9h sem nenhuma batida, 12h com 1 batida e 13h
+com 2 batidas (almoco so de segunda a sexta). Domingo e feriado nacional nao
+geram aviso. Aparelho que desinstalou o app devolve 404/410 e a inscricao e
+apagada sozinha.
+
+### Segredos (Edge Functions > Secrets)
+
+- `VAPID_PUBLIC_KEY` - a mesma chave que esta em `VAPID_PUBLICA` no app (publica).
+- `VAPID_PRIVATE_KEY` - **segredo**: nunca vai pro repositorio.
+- `VAPID_SUBJECT` - opcional, um `mailto:` de contato.
+
+Para trocar o par de chaves: gere um novo par (P-256), atualize o segredo e a
+constante `VAPID_PUBLICA`. O app compara a chave da inscricao com a do codigo e
+reinscreve o aparelho sozinho quando elas diferem.
+
+### Tabelas e agendamento (SQL)
+
+```sql
+-- inscricoes dos aparelhos + trava de 1 aviso por etapa/dia
+create extension if not exists pg_net with schema extensions;
+
+create table if not exists public.push_inscricoes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  aparelho text,
+  criado_em timestamptz not null default now(),
+  visto_em timestamptz not null default now(),
+  falhas int not null default 0
+);
+create index if not exists push_inscricoes_usuario_idx on public.push_inscricoes (usuario_id);
+alter table public.push_inscricoes enable row level security;
+create policy push_inscricoes_select on public.push_inscricoes for select to authenticated using (auth.uid() = usuario_id);
+create policy push_inscricoes_insert on public.push_inscricoes for insert to authenticated with check (auth.uid() = usuario_id);
+create policy push_inscricoes_update on public.push_inscricoes for update to authenticated using (auth.uid() = usuario_id) with check (auth.uid() = usuario_id);
+create policy push_inscricoes_delete on public.push_inscricoes for delete to authenticated using (auth.uid() = usuario_id);
+
+create table if not exists public.push_lembretes_log (
+  usuario_id uuid not null,
+  dia date not null,
+  etapa text not null,
+  enviado_em timestamptz not null default now(),
+  aparelhos int not null default 0,
+  primary key (usuario_id, dia, etapa)
+);
+alter table public.push_lembretes_log enable row level security;
+create policy push_lembretes_log_select on public.push_lembretes_log for select to authenticated using (auth.uid() = usuario_id);
+
+-- 8h, 9h, 12h e 13h de Brasilia = 11, 12, 15 e 16 UTC (duas passadas por hora).
+-- A chave usada aqui e a PUBLICAVEL, a mesma que o index.html leva pro navegador.
+select cron.schedule(
+  'lembretes-push',
+  '5,35 11,12,15,16 * * 1-6',
+  $job$
+  select net.http_post(
+    url := 'https://SEU-PROJETO.supabase.co/functions/v1/lembretes-push',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apikey', '<CHAVE_PUBLICAVEL>',
+      'Authorization', 'Bearer <CHAVE_PUBLICAVEL>'
+    ),
+    body := '{}'::jsonb,
+    timeout_milliseconds := 25000
+  );
+  $job$
+);
+```
+
+Teste rapido: com o app aberto e o aviso autorizado, chame a funcao com
+`{ "teste": true }` usando o token do usuario logado - ela manda um aviso so
+para os aparelhos daquela pessoa.
