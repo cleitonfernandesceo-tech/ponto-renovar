@@ -3738,29 +3738,16 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         );
       })()}
       <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${C.amarelo}`, padding: 14 }}>
-        <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Como funcionam os lembretes e a saída automática</div>
-        <p style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", lineHeight: 1.6 }}>
-          Este app roda 100% no navegador do colaborador, <b>sem servidor próprio rodando o tempo todo</b>. Por isso:
-        </p>
+        <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Limites e transparência do sistema</div>
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
-          <li><b>Jornada contratual de 9h/dia:</b> 8h às 18h com 1 hora de intervalo (seg-sex) + sábado de 5h = <b>50h semanais</b>. O dia normal fecha em zero no banco de horas; só sobra saldo quem sai depois das 18h. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h semanais — as 6h excedentes precisam estar cobertas por acordo de compensação/banco de horas ou pagas como extraordinárias. Vale confirmar o enquadramento com o advogado trabalhista.</li>
-          <li><b>Lembretes de bater ponto (8h/9h e almoço):</b> só disparam <b>enquanto o colaborador estiver com o app aberto</b> no navegador. Se o app estiver fechado no horário, o lembrete daquele momento não aparece (e não vira notificação push de celular).</li>
-          <li><b>Batida automática de saída (fecha o dia às 18h/13h se esqueceram de bater):</b> depende de uma rotina agendada <b>no banco de dados (Supabase/pg_cron)</b>, que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se não, a saída não será preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h está ligado.</li>
-        </ul>
-        <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0" }}>Recomendação: oriente a equipe a manter o app aberto no expediente — os lembretes são apoio, a responsabilidade de bater o ponto é do colaborador.</p>
-      </div>
-      <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${C.amarelo}`, padding: 14 }}>
-        <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ O que a biometria do celular comprova (e o que NÃO comprova)</div>
-        <p style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", lineHeight: 1.6 }}>
-          A verificação usa <b>WebAuthn</b> com o Face ID / digital do aparelho do colaborador. É importante entender o alcance real dessa tecnologia:
-        </p>
-        <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
-          <li><b>O que comprova:</b> que quem bateu o ponto <b>tem o aparelho cadastrado em mãos</b> e passou pela checagem biométrica configurada <b>naquele aparelho</b>.</li>
-          <li><b>O que NÃO comprova:</b> não é reconhecimento facial contra uma foto de referência da empresa. O celular apenas responde "a biometria cadastrada neste aparelho foi reconhecida" — então <b>qualquer pessoa cujo rosto ou digital esteja cadastrado naquele celular</b> (um familiar no Face ID alternativo, uma digital adicional) <b>conseguiria bater o ponto</b>. O sistema não distingue.</li>
-          <li><b>Validação criptográfica: feita no servidor ✔</b> — a assinatura devolvida pelo aparelho é conferida por uma função no servidor (Supabase Edge Function) antes de a marcação ser gravada: desafio de uso único gerado no backend (impede replay), conferência de origem e domínio, exigência do flag de verificação biométrica, validação da assinatura contra a chave pública cadastrada e checagem do contador do autenticador (detecta clonagem de credencial).</li>
+          <li><b>Jornada de 9h/dia</b> (8h às 18h com 1h de intervalo) + sábado de 5h = 50h semanais. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h — as 6h excedentes precisam de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
+          <li><b>Lembretes de batida</b> só disparam com o app aberto no navegador — não são notificações push de celular.</li>
+          <li><b>Saída automática (18h/13h)</b> depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h está ativo.</li>
+          <li><b>Biometria (WebAuthn)</b> comprova que quem bateu está com o aparelho cadastrado e passou pelo Face ID/digital <b>daquele aparelho</b>. Não é reconhecimento facial contra foto de referência da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto.</li>
+          <li><b>Assinatura validada no servidor</b> antes de gravar a marcação — desafio de uso único, conferência de origem, flag de verificação biométrica, assinatura contra a chave pública e contador do autenticador.</li>
         </ul>
         <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
-          Como mitigar a limitação que resta: combine a biometria com a <b>cerca geográfica</b> (já ativa) e oriente a equipe a não cadastrar terceiros no Face ID/digital do aparelho usado pro ponto — de preferência, registre isso no regulamento interno. Marcações feitas <b>sem</b> verificação biométrica aparecem sinalizadas no espelho e na trilha de auditoria.
+          Mitigação: cerca geográfica (ativa) + regra no regulamento interno proibindo cadastrar terceiros no aparelho usado pro ponto. Batidas sem verificação ficam sinalizadas (⚠) no espelho e na trilha de auditoria.
         </p>
       </div>
       <div style={{ ...S.card, marginTop: 16 }}>
