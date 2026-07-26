@@ -14,11 +14,14 @@
    sempre a versao mais nova; o cache so entra em cena se a rede falhar.
    ========================================================================= */
 
-const VERSAO = '2026.07.25-1';
+const VERSAO = '2026.07.25-2';
 const CACHE = 'ponto-renovar-' + VERSAO;
 const CASCO = [
   './', './index.html', './manifest.json',
-  './icon-192.png', './icon-512.png', './icon-maskable-512.png'
+  './icon-192.png', './icon-512.png', './icon-maskable-512.png',
+  // React vem do unpkg: sem isso o app nao abre offline na primeira vez
+  'https://unpkg.com/react@18/umd/react.production.min.js',
+  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js'
 ];
 
 const SEM_REDE =

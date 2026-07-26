@@ -252,6 +252,18 @@ const blocoDiag = src.slice(src.indexOf('function SecaoDiagnostico'), src.indexO
 t('o diagnóstico é só leitura (não grava nem altera nada)', !/sbInsert|sbUpsert|sbDelete|sbUpdate/.test(blocoDiag));
 t('o README traz exatamente o mesmo SQL', leia('README.md').includes(sqlBloco.trim()));
 
+// ==============================================================
+secao('Backup dos dados');
+t('o painel do gestor tem o cartão de backup', src.includes('<SecaoBackup demo={demo}'));
+const blocoBkp = src.slice(src.indexOf('function limparParaBackup'), src.indexOf('function SecaoAceites'));
+t('o backup peneira campos sensíveis antes de gravar o arquivo',
+  /senha\|password\|credencial\|token\|chave\|secret/i.test(blocoBkp));
+t('o backup avisa sobre a guarda dos dados (LGPD art. 46)', /LGPD, art\. 46/.test(blocoBkp));
+t('o backup carrega todas as listas do painel',
+  ['usuarios', 'registros', 'faltas', 'justificativas', 'atestados', 'ferias', 'folgas', 'folhasPg',
+   'adiantamentos', 'guias', 'rescisoes', 'exames', 'consImagem', 'aceites', 'locais', 'logs']
+    .every((k) => new RegExp('<SecaoBackup[^>]*' + k).test(src.replace(/\n/g, ' '))));
+
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

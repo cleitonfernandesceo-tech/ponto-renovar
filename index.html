@@ -10353,6 +10353,99 @@ function SecaoDiagnostico({
     }
   }, "O navegador bloqueou a c\xF3pia. O mesmo SQL est\xE1 no README do reposit\xF3rio."));
 }
+/* ===============================================================
+   BACKUP DOS DADOS — só o gestor vê
+   Um arquivo .json com tudo que o app carregou, pra guardar fora do
+   Supabase. Nao entra no arquivo: senha, token de sessao nem credencial
+   de biometria (essas nunca saem do aparelho do colaborador).
+   =============================================================== */
+function limparParaBackup(v) {
+  if (Array.isArray(v)) return v.map(limparParaBackup);
+  if (v && typeof v === "object") {
+    const o = {};
+    Object.keys(v).forEach(k => {
+      if (!/senha|password|credencial|token|chave|secret/i.test(k)) o[k] = limparParaBackup(v[k]);
+    });
+    return o;
+  }
+  return v;
+}
+function montarBackup(dados, demo) {
+  return {
+    gerado_em: iso(new Date()),
+    empresa: {
+      nome: EMPRESA.nome,
+      cnpj: EMPRESA.cnpj
+    },
+    versao_app: typeof window !== "undefined" && window.__APP_VERSAO || null,
+    origem: demo ? "demonstracao" : "producao",
+    aviso: "Copia de seguranca com dados pessoais de colaboradores: guarde em local restrito e apague quando nao precisar mais (LGPD, art. 46). Nao contem senhas nem credenciais de biometria.",
+    dados: limparParaBackup(dados)
+  };
+}
+function baixarJSON(obj, nome) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {
+    type: "application/json;charset=utf-8"
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function SecaoBackup({
+  dados,
+  demo
+}) {
+  const [feito, setFeito] = useState("");
+  const conta = x => Array.isArray(x) ? x.length : 0;
+  const linhas = conta(dados.registros);
+  const papeis = conta(dados.justificativas) + conta(dados.atestados) + conta(dados.ferias) + conta(dados.folgas);
+  const baixar = () => {
+    const hoje = dataISO(new Date());
+    baixarJSON(montarBackup(dados, demo), `ponto-renovar-backup-${hoje}.json`);
+    setFeito(hoje);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\uD83D\uDCBE Backup dos dados"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, conta(dados.usuarios), " pessoa(s), ", linhas, " marca\xE7\xE3o(\xF5es) e ", papeis, " pedido(s) na tela agora.", demo ? " Em demonstração o arquivo sai com dados fictícios." : " Baixe uma cópia no fim de cada mês e guarde fora do celular."), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      fontSize: 13
+    },
+    onClick: baixar
+  }, "Baixar backup (JSON)"), feito && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.verde,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "Arquivo gerado. Ele tem dados pessoais: guarde em local restrito (LGPD, art. 46)."), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.cinza,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "O backup n\xE3o substitui a guarda oficial das marca\xE7\xF5es por 5 anos (CLT art. 74 e Portaria MTP 671/2021) \u2014 ele \xE9 a sua c\xF3pia de seguran\xE7a."));
+}
 function SecaoAceites({
   usuarios,
   aceites = []
@@ -10922,6 +11015,26 @@ function TelaGestor({
     aceites: aceites
   }), /*#__PURE__*/React.createElement(SecaoDiagnostico, {
     demo: demo
+  }), /*#__PURE__*/React.createElement(SecaoBackup, {
+    demo: demo,
+    dados: {
+      usuarios,
+      registros,
+      faltas,
+      justificativas,
+      atestados,
+      ferias,
+      folgas,
+      folhasPg,
+      adiantamentos,
+      guias,
+      rescisoes,
+      exames: examesOcupacionais,
+      consImagem,
+      aceites,
+      locais,
+      logs
+    }
   }), [["Justificativas", justificativas, j => `${nome(j.userId)} — ${j.texto}`], ["Atestados", atestados, a => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`], ["Férias", ferias, f => `${nome(f.userId)} — ${f.dias} dias a partir de ${fmtData(f.inicio + "T00:00:00")}`]].map(([titulo, lista, render]) => /*#__PURE__*/React.createElement("div", {
     key: titulo,
     style: {
@@ -11107,7 +11220,7 @@ document.addEventListener("DOMContentLoaded", function () {
      O service worker guarda somente o casco do app (index.html, React, icones).
      Nenhuma chamada ao Supabase passa pelo cache: dado de ponto nao fica gravado ali. -->
 <script>
-window.__APP_VERSAO = '2026.07.25-1';
+window.__APP_VERSAO = '2026.07.25-2';
 (function () {
   var instalado = false;
   try {

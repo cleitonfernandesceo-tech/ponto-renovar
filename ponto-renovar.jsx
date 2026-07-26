@@ -4470,6 +4470,71 @@ function SecaoDiagnostico({ demo }) {
     </div>
   );
 }
+/* ===============================================================
+   BACKUP DOS DADOS — só o gestor vê
+   Um arquivo .json com tudo que o app carregou, pra guardar fora do
+   Supabase. Nao entra no arquivo: senha, token de sessao nem credencial
+   de biometria (essas nunca saem do aparelho do colaborador).
+   =============================================================== */
+function limparParaBackup(v) {
+  if (Array.isArray(v)) return v.map(limparParaBackup);
+  if (v && typeof v === "object") {
+    const o = {};
+    Object.keys(v).forEach((k) => {
+      if (!/senha|password|credencial|token|chave|secret/i.test(k)) o[k] = limparParaBackup(v[k]);
+    });
+    return o;
+  }
+  return v;
+}
+function montarBackup(dados, demo) {
+  return {
+    gerado_em: iso(new Date()),
+    empresa: { nome: EMPRESA.nome, cnpj: EMPRESA.cnpj },
+    versao_app: (typeof window !== "undefined" && window.__APP_VERSAO) || null,
+    origem: demo ? "demonstracao" : "producao",
+    aviso: "Copia de seguranca com dados pessoais de colaboradores: guarde em local restrito e apague quando nao precisar mais (LGPD, art. 46). Nao contem senhas nem credenciais de biometria.",
+    dados: limparParaBackup(dados),
+  };
+}
+function baixarJSON(obj, nome) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function SecaoBackup({ dados, demo }) {
+  const [feito, setFeito] = useState("");
+  const conta = (x) => (Array.isArray(x) ? x.length : 0);
+  const linhas = conta(dados.registros);
+  const papeis = conta(dados.justificativas) + conta(dados.atestados) + conta(dados.ferias) + conta(dados.folgas);
+  const baixar = () => {
+    const hoje = dataISO(new Date());
+    baixarJSON(montarBackup(dados, demo), `ponto-renovar-backup-${hoje}.json`);
+    setFeito(hoje);
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>💾 Backup dos dados</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        {conta(dados.usuarios)} pessoa(s), {linhas} marcação(ões) e {papeis} pedido(s) na tela agora.
+        {demo ? " Em demonstração o arquivo sai com dados fictícios." : " Baixe uma cópia no fim de cada mês e guarde fora do celular."}
+      </p>
+      <button style={{ ...S.btnGhost, fontSize: 13 }} onClick={baixar}>Baixar backup (JSON)</button>
+      {feito && (
+        <p style={{ fontSize: 12, color: C.verde, margin: "10px 0 0", lineHeight: 1.6 }}>
+          Arquivo gerado. Ele tem dados pessoais: guarde em local restrito (LGPD, art. 46).
+        </p>
+      )}
+      <p style={{ fontSize: 11, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>
+        O backup não substitui a guarda oficial das marcações por 5 anos (CLT art. 74 e Portaria MTP 671/2021) — ele é a sua cópia de segurança.
+      </p>
+    </div>
+  );
+}
 function SecaoAceites({ usuarios, aceites = [] }) {
   const equipe = usuarios.filter((u) => u.papel !== "gestor");
   const comp = compAtual();
@@ -4670,6 +4735,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
       <SecaoConformidade usuarios={usuarios} registros={registros} />
       <SecaoAceites usuarios={usuarios} aceites={aceites} />
       <SecaoDiagnostico demo={demo} />
+      <SecaoBackup demo={demo} dados={{ usuarios, registros, faltas, justificativas, atestados, ferias, folgas, folhasPg, adiantamentos, guias, rescisoes, exames: examesOcupacionais, consImagem, aceites, locais, logs }} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
