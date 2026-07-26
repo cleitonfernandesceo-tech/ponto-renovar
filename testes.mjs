@@ -37,7 +37,7 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   calcINSS, calcIRRF, gerarAFDReal, gerarAEJReal, CONFIG_FISCAL, r2, agruparPorDia, minutosDia,
   validarFracionamento, periodoAquisitivo, FRAC, impactoMudancaIntervalo, MUDANCA_INTERVALO,
   mensagemAmigavel, limparTexto, emailValido, uuidValido, dataValida, numeroValido, validarArquivo,
-  nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo };`;
+  nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -193,6 +193,22 @@ t("colaborador sem batidas: folha só com INSS", fo({}).valor_liquido === m.r2(3
 t("batida ímpar não gera NaN", Number.isFinite(m.analisarAssiduidade("u", [comAlmoco[0]], []).saldoMin));
 t("mudança de regra: dia com par único não muda", m.impactoMudancaIntervalo("u", dia(1, 8, 0, 18, 0)).minutosDiferenca === 0);
 t("mudança de regra: dia com almoço batido perde o crédito indevido de 1h", m.impactoMudancaIntervalo("u", comAlmoco).minutosDiferenca === -60);
+
+// ==============================================================
+secao('Radar de conformidade da jornada');
+const conf = (regs) => m.alertasConformidade('u', regs);
+const tipos = (regs) => conf(regs).map((a) => a.tipo).join(',');
+t('dia normal 8h–18h não gera alerta', conf(dia(1, 8, 0, 18, 0)).length === 0, tipos(dia(1, 8, 0, 18, 0)));
+t('sem batidas não gera alerta', conf([]).length === 0);
+t('3h de extras no dia acusam o limite de 2h (CLT 59)', conf(dia(1, 8, 0, 21, 0)).some((a) => a.tipo === 'extras' && a.texto.includes('3h00')));
+t('descanso de 8h entre jornadas acusa a interjornada (CLT 66)', conf([...dia(1, 8, 0, 22, 0), ...dia(2, 6, 0, 15, 0)]).some((a) => a.tipo === 'interjornada'));
+t('descanso de 14h entre jornadas não acusa interjornada', !conf([...dia(1, 8, 0, 18, 0), ...dia(2, 8, 0, 18, 0)]).some((a) => a.tipo === 'interjornada'));
+t('domingo trabalhado exige compensação (CLT 67 e 70)', conf(dia(5, 9, 0, 13, 0)).some((a) => a.tipo === 'repouso'));
+t('intervalo de 30min em jornada de 10h30 acusa o art. 71', conf([...dia(1, 8, 0, 12, 0), ...dia(1, 12, 30, 19, 0)]).some((a) => a.tipo === 'intervalo'));
+t('intervalo de 1h batido não acusa o art. 71', !conf(comAlmoco).some((a) => a.tipo === 'intervalo'));
+t('7 dias seguidos acusam a falta de repouso semanal', conf([1, 2, 3, 4, 5, 6, 7].flatMap((d) => dia(d, 8, 0, 18, 0))).some((a) => a.tipo === 'repouso' && a.texto.includes('7º dia')));
+t('dia só com entrada acusa par incompleto (CLT 74 §2º)', conf([dia(1, 8, 0, 18, 0)[0]]).some((a) => a.tipo === 'marcacao'));
+t('semana dentro do contratual não acusa excesso', !conf([1, 2, 3].flatMap((d) => dia(d, 8, 0, 18, 0))).some((a) => a.tipo === 'semana'));
 
 console.warn = origWarn;
 console.log(`\n${"═".repeat(62)}`);

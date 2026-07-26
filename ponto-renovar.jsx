@@ -581,6 +581,67 @@ function saldoBanco(userId, registros, faltas, folgas) {
   const debitado = folgas.filter(f => f.userId === userId && f.status === "aprovada").reduce((s, f) => s + Math.round(f.horas * 60), 0);
   return { apurado, debitado, disponivel: apurado - debitado };
 }
+/* ---- Radar de conformidade da jornada -------------------------------------
+   Varre as marcações e aponta os limites legais que mais geram passivo:
+   interjornada de 11h (CLT art. 66), 2h de extras no dia (CLT art. 59),
+   extras acima do contratual na semana (CF art. 7º XIII), intervalo
+   intrajornada (CLT art. 71), 7 dias seguidos sem repouso (CLT art. 67) e
+   dia sem par entrada/saída (CLT art. 74 §2º). É informativo: não bloqueia
+   marcação nenhuma e não substitui a análise do contador/jurídico. */
+const CONF = { interjornada: 11 * 60, extrasDia: 2 * 60, extrasSemana: 2 * 60, intervalo: 60, seguidos: 6 };
+// Minutos produtivos do dia: presença menos o intervalo descontado (mesma regra do banco de horas)
+function produtivasDoDia(regs, exp) {
+  const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
+  const desconto = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+  return { pares, min: minutosDia(regs) - desconto };
+}
+function alertasConformidade(userId, registros) {
+  const dias = agruparPorDia(registros, userId);
+  const chaves = Object.keys(dias).sort((a, b) => new Date(dias[a][0].ts) - new Date(dias[b][0].ts));
+  const alertas = [], semanas = {};
+  let seq = 0, anterior = null;
+  chaves.forEach((k, idx) => {
+    const regs = dias[k];
+    const dt = new Date(regs[0].ts);
+    const exp = expedienteDoDia(dt);
+    const info = produtivasDoDia(regs, exp);
+    const min = info.min, iso = dataISO(dt);
+    const add = (tipo, texto, base) => alertas.push({ userId, data: iso, dia: k, tipo, texto, base });
+    const ent = regs.filter((r) => r.tipo === "entrada").map((r) => new Date(r.ts));
+    const sai = regs.filter((r) => r.tipo === "saida").map((r) => new Date(r.ts));
+    if (ent.length !== sai.length) add("marcacao", ent.length + " entrada(s) e " + sai.length + " saída(s): dia sem par completo", "CLT art. 74 §2º");
+    if (exp.jornadaMin > 0 && min - exp.jornadaMin > CONF.extrasDia) add("extras", hmm(min - exp.jornadaMin) + " de horas extras no dia", "CLT art. 59: limite de 2h por dia");
+    if (exp.jornadaMin === 0 && min > 0) add("repouso", hmm(min) + " trabalhados em " + String(exp.rotulo).replace(" — fechado", ""), "CLT art. 67 e 70: compensar ou pagar em dobro");
+    if (info.pares >= 2 && min > 6 * 60 && ent[1] && sai[0]) {
+      const pausa = Math.round((ent[1] - sai[0]) / 60000);
+      if (pausa < CONF.intervalo) add("intervalo", "intervalo de " + pausa + " min em jornada de " + hmm(min), "CLT art. 71: mínimo de 1h acima de 6h");
+    }
+    if (idx > 0) {
+      const saiAnt = dias[chaves[idx - 1]].filter((r) => r.tipo === "saida").map((r) => new Date(r.ts)).pop();
+      if (saiAnt && ent[0]) {
+        const descanso = Math.round((ent[0] - saiAnt) / 60000);
+        if (descanso > 0 && descanso < CONF.interjornada) add("interjornada", hmm(descanso) + " entre a saída de " + chaves[idx - 1] + " e a entrada deste dia", "CLT art. 66: mínimo de 11h");
+      }
+    }
+    const meiaNoite = new Date(iso + "T00:00:00");
+    seq = anterior && Math.round((meiaNoite - anterior) / 86400000) === 1 ? seq + 1 : 1;
+    anterior = meiaNoite;
+    if (seq === CONF.seguidos + 1) add("repouso", seq + "º dia seguido de trabalho, sem repouso semanal", "CLT art. 67: 1 dia de descanso a cada 7");
+    const sem = chaveSemana(dt);
+    semanas[sem] = semanas[sem] || { min: 0, prev: 0 };
+    semanas[sem].min += min;
+    semanas[sem].prev += exp.jornadaMin;
+  });
+  Object.keys(semanas).forEach((ini) => {
+    const s = semanas[ini];
+    if (s.min - s.prev > CONF.extrasSemana) alertas.push({
+      userId, data: ini, dia: "semana de " + fmtData(ini), tipo: "semana",
+      texto: hmm(s.min - s.prev) + " além do contratual na semana (" + hmm(s.min) + " trabalhados)",
+      base: "CF art. 7º XIII e CLT art. 59: banco de horas ou pagamento como extra",
+    });
+  });
+  return alertas.sort((a, b) => (a.data < b.data ? -1 : 1));
+}
 // Distância em metros entre dois pontos (fórmula de Haversine)
 function haversineM(lat1, lon1, lat2, lon2) {
   const R = 6371000, rad = (x) => (x * Math.PI) / 180;
@@ -4228,6 +4289,40 @@ function SecaoRescisao({ usuarios, rescisoes, onCriarRescisao, onConfirmarRescis
 /* Painel do gestor: trilha de aceites. Mostra quem aceitou o codigo de conduta na
    versao vigente e quem conferiu (ou contestou) o espelho do mes fechado. As
    divergencias abertas aparecem em destaque porque exigem analise. */
+function SecaoConformidade({ usuarios, registros }) {
+  const equipe = usuarios.filter((u) => u.papel !== "gestor");
+  const comps = Array.from(new Set(registros.map((r) => compDe(new Date(r.ts))))).sort().reverse().slice(0, 6);
+  const [comp, setComp] = useState(comps[0] || compAtual());
+  const porUsuario = equipe
+    .map((u) => ({ u, itens: alertasConformidade(u.id, registros).filter((a) => mesmaComp(a.data, comp)) }))
+    .filter((x) => x.itens.length > 0);
+  const total = porUsuario.reduce((s, x) => s + x.itens.length, 0);
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>⚠ Conformidade da jornada</div>
+        <select style={{ ...S.input, width: "auto", padding: "6px 10px", fontSize: 13 }} value={comp} onChange={(e) => setComp(e.target.value)}>
+          {(comps.length ? comps : [comp]).map((c) => (<option key={c} value={c}>{rotuloComp(c)}</option>))}
+        </select>
+      </div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        {total === 0
+          ? "Nenhum ponto de atenção nas marcações de " + rotuloComp(comp) + "."
+          : total + " ponto(s) de atenção em " + rotuloComp(comp) + ", em " + porUsuario.length + " colaborador(es). Leitura das marcações à luz da CLT: serve pra corrigir escala e acertar o pagamento das extras, não bloqueia nada nem substitui o jurídico."}
+      </p>
+      {porUsuario.map(({ u, itens }) => (
+        <div key={u.id} style={{ borderTop: "1px solid #1E3450", padding: "8px 0" }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{u.nome} · {itens.length} ocorrência(s)</div>
+          {itens.map((a, i) => (
+            <div key={i} style={{ fontSize: 12, color: a.tipo === "marcacao" ? C.cinza : C.amarelo, marginTop: 4, lineHeight: 1.5 }}>
+              {a.dia} — {a.texto} <span style={{ color: C.cinza }}>({a.base})</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
 function SecaoAceites({ usuarios, aceites = [] }) {
   const equipe = usuarios.filter((u) => u.papel !== "gestor");
   const comp = compAtual();
@@ -4425,6 +4520,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
        <SecaoExames usuarios={usuarios} exames={examesOcupacionais} onCriarExame={onCriarExame} />
       <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
       <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
+      <SecaoConformidade usuarios={usuarios} registros={registros} />
       <SecaoAceites usuarios={usuarios} aceites={aceites} />
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
