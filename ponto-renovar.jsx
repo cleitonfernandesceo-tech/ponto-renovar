@@ -2006,6 +2006,17 @@ function AppInterno() {
   const [relogio, setRelogio] = useState(new Date());
   const [salvando, setSalvando] = useState(false);
   const [erroDados, setErroDados] = useState(null);
+  /* O service worker avisa quando acabou de baixar uma versao nova do app
+     (ATUALIZACAO_PRONTA). Nao recarregamos sozinhos: quem esta batendo ponto
+     nao pode ter a tela trocada no meio - quem escolhe a hora e o usuario. */
+  const [atualizacaoPronta, setAtualizacaoPronta] = useState(false);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const ouvir = (ev) => { if (ev.data && ev.data.tipo === "ATUALIZACAO_PRONTA") setAtualizacaoPronta(true); };
+    navigator.serviceWorker.addEventListener("message", ouvir);
+    return () => navigator.serviceWorker.removeEventListener("message", ouvir);
+  }, []);
+
   /* Este tick nao serve pra mostrar as horas (quem mostra e o componente do
      relogio, que se atualiza sozinho): ele so mantem frescas as contas que
      olham o "agora" durante o render. 20s em vez de 1s = 20x menos re-render. */
@@ -3049,6 +3060,13 @@ function AppInterno() {
             <div role="alert" style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: `4px solid ${aviso.tipo === "ok" ? C.verde : C.vermelho}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <div style={{ flex: 1, fontSize: 13, lineHeight: 1.55 }}>{aviso.tipo === "ok" ? "✔" : "⚠️"} {aviso.texto}</div>
               <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setAviso(null)} aria-label="Fechar aviso">Fechar</button>
+            </div>
+          )}
+          {atualizacaoPronta && (
+            <div style={{ ...S.card, marginBottom: 14, padding: 12, borderLeft: "4px solid " + C.azul, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.55 }}>Uma versão nova do app já está pronta neste aparelho.</div>
+              <button style={{ ...S.btn, padding: "6px 14px", fontSize: 12 }} onClick={() => window.location.reload()}>Atualizar agora</button>
+              <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setAtualizacaoPronta(false)} aria-label="Adiar atualização">Depois</button>
             </div>
           )}
           {carregandoSecundarios && (
