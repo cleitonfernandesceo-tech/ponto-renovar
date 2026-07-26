@@ -1778,15 +1778,21 @@ function MedidorPremio({ m }) {
    branco/fundo 16.2 · branco/card 14.8 · cinza/card 6.2 · laranja/card 6.1 · verde/card 6.9 ·
    vermelho/card 5.7 · texto escuro sobre botão laranja 7.2.
    O vermelho anterior (#E5484D) reprovava em AA (4.05 no card) — trocado por #F87171. */
-const C = { preto: "#0D1B2A", carvao: "#10233B", grafite: "#2E1D12", amarelo: "#FF7A1A", vermelho: "#F87171", verde: "#35C26E", cinza: "#8FA3BF", branco: "#F5F7FA" };
+/* Paleta. As chaves antigas seguem valendo em todas as telas: o que mudou e
+   que "grafite" deixou de ser marrom (era um tom terroso, provavel engano de
+   digitacao) e virou o azul-ardosia do tema; e entraram tokens de borda,
+   sombra e vidro pra nao ficar cor solta espalhada pelo arquivo. */
+const C = { preto: "#0D1B2A", carvao: "#10233B", grafite: "#152840", amarelo: "#FF7A1A", vermelho: "#F87171", verde: "#35C26E", cinza: "#8FA3BF", branco: "#F5F7FA", azul: "#4C9AFF", dourado: "#F5C36B", borda: "#1E3450", bordaForte: "#2A4568", vidro: "rgba(255,255,255,0.04)", sombra: "0 10px 28px rgba(0,0,0,0.30)", sombraForte: "0 18px 44px rgba(0,0,0,0.45)" };
+/* Estilos base. Mexer aqui muda o app todo de uma vez: cartao, botao e campo
+   ganharam profundidade (degrade sutil + sombra) e canto um pouco mais macio. */
 const S = {
-  app: { minHeight: "100vh", background: C.preto, color: C.branco, fontFamily: "'Inter','Segoe UI',system-ui,sans-serif" },
-  display: { fontFamily: "'Oswald','Arial Narrow',sans-serif", textTransform: "uppercase", letterSpacing: "0.04em" },
-  card: { background: C.carvao, border: "1px solid #1E3450", borderRadius: 14, padding: 20 },
-  btn: { background: C.amarelo, color: "#111", fontWeight: 700, border: "none", borderRadius: 10, padding: "12px 20px", cursor: "pointer", fontSize: 15 },
-  btnGhost: { background: "transparent", color: C.branco, border: "1px solid #2A4568", borderRadius: 10, padding: "10px 16px", cursor: "pointer" },
-  input: { background: C.grafite, border: "1px solid #2A4568", borderRadius: 10, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
-  tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, display: "inline-block" }),
+  app: { minHeight: "100vh", background: "radial-gradient(1100px 520px at 50% -8%, rgba(255,122,26,0.10), transparent 60%), radial-gradient(900px 460px at 8% 4%, rgba(76,154,255,0.07), transparent 62%), " + C.preto, color: C.branco, fontFamily: "-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif" },
+  display: { fontFamily: "'Oswald','Arial Narrow',-apple-system,'Segoe UI',system-ui,sans-serif", textTransform: "uppercase", letterSpacing: "0.02em", fontWeight: 700 },
+  card: { background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012)), " + C.carvao, border: "1px solid " + C.borda, borderRadius: 16, padding: 20, boxShadow: C.sombra },
+  btn: { background: "linear-gradient(135deg, #FF8F35, #F06A05)", color: "#141007", fontWeight: 700, border: "none", borderRadius: 12, padding: "12px 20px", cursor: "pointer", fontSize: 15, boxShadow: "0 8px 20px rgba(255,122,26,0.26)" },
+  btnGhost: { background: C.vidro, color: C.branco, border: "1px solid " + C.bordaForte, borderRadius: 12, padding: "10px 16px", cursor: "pointer" },
+  input: { background: C.grafite, border: "1px solid " + C.bordaForte, borderRadius: 12, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
+  tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, letterSpacing: "0.03em", display: "inline-block" }),
 };
 
 const Badge = ({ st }) => {
@@ -2000,7 +2006,10 @@ function AppInterno() {
   const [relogio, setRelogio] = useState(new Date());
   const [salvando, setSalvando] = useState(false);
   const [erroDados, setErroDados] = useState(null);
-  useEffect(() => { const t = setInterval(() => setRelogio(new Date()), 1000); return () => clearInterval(t); }, []);
+  /* Este tick nao serve pra mostrar as horas (quem mostra e o componente do
+     relogio, que se atualiza sozinho): ele so mantem frescas as contas que
+     olham o "agora" durante o render. 20s em vez de 1s = 20x menos re-render. */
+  useEffect(() => { const t = setInterval(() => setRelogio(new Date()), 20000); return () => clearInterval(t); }, []);
 
   const log = (acao, detalhe) => {
     setLogs(l => [{ ts: iso(new Date()), userId: user?.id || "anon", acao, detalhe }, ...l]);
@@ -3329,6 +3338,24 @@ function Login({ onSupabase, onDemo, onReset }) {
   );
 }
 
+/* Relogio com vida propria. Antes o horario ficava no estado do topo do app,
+   entao o app INTEIRO era redesenhado 1x por segundo - em celular fraco e isso
+   que da a sensacao de travamento. Agora so este pedacinho pisca a cada
+   segundo; o resto da tela redesenha a cada 20 segundos. */
+function RelogioVivo() {
+  const [agora, setAgora] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setAgora(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <>
+      <div style={{ ...S.display, fontSize: 64, color: C.amarelo, lineHeight: 1 }}>{agora.toLocaleTimeString("pt-BR")}</div>
+      <div style={{ color: C.cinza, marginTop: 6 }}>{agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+    </>
+  );
+}
+
 function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao }) {
   // Trava anti-duplicidade: 60s de espera após uma batida (evita duplo toque e registro repetido)
   const ultima = registros.filter(r => r.userId === user.id).reduce((m, r) => Math.max(m, new Date(r.ts).getTime()), 0);
@@ -3418,8 +3445,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       )}
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginTop: 18 }}>
         <div style={{ ...S.card, textAlign: "center", padding: 34 }}>
-          <div style={{ ...S.display, fontSize: 64, color: C.amarelo, lineHeight: 1 }}>{relogio.toLocaleTimeString("pt-BR")}</div>
-          <div style={{ color: C.cinza, marginTop: 6 }}>{relogio.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+          <RelogioVivo />
           {!fluxoPonto && <button style={{ ...S.btn, marginTop: 24, fontSize: 18, padding: "16px 34px", opacity: batidaRecente ? 0.5 : 1 }} disabled={!!batidaRecente} onClick={iniciarBatida} aria-label={batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `Registrar ${proxTipo} agora`}>
             {batidaRecente ? `Aguarde ${batidaRecente}s` : `Registrar ${proxTipo}`}
           </button>}
