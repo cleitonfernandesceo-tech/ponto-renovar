@@ -11271,18 +11271,19 @@ window.__APP_VERSAO = '2026.07.25-2';
     }
     var x = document.createElement('button');
     x.type = 'button';
-    x.textContent = 'Agora nao';
+    x.textContent = 'Agora não';
     x.style.cssText = 'background:transparent;color:#9FB3C8;border:1px solid rgba(245,247,250,.22);border-radius:8px;padding:9px 12px;font:14px system-ui;cursor:pointer';
     x.onclick = function () { dispensar(); d.remove(); };
     d.appendChild(x);
     document.body.appendChild(d);
+    setTimeout(function () { if (d.isConnected) d.remove(); }, 20000); // nao fica atrapalhando a tela
   }
 
   var promptAndroid = null;
   window.addEventListener('beforeinstallprompt', function (ev) {
     ev.preventDefault();
     promptAndroid = ev;
-    barra('Instale o Ponto Renovar na tela inicial: abre mais rapido e funciona com internet ruim.', 'Instalar', function () {
+    barra('Instale o Ponto Renovar na tela inicial: abre mais rápido e funciona com internet ruim.', 'Instalar', function () {
       dispensar();
       promptAndroid.prompt();
     });
@@ -11294,7 +11295,7 @@ window.__APP_VERSAO = '2026.07.25-2';
   if (ehIOS && !instalado) {
     window.addEventListener('load', function () {
       setTimeout(function () {
-        barra('Para bater ponto mais rapido: toque em Compartilhar e depois em "Adicionar a Tela de Inicio".', null, null);
+        barra('Para bater ponto mais rápido: toque em Compartilhar e depois em "Adicionar à Tela de Início".', null, null);
       }, 4000);
     });
   }
