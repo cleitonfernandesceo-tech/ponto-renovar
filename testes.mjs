@@ -279,9 +279,20 @@ t("o service worker reage ao toque no aviso e foca a aba aberta",
   /addEventListener\('notificationclick'/.test(swTxt) && /clients\.matchAll/.test(swTxt) && /clients\.openWindow/.test(swTxt));
 t("a legenda do lembrete muda conforme a permissão (4 situações)",
   ["granted", "denied", "unsupported", "return \"toque em Ativar"].every((c) => blocoNotif.includes(c)));
-t("o aviso de transparência explica a condição do iPhone e nega push de servidor",
-  /Lembretes de batida<\/b> viram aviso do celular/.test(src) &&
-  /tela de in\u00edcio|tela de início/.test(src) && /não são push de servidor/.test(src));
+t("o aviso de transparência explica a condição do iPhone e aponta o push de servidor",
+  src.includes("Lembretes de batida</b> viram aviso do celular") &&
+  src.includes("tela de início") && src.includes("push de servidor (Supabase + chaves VAPID)"));
+t("o service worker mostra o aviso que chega do servidor (app fechado)",
+  swTxt.includes("addEventListener('push'") && swTxt.includes("registration.showNotification"));
+t("o app inscreve o aparelho no push com a chave VAPID publica",
+  src.includes('const VAPID_PUBLICA = "B') && src.includes("async function registrarPush") &&
+  src.includes("pushManager.subscribe") && src.includes('sbUpsert(token, "push_inscricoes"'));
+t("a inscricao do push respeita demonstracao, sessao e permissao",
+  src.includes('if (demo) return "demo"') && src.includes('if (!token || !uid) return "sem-sessao"') &&
+  src.includes('Notification.permission !== "granted"'));
+t("index.html leva a mesma chave VAPID publica do jsx",
+  (src.match(/VAPID_PUBLICA = "([^"]+)"/) || [])[1] === (htmlPub.match(/VAPID_PUBLICA = "([^"]+)"/) || [])[1]);
+
 t("o app detecta se está instalado sem quebrar fora do navegador",
   /function appInstalado/.test(blocoNotif) && /display-mode: standalone/.test(blocoNotif));
 t("o manifest declara atalhos de acesso rápido", Array.isArray(manifest?.shortcuts) && manifest.shortcuts.length >= 2);
