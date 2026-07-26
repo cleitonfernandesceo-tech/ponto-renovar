@@ -9111,14 +9111,7 @@ function TelaGestor({
       fontSize: 14,
       color: C.amarelo
     }
-  }, "\u26A0\uFE0F Como funcionam os lembretes e a sa\xEDda autom\xE1tica"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12.5,
-      color: C.branco,
-      margin: "8px 0 0",
-      lineHeight: 1.6
-    }
-  }, "Este app roda 100% no navegador do colaborador, ", /*#__PURE__*/React.createElement("b", null, "sem servidor pr\xF3prio rodando o tempo todo"), ". Por isso:"), /*#__PURE__*/React.createElement("ul", {
+  }, "\u26A0\uFE0F Limites e transpar\xEAncia do sistema"), /*#__PURE__*/React.createElement("ul", {
     style: {
       fontSize: 12.5,
       color: C.branco,
@@ -9126,48 +9119,14 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada contratual de 9h/dia:"), " 8h \xE0s 18h com 1 hora de intervalo (seg-sex) + s\xE1bado de 5h = ", /*#__PURE__*/React.createElement("b", null, "50h semanais"), ". O dia normal fecha em zero no banco de horas; s\xF3 sobra saldo quem sai depois das 18h. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h semanais \u2014 as 6h excedentes precisam estar cobertas por acordo de compensa\xE7\xE3o/banco de horas ou pagas como extraordin\xE1rias. Vale confirmar o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de bater ponto (8h/9h e almo\xE7o):"), " s\xF3 disparam ", /*#__PURE__*/React.createElement("b", null, "enquanto o colaborador estiver com o app aberto"), " no navegador. Se o app estiver fechado no hor\xE1rio, o lembrete daquele momento n\xE3o aparece (e n\xE3o vira notifica\xE7\xE3o push de celular)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Batida autom\xE1tica de sa\xEDda (fecha o dia \xE0s 18h/13h se esqueceram de bater):"), " depende de uma rotina agendada ", /*#__PURE__*/React.createElement("b", null, "no banco de dados (Supabase/pg_cron)"), ", que roda independente do navegador. Se esse agendamento estiver ativo no backend, funciona sozinho; se n\xE3o, a sa\xEDda n\xE3o ser\xE1 preenchida automaticamente. Confirme com quem administra o banco se o agendamento das 23h est\xE1 ligado.")), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11.5,
-      color: C.cinza,
-      margin: "8px 0 0"
-    }
-  }, "Recomenda\xE7\xE3o: oriente a equipe a manter o app aberto no expediente \u2014 os lembretes s\xE3o apoio, a responsabilidade de bater o ponto \xE9 do colaborador.")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.card,
-      marginTop: 14,
-      borderLeft: `4px solid ${C.amarelo}`,
-      padding: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.display,
-      fontSize: 14,
-      color: C.amarelo
-    }
-  }, "\u26A0\uFE0F O que a biometria do celular comprova (e o que N\xC3O comprova)"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12.5,
-      color: C.branco,
-      margin: "8px 0 0",
-      lineHeight: 1.6
-    }
-  }, "A verifica\xE7\xE3o usa ", /*#__PURE__*/React.createElement("b", null, "WebAuthn"), " com o Face ID / digital do aparelho do colaborador. \xC9 importante entender o alcance real dessa tecnologia:"), /*#__PURE__*/React.createElement("ul", {
-    style: {
-      fontSize: 12.5,
-      color: C.branco,
-      margin: "8px 0 0",
-      paddingLeft: 18,
-      lineHeight: 1.6
-    }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que comprova:"), " que quem bateu o ponto ", /*#__PURE__*/React.createElement("b", null, "tem o aparelho cadastrado em m\xE3os"), " e passou pela checagem biom\xE9trica configurada ", /*#__PURE__*/React.createElement("b", null, "naquele aparelho"), "."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "O que N\xC3O comprova:"), " n\xE3o \xE9 reconhecimento facial contra uma foto de refer\xEAncia da empresa. O celular apenas responde \"a biometria cadastrada neste aparelho foi reconhecida\" \u2014 ent\xE3o ", /*#__PURE__*/React.createElement("b", null, "qualquer pessoa cujo rosto ou digital esteja cadastrado naquele celular"), " (um familiar no Face ID alternativo, uma digital adicional) ", /*#__PURE__*/React.createElement("b", null, "conseguiria bater o ponto"), ". O sistema n\xE3o distingue."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Valida\xE7\xE3o criptogr\xE1fica: feita no servidor \u2714"), " \u2014 a assinatura devolvida pelo aparelho \xE9 conferida por uma fun\xE7\xE3o no servidor (Supabase Edge Function) antes de a marca\xE7\xE3o ser gravada: desafio de uso \xFAnico gerado no backend (impede replay), confer\xEAncia de origem e dom\xEDnio, exig\xEAncia do flag de verifica\xE7\xE3o biom\xE9trica, valida\xE7\xE3o da assinatura contra a chave p\xFAblica cadastrada e checagem do contador do autenticador (detecta clonagem de credencial).")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 9h/dia"), " (8h \xE0s 18h com 1h de intervalo) + s\xE1bado de 5h = 50h semanais. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h \u2014 as 6h excedentes precisam de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " s\xF3 disparam com o app aberto no navegador \u2014 n\xE3o s\xE3o notifica\xE7\xF5es push de celular."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h/13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
       margin: "8px 0 0",
       lineHeight: 1.5
     }
-  }, "Como mitigar a limita\xE7\xE3o que resta: combine a biometria com a ", /*#__PURE__*/React.createElement("b", null, "cerca geogr\xE1fica"), " (j\xE1 ativa) e oriente a equipe a n\xE3o cadastrar terceiros no Face ID/digital do aparelho usado pro ponto \u2014 de prefer\xEAncia, registre isso no regulamento interno. Marca\xE7\xF5es feitas ", /*#__PURE__*/React.createElement("b", null, "sem"), " verifica\xE7\xE3o biom\xE9trica aparecem sinalizadas no espelho e na trilha de auditoria.")), /*#__PURE__*/React.createElement("div", {
+  }, "Mitiga\xE7\xE3o: cerca geogr\xE1fica (ativa) + regra no regulamento interno proibindo cadastrar terceiros no aparelho usado pro ponto. Batidas sem verifica\xE7\xE3o ficam sinalizadas (\u26A0) no espelho e na trilha de auditoria.")), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16
