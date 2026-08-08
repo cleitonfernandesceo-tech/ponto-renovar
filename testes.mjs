@@ -40,7 +40,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF,
   agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial,
   custoDaEquipe, REGIMES_EMPRESA, STATUS_CANDIDATO, TIPOS_DOCUMENTO, DOCS_ADMISSAO, STATUS_EXAME,
-  sortearAnjos, anjoPeriodoPadrao, ANJO_DIAS_PADRAO };`;
+  sortearAnjos, anjoPeriodoPadrao, ANJO_DIAS_PADRAO,
+  numerosDoMes, compAnterior, compExtenso, ataNova, participantesDoDia, combinadosDaReuniao };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -592,6 +593,84 @@ t("a rodada padrao do anjo dura duas semanas",
 t("o README explica os rituais novos",
   leia("README.md").includes("### Mural, elogios, o que me motiva e a dinamica do anjo") &&
   leia("README.md").includes("anjo_par"));
+
+// ══════════════════════════════════════════════════════════════════
+secao("Retrospectiva com numeros reais e ata automatica");
+const usrN = [{ id: "u1", nome: "Ana" }, { id: "u2", nome: "Bia" }, { id: "u3", nome: "Caio", ativo: false }];
+const regN = [
+  { userId: "u1", tipo: "entrada", ts: "2026-03-02T08:00:00" },
+  { userId: "u1", tipo: "saida",   ts: "2026-03-02T18:00:00" },
+  { userId: "u2", tipo: "entrada", ts: "2026-03-02T08:00:00" },
+  { userId: "u2", tipo: "saida",   ts: "2026-03-02T18:00:00" },
+  { userId: "u3", tipo: "entrada", ts: "2026-03-02T08:00:00" },
+  { userId: "u3", tipo: "saida",   ts: "2026-03-02T18:00:00" },
+  { userId: "u1", tipo: "entrada", ts: "2026-04-06T08:00:00" },
+  { userId: "u1", tipo: "saida",   ts: "2026-04-06T18:00:00" },
+];
+const acoN = [
+  { texto: "a", origem: "Planejamento da semana", criadoEm: "2026-03-02T10:00:00", feito: true,  feitoEm: "2026-03-05T10:00:00" },
+  { texto: "b", origem: "Planejamento da semana", criadoEm: "2026-03-02T10:00:00", feito: false, feitoEm: "" },
+  { texto: "c", origem: "Retrospectiva do mês",   criadoEm: "2026-04-01T10:00:00", feito: false, feitoEm: "" },
+];
+m.setFeriadosGlobal([]);
+const nMar = m.numerosDoMes(usrN, regN, [], acoN, "2026-03");
+
+t("o mes anterior vira certo, inclusive na virada de ano",
+  m.compAnterior("2026-01") === "2025-12" && m.compAnterior("2026-08") === "2026-07");
+t("o mes aparece por extenso na tela da reuniao",
+  m.compExtenso("2026-08") === "agosto de 2026" && m.compExtenso("2025-12") === "dezembro de 2025");
+t("quem esta inativo nao entra na conta do time",
+  nMar.pessoas === 2 && nMar.diasTrab === 2);
+t("o painel conta o que foi combinado e o que fechou no mes",
+  nMar.combCriados === 2 && nMar.combFeitos === 1 && nMar.combFechamentoPct === 50);
+t("o que segue aberto conta de qualquer mes, nao so do mes escolhido",
+  nMar.combAbertos === 2);
+t("mes sem marcacao avisa que esta vazio em vez de mostrar zeros",
+  m.numerosDoMes(usrN, regN, [], acoN, "2026-12").vazio === true && nMar.vazio === false);
+t("registro de outro mes nao vaza pro mes analisado",
+  m.numerosDoMes(usrN, regN, [], acoN, "2026-04").diasTrab === 1);
+t("as horas somam o time e descontam o intervalo",
+  nMar.trabalhadoMin === 1200 && nMar.saldoMin === 0 && nMar.pontualidadePct === 100);
+// Invariante de privacidade: se um dia alguem tentar devolver a lista de quem
+// atrasou junto com os numeros, este teste quebra antes de ir pro ar.
+t("o painel coletivo nunca devolve lista de pessoa nenhuma",
+  Object.keys(nMar).every((k) => typeof nMar[k] !== "object"));
+t("participante da ata sai do ponto do dia e ignora quem esta inativo",
+  m.participantesDoDia(usrN, regN, "2026-03-02").join(",") === "Ana,Bia" &&
+  m.participantesDoDia(usrN, regN, "2026-04-06").join(",") === "Ana" &&
+  m.participantesDoDia(usrN, regN, "2026-05-01").length === 0);
+t("a ata so recolhe o combinado que nasceu naquela reuniao",
+  m.combinadosDaReuniao(acoN, "Planejamento da semana", "2026-03-02").length === 2 &&
+  m.combinadosDaReuniao(acoN, "Planejamento da semana", "2026-04-06").length === 0 &&
+  m.combinadosDaReuniao(acoN, "Retrospectiva do mês", "2026-04-01").length === 1);
+const ataT = m.ataNova({ id: "mensal", nome: "Retrospectiva do mês" }, "2026-03-31",
+  ["Ana", "Bia"], acoN.slice(0, 2), null, "Ana", "u1");
+t("a ata guarda ritual, dia, quem estava e os combinados",
+  ataT.ritualId === "mensal" && ataT.data === "2026-03-31" &&
+  ataT.participantes.length === 2 && ataT.combinados.length === 2 &&
+  ataT.combinados[0].texto === "a");
+t("o bloco de numeros da retrospectiva tem painel proprio",
+  src.includes('bloco.tipo === "numeros" ? <PainelNumerosMes'));
+t("o bloco de elogios da retrospectiva abre o campo de elogio",
+  src.includes('bloco.tipo === "elogios" ? <FormElogioReuniao'));
+t("a tela do painel nao lista nome de colaborador",
+  !/usuarios\.map|\.nome/.test(src.slice(src.indexOf("function PainelNumerosMes"), src.indexOf("function FormElogioReuniao"))));
+t("a tela explica por que o numero e do time e nao da pessoa",
+  src.includes("retrospectiva com nome no telão vira tribunal"));
+t("encerrar a reuniao deixa claro que nao e controle de presenca",
+  src.includes("Não é chamada de reunião"));
+t("o SQL cria a tabela de atas com RLS ligada",
+  /create table if not exists public\.atas/.test(sqlBloco) &&
+  /alter table public\.atas enable row level security/.test(sqlBloco));
+t("a ata entra no diagnostico de tabelas do gestor", /\{ nome: "atas"/.test(src));
+t("sem a tabela a ata cai pro aparelho em vez de quebrar a tela",
+  src.includes("atasNoBanco: false") && src.includes("atasLer(perfil.id)"));
+t("o app nunca apaga ata", !/sbDelete\([^,]*,\s*"atas"/.test(src));
+t("ata e numero do mes nao entram na gamificacao nem no premio",
+  !/rit\.atas|atasBaixar|numerosDoMes/.test(src.slice(src.indexOf("function calcularGamificacao"), src.indexOf("function calcularBadges"))));
+t("o README explica os numeros da retrospectiva e a ata",
+  leia("README.md").includes("### Numeros da retrospectiva e ata automatica") &&
+  leia("README.md").includes("sai time, nao sai pessoa"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
