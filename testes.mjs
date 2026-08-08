@@ -43,7 +43,9 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   sortearAnjos, anjoPeriodoPadrao, ANJO_DIAS_PADRAO,
   numerosDoMes, compAnterior, compExtenso, ataNova, participantesDoDia, combinadosDaReuniao,
   mapResposta, respostasDoDia, respostaVazia, impedimentosDoDia, combinadosNaPauta,
-  assuntosDaReuniao, textoAvisoReuniao, acoesAbertas };`;
+  assuntosDaReuniao, textoAvisoReuniao, acoesAbertas,
+  chaveAutorResposta, reuniaoAnteriorDoRitual, ocorrenciaRitualAteHoje, impedimentosTravados,
+  impedimentosComHistorico, acompanhamentoCombinados, RITUAIS, ritualPorId, reunioesDoDia };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -706,8 +708,8 @@ t("combinado vencido e do dia entram na pauta, feito e futuro nao",
   m.combinadosNaPauta(acoesT, "2026-08-10").length === 2);
 t("combinado sem prazo nao vira pauta de vencimento",
   !m.combinadosNaPauta(acoesT, "2026-08-10").some((a) => a.id === "a5"));
-t("os assuntos previstos contam ajuda e vencimento",
-  m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10").join(" | ") === "1 pedido de ajuda | 2 combinados vencendo");
+t("os assuntos previstos contam ajuda, repeticao e vencimento",
+  m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10").join(" | ") === "1 pedido de ajuda | 1 repetido da reunião passada | 2 combinados vencendo");
 t("sem nada na mesa o app nao inventa assunto",
   m.assuntosDaReuniao(ritT, [], [], "2026-08-10").length === 0);
 t("o aviso do celular NAO leva o texto do impedimento nem nome de ninguem",
@@ -719,7 +721,11 @@ t("o aviso continua dizendo nome, hora e pauta da reuniao",
   m.textoAvisoReuniao(ritT, "amanhã").includes("Metas da semana"));
 t("o aviso soma os assuntos quando existem",
   m.textoAvisoReuniao(ritT, "amanhã", m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10"))
-    .includes("Já na mesa: 1 pedido de ajuda e 2 combinados vencendo."));
+    .includes("Já na mesa: 1 pedido de ajuda, 1 repetido da reunião passada e 2 combinados vencendo."));
+t("com dois assuntos o aviso ainda usa so o e",
+  m.textoAvisoReuniao(ritT, "amanhã", ["a", "b"]).includes("Já na mesa: a e b."));
+t("com um assunto o aviso nao inventa conjuncao",
+  m.textoAvisoReuniao(ritT, "amanhã", ["a"]).includes("Já na mesa: a."));
 t("o aviso sem assuntos nao ganha frase vazia",
   !m.textoAvisoReuniao(ritT, "hoje", []).includes("Já na mesa") &&
   !m.textoAvisoReuniao(ritT, "hoje").includes("Já na mesa"));
@@ -756,6 +762,81 @@ t("a media de energia continua sendo so da propria pessoa",
 t("o README explica as tres perguntas no banco e o limite do aviso",
   leia("README.md").includes("### As tres perguntas do time e a pauta real") &&
   leia("README.md").includes("respostas"));
+
+// ══════════════════════════════════════════════════════════════════
+secao("Impedimento que nao anda e acompanhamento do time");
+const ritS = m.ritualPorId("semanal");
+const ritQ = m.ritualPorId("quinzenal");
+t("acha a reuniao anterior do mesmo ritual",
+  m.reuniaoAnteriorDoRitual("semanal", "2026-08-10") === "2026-08-03", "segunda anterior");
+t("o quinzenal pula uma semana, nao volta para a segunda passada",
+  m.reuniaoAnteriorDoRitual("quinzenal", "2026-08-17") === "2026-08-03");
+t("ritual que nao existe nao tem reuniao anterior",
+  m.reuniaoAnteriorDoRitual("inventado", "2026-08-10") === "");
+t("data vazia ou nula nao explode",
+  m.reuniaoAnteriorDoRitual("semanal", "") === "" && m.reuniaoAnteriorDoRitual("semanal", null) === "");
+t("no dia da reuniao a ocorrencia a olhar e hoje",
+  m.ocorrenciaRitualAteHoje("semanal", "2026-08-10") === "2026-08-10");
+t("em dia sem reuniao o app olha a ultima que houve",
+  m.ocorrenciaRitualAteHoje("semanal", "2026-08-12") === "2026-08-10", "quarta olha a segunda");
+t("pedido de ajuda repetido pela mesma pessoa vira travado",
+  m.impedimentosTravados(respT, "semanal", "2026-08-10").length === 1);
+t("o travado guarda o texto da reuniao passada e o dia",
+  m.impedimentosTravados(respT, "semanal", "2026-08-10")[0].anterior === "z" &&
+  m.impedimentosTravados(respT, "semanal", "2026-08-10")[0].desde === "2026-08-03");
+t("quem pediu ajuda pela primeira vez NAO aparece como travado",
+  !m.impedimentosTravados(respT, "semanal", "2026-08-10").some((x) => x.autor === "Rafael"));
+t("sem reuniao anterior com pedido nao existe travado",
+  m.impedimentosTravados(respT, "semanal", "2026-08-03").length === 0);
+t("lista vazia ou nula de respostas nao explode",
+  m.impedimentosTravados([], "semanal", "2026-08-10").length === 0 &&
+  m.impedimentosTravados(null, "semanal", "2026-08-10").length === 0);
+t("o painel do dia diz quem esta repetindo o pedido",
+  m.impedimentosComHistorico(respT, "semanal", "2026-08-10").length === 1 &&
+  m.impedimentosComHistorico(respT, "semanal", "2026-08-10")[0].travado === true);
+t("na primeira vez o painel nao marca repeticao",
+  m.impedimentosComHistorico(respT, "semanal", "2026-08-03")[0].travado === false);
+t("o impedimento leva o id de quem pediu, pra casar com o historico",
+  m.impedimentosDoDia(respT, "2026-08-10", "semanal")[0].autorId === "u2");
+const acomp = m.acompanhamentoCombinados(acoesT, respT, "2026-08-10");
+t("o acompanhamento conta os combinados em aberto", acomp.abertos === 4);
+t("separa o que vence hoje do que ja venceu",
+  acomp.vencemHoje === 1 && acomp.atrasados === 1);
+t("conta combinado sem prazo e sem dono", acomp.semPrazo === 1 && acomp.semDono === 1);
+t("diz ha quantos dias o prazo mais antigo estourou", acomp.atrasoMaiorDias === 1);
+t("soma os pedidos de ajuda repetidos de todos os rituais", acomp.travados === 1);
+t("o acompanhamento NAO devolve nome de ninguem",
+  JSON.stringify(acomp).indexOf("Marina") < 0 && JSON.stringify(acomp).indexOf("Rafael") < 0,
+  "numero de time, nunca placar por pessoa");
+t("time sem combinado e sem repeticao fica marcado como vazio",
+  m.acompanhamentoCombinados([], [], "2026-08-10").vazio === true);
+t("entrada nula no acompanhamento nao explode",
+  m.acompanhamentoCombinados(null, null, "2026-08-10").abertos === 0);
+t("data ruim no acompanhamento nao gera atraso negativo",
+  m.acompanhamentoCombinados(acoesT, respT, "").atrasoMaiorDias === 0);
+t("a ata marca o pedido que ja vinha da reuniao anterior",
+  m.ataNova(ritS, "2026-08-10", ["Marina"], [], null, "Cleiton", "u1",
+    m.respostasDoDia(respT, "2026-08-10", "semanal").map((x) => ({ ...x, travado: x.autorId === "u2" })))
+    .respostas.filter((x) => x.travado).length === 1);
+t("resposta sem marca fica false na ata, nao undefined",
+  m.ataNova(ritS, "2026-08-10", [], [], null, "C", "u1", [{ autor: "X", impedimento: "y" }])
+    .respostas[0].travado === false);
+t("o quinzenal tambem entra na conta de repetidos",
+  Array.isArray(m.impedimentosTravados(respT, ritQ.id, "2026-08-17")));
+t("o painel de dependencias oferece virar combinado",
+  src.includes("Virar combinado") && src.includes("onVirarCombinado"));
+t("o texto do repetido fala de decisao, nao de esforco",
+  src.includes("quase nunca é falta de esforço de quem pediu"));
+t("o painel do gestor avisa que nao serve para cobrar ninguem",
+  src.includes("Acompanhamento dos combinados") &&
+  src.includes("não para cobrar alguém"));
+t("o painel do gestor nao monta contagem por pessoa",
+  !/acompanhamentoCombinados\([^)]*\)\s*\.\s*filter/.test(src));
+t("o comentario do armazenamento local deixou de mentir",
+  !src.includes("Nesta primeira versão nada disso vai para o banco") &&
+  src.includes("A nota de ânimo continua fora do banco de propósito"));
+t("o README explica o pedido de ajuda que se repete",
+  leia("README.md").includes("### Pedido de ajuda que se repete"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

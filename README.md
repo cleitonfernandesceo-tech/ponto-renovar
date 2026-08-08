@@ -709,6 +709,52 @@ tabela. Ela fica no aparelho de quem deu a nota, e a media mensal so aparece par
 a propria pessoa. Animo virando historico consultavel pela lideranca muda a nota
 que a pessoa da, nao o animo dela.
 
+### Pedido de ajuda que se repete
+
+Perguntar "tem impedimento?" toda semana e facil. O que corroi um time e o
+impedimento que a pessoa repete na reuniao seguinte e ninguem move. O app compara
+a resposta de hoje com a da ocorrencia anterior do MESMO ritual (a segunda
+passada, no semanal; a de 15 dias atras, no quinzenal) e, quando a mesma pessoa
+pede ajuda duas vezes seguidas, marca o assunto como travado.
+
+A comparacao e por pessoa, e nao por texto, de proposito ~  quem esta travado
+raramente descreve o problema com as mesmas palavras duas vezes.
+
+O que aparece na tela:
+
+- No bloco "Dependencias", uma faixa vermelha antes da lista, dizendo que o
+  pedido voltou sem sair do lugar e que isso quase nunca e falta de esforco de
+  quem pediu ~  costuma ser decisao que ninguem tomou, prioridade que ninguem
+  trocou ou acesso que ninguem liberou.
+- Em cada pedido repetido, a data em que ele apareceu pela primeira vez e o texto
+  da reuniao passada, quando foi escrito diferente.
+- Um botao **Virar combinado** que joga o texto do pedido dentro do formulario de
+  combinado. O DONO nao vem preenchido de proposito ~  quem pediu ajuda quase nunca
+  e quem consegue destravar.
+- Na ata automatica, o pedido repetido sai marcado. Sem isso a ata de cada mes
+  faz o mesmo travamento parecer novidade. Isso NAO exigiu coluna nova no banco ~ 
+  a marca vai dentro do campo `respostas` da ata, que ja e `jsonb`.
+- Nos dois avisos de reuniao, o repetido entra como assunto separado ("1 pedido de
+  ajuda, 1 repetido da reuniao passada e 2 combinados vencendo"). Continua sendo
+  so contagem, sem nome e sem texto.
+
+### Acompanhamento dos combinados (painel do gestor)
+
+O painel do gestor ganhou um bloco com os numeros do time ~  combinados em aberto,
+quantos vencem hoje, quantos ja venceram, ha quantos dias o prazo mais antigo
+estourou, quantos estao sem dono ou sem prazo e quantos pedidos de ajuda se
+repetiram.
+
+Tudo ali e numero do time inteiro. Nao tem nome, nao tem ranking e nao tem
+contagem por pessoa, e isso e uma decisao de projeto, nao uma limitacao ~  placar
+de tarefa atrasada por pessoa e o caminho mais curto para o time parar de pedir
+ajuda em voz alta. Quem ficou com o que continua visivel apenas no roteiro, onde
+o proprio time olha junto.
+
+O bloco tambem manda ler o numero de repetidos antes dos outros, porque e o unico
+numero da tela que aponta para uma decisao do gestor e nao para o esforco de quem
+executa.
+
 ### Aviso de reuniao com o app fechado
 
 O codigo da funcao mora em `supabase/functions/lembretes-push/index.ts` - e a
