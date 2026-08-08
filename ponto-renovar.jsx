@@ -3858,6 +3858,20 @@ function CartaoMomento({ nome, doDia }) {
 
 /* Hidratacao e pausa. Contador do dia guardado SO no aparelho; o aviso do
    celular sai do proprio app e nada disso chega ao gestor nem ao servidor. */
+/* ================= Detalhe recolhido =================
+   Aviso legal e explicacao longa nao podem sumir: protegem a empresa e
+   informam quem quiser ler. Mas nao precisam gritar em toda abertura de
+   tela. Ficam atras de um toque, no <details> nativo do HTML - acessivel,
+   sem estado, funciona com teclado e ate com JS quebrado. */
+function Detalhes({ titulo, children }) {
+  return (
+    <details className="pr-detalhes">
+      <summary>{titulo}</summary>
+      <div className="pr-detalhes-corpo">{children}</div>
+    </details>
+  );
+}
+
 function CartaoBemEstar({ userId }) {
   const [meta, setMeta] = useState(() => aguaLerMeta(userId));
   const [copos, setCopos] = useState(() => aguaLer(userId));
@@ -3879,14 +3893,18 @@ function CartaoBemEstar({ userId }) {
   const esperado = hr <= 8 ? 0 : Math.min(meta, Math.round(((hr - 8) / 10) * meta));
   const atrasado = copos < esperado;
   const pct = meta > 0 ? Math.min(100, (copos / meta) * 100) : 0;
-  const dica = fraseDoDia(DICAS_PAUSA, String(userId) + "|dica", new Date());
+  /* Nada de texto embaixo da barra: o cartao inteiro se explica pelos copos. */
   return (
     <div className="pr-relevo" style={{ ...S.card, padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <div style={{ ...S.display, fontSize: 14, color: C.agua }}>💧 Hidratação de hoje</div>
-        <div style={{ fontSize: 11, color: C.cinza }}>{copos * AGUA_COPO_ML} ml de {meta * AGUA_COPO_ML} ml</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }} title="Meta de copos por dia">
+          <button style={{ ...S.btnGhost, padding: "1px 9px", fontSize: 14, lineHeight: 1.5 }} aria-label="Diminuir a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta - 1))}>−</button>
+          <span style={{ fontSize: 11, color: C.cinza, minWidth: 62, textAlign: "center" }}>meta {meta} copos</span>
+          <button style={{ ...S.btnGhost, padding: "1px 9px", fontSize: 14, lineHeight: 1.5 }} aria-label="Aumentar a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta + 1))}>+</button>
+        </div>
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 14 }}>
         {Array.from({ length: meta }, (_, i) => (
           <button key={i} className="pr-copo" aria-pressed={i < copos} aria-label={`Marcar ${i + 1} copo(s) de \u00e1gua`}
             onClick={() => setCopos(aguaGravar(userId, i < copos ? i : i + 1))}
@@ -3895,23 +3913,10 @@ function CartaoBemEstar({ userId }) {
               boxShadow: i < copos ? "inset 0 1px 0 rgba(255,255,255,0.55), 0 8px 16px -8px rgba(56,189,248,0.85)" : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -2px 6px rgba(0,0,0,0.35)" }} />
         ))}
       </div>
-      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 999, height: 7, marginTop: 12, overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.55)" }}>
+      <div style={{ textAlign: "right", fontSize: 11, color: atrasado ? C.agua : C.cinza, marginTop: 12 }}>{copos * AGUA_COPO_ML} / {meta * AGUA_COPO_ML} ml</div>
+      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 999, height: 7, marginTop: 6, overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.55)" }}>
         <div style={{ width: pct + "%", height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #0EA5E9, " + C.agua + ")", boxShadow: "0 0 14px rgba(56,189,248,0.65)" }} />
       </div>
-      <p style={{ fontSize: 12.5, color: atrasado ? C.agua : C.cinza, margin: "10px 0 0", lineHeight: 1.55 }}>
-        {copos >= meta ? "Meta do dia fechada. \uD83D\uDC4F" : atrasado ? "Faz um tempo desde o \u00faltimo copo \u2014 bora?" : "No ritmo. Pr\u00f3ximo copo em at\u00e9 " + AGUA_INTERVALO_MIN + " min."}
-      </p>
-      <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.55 }}>🧘 {dica}</p>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: C.cinza }}>Meta</span>
-        <button style={{ ...S.btnGhost, padding: "4px 11px", fontSize: 13 }} aria-label="Diminuir a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta - 1))}>−</button>
-        <b style={{ fontSize: 13 }}>{meta}</b>
-        <button style={{ ...S.btnGhost, padding: "4px 11px", fontSize: 13 }} aria-label="Aumentar a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta + 1))}>+</button>
-        <span style={{ fontSize: 10.5, color: C.cinza }}>copos de {AGUA_COPO_ML} ml</span>
-      </div>
-      <p style={{ fontSize: 10.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
-        Fica só neste aparelho: o gestor não vê nada disso e nada vai pro servidor. Não é orientação médica — quem tem restrição de líquidos segue o próprio médico.
-      </p>
     </div>
   );
 }
@@ -4033,9 +4038,11 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
             : !appInstalado() && <span style={{ fontSize: 12, color: C.cinza }}>🔔 Para receber aviso do celular, adicione o app à tela de início.</span>}
         </div>
       )}
-      <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0" }}>
-        ⏰ Lembretes de entrada e almoço: {legendaLembretes(notifStatus, appInstalado())}
-      </p>
+      {(notifStatus === "denied" || notifStatus === "unsupported") && (
+        <p style={{ fontSize: 11, color: C.cinza, margin: "8px 0 0" }}>
+          ⏰ {legendaLembretes(notifStatus, appInstalado())}
+        </p>
+      )}
       {bloqueioGeo && (
         <div role="alert" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: `4px solid ${C.vermelho}`, textAlign: "left" }}>
           <div style={{ ...S.display, fontSize: 15, color: C.vermelho }}>📍 {bloqueioGeo.titulo || "Localização indisponível"}</div>
@@ -4219,7 +4226,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
           return (
             <div style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>
               {marcas.length > 0 && <p style={{ margin: "0 0 6px" }}>Legenda: {marcas.map(m => m.s + " = " + m.d).join(" · ")}</p>}
-              <p style={{ margin: 0 }}>Expediente: seg-sex 8:00 às 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) · sábado 8:00 às 13:00 · domingos e feriados nacionais fechado. Com um único par entrada/saída no dia, a 1h de intervalo é descontada da presença. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p>
+              <Detalhes titulo="Regras da jornada"><p style={{ margin: 0 }}>Expediente: seg-sex 8:00 às 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) · sábado 8:00 às 13:00 · domingos e feriados nacionais fechado. Com um único par entrada/saída no dia, a 1h de intervalo é descontada da presença. Horas além das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 §5º) ou são pagas como extra com adicional mínimo de 50%.</p></Detalhes>
             </div>
           );
         })()}
@@ -4285,7 +4292,7 @@ function ConfereEspelho({ comp, aceite, onAceitar }) {
         )}
       </div>
       {msg && <p style={{ fontSize: 12.5, color: msg.ok ? C.verde : C.vermelho, margin: "8px 0 0" }}>{msg.txt}</p>}
-      <p style={{ fontSize: 11, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>O aceite registra apenas a sua ciência das marcações do mês: ele não convalida erro nem impede correção posterior, administrativa ou judicial (CLT art. 9º). O espelho em PDF sai com a data e o resultado desta conferência.</p>
+      <Detalhes titulo="O que significa este aceite"><p style={{ margin: 0 }}>O aceite registra apenas a sua ciência das marcações do mês: ele não convalida erro nem impede correção posterior, administrativa ou judicial (CLT art. 9º). O espelho em PDF sai com a data e o resultado desta conferência.</p></Detalhes>
     </div>
   );
 }
@@ -4394,7 +4401,7 @@ function TelaFerias({ user, ferias, agendarFerias }) {
           <button style={S.btn} onClick={() => { if (!inicio) return; setMsg(agendarFerias(inicio, dias)); }}>Solicitar</button>
         </div>
         {msg && <p style={{ marginTop: 12, fontSize: 14, color: msg.ok ? C.verde : C.vermelho }}>{msg.msg}</p>}
-        <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + antecedência mínima de <b style={{ color: C.branco }}>5 meses</b> contada dia a dia a partir de hoje (política interna da Renovar Tech — o mínimo legal é 30 dias, CLT art. 135, mas a regra interna é mais restritiva e prevalece). <b style={{ color: C.branco }}>Fracionamento validado pelo sistema</b> (CLT art. 134 §1º): no máximo 3 períodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando até 30 dias.</p>
+        <Detalhes titulo="Regras de férias"><p style={{ margin: 0 }}>Regras: 12 meses de casa pra liberar (CLT art. 130) + antecedência mínima de <b style={{ color: C.branco }}>5 meses</b> contada dia a dia a partir de hoje (política interna da Renovar Tech — o mínimo legal é 30 dias, CLT art. 135, mas a regra interna é mais restritiva e prevalece). <b style={{ color: C.branco }}>Fracionamento validado pelo sistema</b> (CLT art. 134 §1º): no máximo 3 períodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando até 30 dias.</p></Detalhes>
       </div>
       {minhas.map(f => (
         <div key={f.id} style={{ ...S.card, marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -4448,10 +4455,8 @@ function TelaGame({ user, registros, faltas, rankingUsuarios = [] }) {
               </div>
             );
           })}
-          <div style={{ fontSize: 10, color: C.cinza, marginTop: 10 }}>Todos os colaboradores veem este ranking. É reconhecimento interno e motivacional — não afeta salário, Prêmio Performance ou avaliação formal.</div>
         </div>
       )}
-        <span style={S.tag(C.grafite, C.cinza)}>🎖 Reconhecimento interno · sem impacto salarial</span>
       </div>
       <div style={{ ...S.card, marginTop: 16, borderLeft: `4px solid ${nv.atual.cor}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -4532,12 +4537,16 @@ function TelaGame({ user, registros, faltas, rankingUsuarios = [] }) {
           ))}
         </>}
       </div>
-      <div style={{ ...S.card, marginTop: 14, fontSize: 12, color: C.cinza, lineHeight: 1.7 }}>
+      <Detalhes titulo="Como pontuar">
+        <p style={{ margin: 0 }}>
         <b style={{ color: C.branco }}>Como pontuar:</b> entrada dentro da tolerância vale {GAME.ptsDiaPontual} pts/dia; a partir do 3º dia pontual seguido cada dia vale +{GAME.ptsBonusStreak} de bônus; marcos de sequência pagam extra (5 dias +30 · 10 dias +75 · 20 dias +200); mês sem falta injustificada vale +{GAME.ptsMesSemFalta}; e fechar o mês dentro da meta de assiduidade (mesmos critérios do Prêmio Performance) vale +{GAME.ptsMetaAssiduidade}. Atraso ou falta injustificada zera a sequência — mas nunca desconta pontos já ganhos. Faltas justificadas, atestados aceitos e ausências legais não zeram a sequência nem afetam sua pontuação.
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E3450" }}>
+        </p>
+      </Detalhes>
+      <Detalhes titulo="Natureza da gamificação">
+        <p style={{ margin: 0 }}>
           <b style={{ color: C.branco }}>🎖 Natureza da gamificação:</b> pontos, níveis, sequências e conquistas são <b style={{ color: C.branco }}>exclusivamente ferramenta motivacional e de reconhecimento interno</b>. Não constituem verba salarial, prêmio, comissão ou benefício de qualquer natureza; não geram direito adquirido, expectativa de remuneração, promoção, cargo ou obrigação contratual; e não são critério de avaliação de desempenho formal. Não confundir com o <b style={{ color: C.branco }}>Prêmio Performance</b> (aba 🏆 Prêmio), que é o benefício financeiro real, regido por regulamento próprio nos termos do art. 457, §4º, da CLT. A empresa pode ajustar ou descontinuar a gamificação a qualquer momento, sem reflexo em salário ou contrato.
-        </div>
-      </div>
+        </p>
+      </Detalhes>
     </div>
   );
 }
@@ -4608,18 +4617,19 @@ function TelaPremio({ user, registros, faltas }) {
         </div>
         {e.medidores.map(m => <MedidorPremio key={m.id} m={m} />)}
       </div>
-      <div style={{ ...S.card, marginTop: 14 }}>
-        <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>Regras de elegibilidade — resumo</div>
-        {REGRAS_PREMIO.map(r => (
-          <div key={r.id} style={{ borderTop: "1px solid #1E3450", padding: "10px 0" }}>
-            <b style={{ fontSize: 14 }}>{r.corte ? "🎯" : "➕"} {r.titulo}</b>
-            <p style={{ fontSize: 13, color: "#C7D2E4", margin: "4px 0 0" }}>{r.desc}</p>
+      <Detalhes titulo="Regras de elegibilidade">
+        {REGRAS_PREMIO.map((r, i) => (
+          <div key={r.id} style={{ borderTop: i === 0 ? "none" : "1px solid #1E3450", padding: i === 0 ? "0 0 9px" : "9px 0" }}>
+            <b style={{ fontSize: 13, color: C.branco }}>{r.corte ? "🎯" : "➕"} {r.titulo}</b>
+            <p style={{ margin: "3px 0 0" }}>{r.desc}</p>
           </div>
         ))}
-      </div>
-      <div style={{ ...S.card, marginTop: 14, fontSize: 12, color: C.cinza, lineHeight: 1.7 }}>
+      </Detalhes>
+      <Detalhes titulo="Natureza jurídica do prêmio">
+        <p style={{ margin: 0 }}>
         <b style={{ color: C.branco }}>Natureza jurídica do Prêmio Performance:</b> liberalidade concedida pela {EMPRESA.nome} em razão de desempenho superior ao ordinariamente esperado, nos termos do art. 457, §4º, da CLT. Não integra o salário, não constitui comissão contratual e sua não concessão por critério de elegibilidade <b style={{ color: C.branco }}>não é desconto salarial</b> (art. 462). Critérios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e ausências legais do art. 473 da CLT não afetam a elegibilidade. Regulamento completo disponível com o RH.
-      </div>
+        </p>
+      </Detalhes>
     </div>
   );
 }
@@ -4721,12 +4731,14 @@ function SecaoDireitoImagem({ user, imagem, onSalvar }) {
   return (
     <div style={{ ...S.card, marginTop: 14 }}>
       <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📸 Termo de imagem e câmeras (CFTV)</div>
-      {TERMO_IMAGEM.map((t) => (
-        <div key={t.titulo} style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.branco }}>{t.titulo}</div>
-          <p style={{ fontSize: 12.5, color: "#C7D2E4", margin: "4px 0 0", lineHeight: 1.6 }}>{t.texto}</p>
-        </div>
-      ))}
+      <Detalhes titulo="Ler o termo na íntegra">
+        {TERMO_IMAGEM.map((t, i) => (
+          <div key={t.titulo} style={{ marginTop: i === 0 ? 0 : 10 }}>
+            <b style={{ fontSize: 13, color: C.branco }}>{t.titulo}</b>
+            <p style={{ margin: "3px 0 0" }}>{t.texto}</p>
+          </div>
+        ))}
+      </Detalhes>
       <label style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 14, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={cftv} onChange={(e) => setCftv(e.target.checked)} style={{ width: 18, height: 18, marginTop: 2 }} />
         <span>Estou ciente do monitoramento por câmeras (CFTV) descrito acima.</span>
@@ -4800,12 +4812,14 @@ function SecaoCodigoConduta({ aceite, onAceitar }) {
     <div style={{ ...S.card, marginTop: 14 }}>
       <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>📜 Código de conduta — regras internas <span style={{ fontSize: 11, color: C.cinza }}>· versão {CONDUTA_VERSAO}</span></div>
       <p style={{ fontSize: 12.5, color: C.branco, marginTop: 8, lineHeight: 1.6 }}>Além das políticas de dados acima, todo colaborador da {EMPRESA.nome} deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita às medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade).</p>
-      {CODIGO_CONDUTA.map((c, i) => (
-        <div key={i} style={{ borderTop: "1px solid #1E3450", padding: "10px 0" }}>
-          <b style={{ fontSize: 13.5, color: C.branco }}>{c.titulo}</b>
-          <p style={{ fontSize: 12.5, color: "#C7D2E4", margin: "4px 0 0", lineHeight: 1.6 }}>{c.texto}</p>
-        </div>
-      ))}
+      <Detalhes titulo={`Ler as ${CODIGO_CONDUTA.length} regras na íntegra`}>
+        {CODIGO_CONDUTA.map((c, i) => (
+          <div key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #1E3450", padding: i === 0 ? "0 0 9px" : "9px 0" }}>
+            <b style={{ fontSize: 13, color: C.branco }}>{c.titulo}</b>
+            <p style={{ margin: "3px 0 0" }}>{c.texto}</p>
+          </div>
+        ))}
+      </Detalhes>
       {onAceitar && (
         <div style={{ borderTop: "1px solid #1E3450", paddingTop: 12, marginTop: 4 }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -4874,6 +4888,7 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
       <div style={{ ...S.card, marginTop: 16, fontSize: 14, lineHeight: 1.8, color: "#C7D2E4" }}>
         <b style={{ color: C.branco }}>Termo de consentimento — tratamento de dados pessoais</b>
         <p>O PONTO RENOVAR coleta, com a finalidade específica de controle de jornada (Portaria MTP 671/2021): <b>confirmação de identidade pela biometria nativa do seu aparelho</b> (Face ID/digital — processada <b>localmente pelo celular</b>; a empresa <b>não recebe nem armazena</b> imagem facial ou impressão digital, apenas o identificador público da credencial e a confirmação da autenticação); <b>geolocalização</b> da marcação; e registros de horários. Os dados são usados exclusivamente pra validação de identidade, apuração de jornada e obrigações legais trabalhistas. Retenção: registros de ponto por no mínimo 5 anos; credenciais biométricas enquanto durar o vínculo ou até você removê-las. Você pode solicitar acesso, correção ou exclusão (quando não houver obrigação legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br.</p>
+        <p>Contador de água: fica só no seu aparelho (armazenamento local do navegador). Não vai pro servidor, o gestor não vê e não é orientação médica — quem tem restrição de líquidos segue o próprio médico.</p>
         <label style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={aceito} onChange={e => { setAceito(e.target.checked); onConsentir(e.target.checked); }} />
           <span>Li e <b style={{ color: C.amarelo }}>consinto</b> com o tratamento descrito acima.</span>
@@ -4996,7 +5011,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
           );
         })}
       </>}
-      <p style={{ fontSize: 11, color: C.cinza, marginTop: 10 }}>Desativar bloqueia o login (o app checa ativo=false), mas a conta de autenticação permanece — exclusão definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e são de uso único (resgate atômico via function no banco).</p>
+      <Detalhes titulo="Sobre desativar e convidar"><p style={{ margin: 0 }}>Desativar bloqueia o login (o app checa ativo=false), mas a conta de autenticação permanece — exclusão definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e são de uso único (resgate atômico via function no banco).</p></Detalhes>
     </div>
   );
 }
@@ -6234,8 +6249,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
           </div>
         );
       })()}
-      <div style={{ ...S.card, marginTop: 14, borderLeft: `4px solid ${C.amarelo}`, padding: 14 }}>
-        <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>⚠️ Limites e transparência do sistema</div>
+      <Detalhes titulo="⚠️ Limites e transparência do sistema">
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
           <li><b>Jornada de 9h/dia</b> (8h às 18h com 1h de intervalo) + sábado de 5h = 50h semanais. <b>Atenção jurídica:</b> a Constituição (art. 7º XIII) fixa 44h — as 6h excedentes precisam de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
           <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início) e chegam por push de servidor (Supabase + chaves VAPID), valendo também com o app fechado.</li>
@@ -6246,11 +6260,11 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
         <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
           Mitigação: cerca geográfica (ativa) + regra no regulamento interno proibindo cadastrar terceiros no aparelho usado pro ponto. Batidas sem verificação ficam sinalizadas (⚠) no espelho e na trilha de auditoria.
         </p>
-      </div>
+      </Detalhes>
       <div style={{ ...S.card, marginTop: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>🎮 Ranking de gamificação</div>
-          <div style={{ fontSize: 11, color: C.cinza }}>🎖 reconhecimento interno · somente leitura · sem impacto salarial, no Prêmio Performance ou em avaliação formal</div>
+          <div style={{ fontSize: 11, color: C.cinza }}>🎖 somente leitura · sem impacto salarial</div>
         </div>
         {ranking.map((r, i) => (
           <div key={r.u.id} style={{ display: "flex", alignItems: "center", gap: 12, borderTop: "1px solid #1E3450", padding: "9px 0" }}>
