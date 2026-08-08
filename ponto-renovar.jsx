@@ -1898,8 +1898,10 @@ function rotuloDiaReuniao(alvo, base) {
   return DIAS_POR_EXTENSO[b.getDay()] + ", " + String(b.getDate()).padStart(2, "0") + "/" + String(b.getMonth() + 1).padStart(2, "0");
 }
 
-function textoAvisoReuniao(ritual, rotulo) {
-  return ritual.nome + " " + rotulo + " às " + ritual.inicio + " (" + ritual.duracaoMin + " min). Pauta: " + ritual.blocos.map((b) => b.titulo).join(" · ") + ".";
+function textoAvisoReuniao(ritual, rotulo, assuntos) {
+  const extra = (assuntos || []).filter(Boolean);
+  return ritual.nome + " " + rotulo + " às " + ritual.inicio + " (" + ritual.duracaoMin + " min). Pauta: " + ritual.blocos.map((b) => b.titulo).join(" · ") + "."
+    + (extra.length ? " Já na mesa: " + extra.join(" e ") + "." : "");
 }
 
 /* Combinados, respostas e check-in ficam só neste aparelho (localStorage),
@@ -2086,6 +2088,7 @@ function ritVazio() {
     motivadores: [], motivaNoBanco: false,
     anjo: null, anjoNoBanco: false,
     atas: [], atasNoBanco: false,
+    respostas: [], respostasNoBanco: false,
   };
 }
 function conquistaNova(texto, tipo, autor, autorId) {
@@ -2283,7 +2286,7 @@ async function anjoSortear(token, gestorId, pessoas, inicio, fim) {
    Participante aqui NAO e controle de presenca: o app so olha quem bateu
    ponto naquele dia pra saber quem estava trabalhando. Nao existe chamada,
    nao existe falta de reuniao e nada disso encosta em premio ou avaliacao. */
-function ataNova(ritual, diaIso, participantes, combinados, numeros, autor, autorId) {
+function ataNova(ritual, diaIso, participantes, combinados, numeros, autor, autorId, respostas) {
   return {
     id: "t" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
     data: String(diaIso || "").slice(0, 10),
@@ -2294,6 +2297,12 @@ function ataNova(ritual, diaIso, participantes, combinados, numeros, autor, auto
       texto: String((c && c.texto) || "").slice(0, 280),
       dono: String((c && c.dono) || "").slice(0, 80),
       prazo: String((c && c.prazo) || "").slice(0, 10),
+    })),
+    respostas: (respostas || []).slice(0, 40).map((x) => ({
+      autor: String((x && x.autor) || "").slice(0, 80),
+      entreguei: String((x && x.entreguei) || "").slice(0, 500),
+      foco: String((x && x.foco) || "").slice(0, 500),
+      impedimento: String((x && x.impedimento) || "").slice(0, 500),
     })),
     numeros: numeros || null,
     autor: String(autor || "").trim().slice(0, 80),
@@ -2331,6 +2340,7 @@ function mapAta(r) {
     ritualNome: r.ritual_nome || "",
     participantes: Array.isArray(r.participantes) ? r.participantes : [],
     combinados: Array.isArray(r.combinados) ? r.combinados : [],
+    respostas: Array.isArray(r.respostas) ? r.respostas : [],
     numeros: r.numeros || null,
     autor: r.autor_nome || "",
     autorId: r.autor_id || "",
@@ -2348,6 +2358,7 @@ async function ataInserir(token, autorId, autorNome, ata) {
     ritual_nome: ata.ritualNome,
     participantes: ata.participantes,
     combinados: ata.combinados,
+    respostas: ata.respostas || [],
     numeros: ata.numeros,
     autor_id: autorId,
     autor_nome: autorNome || null,
@@ -2396,6 +2407,76 @@ function corEnergia(n) { return n >= 8 ? C.verde : n >= 5 ? C.amarelo : C.vermel
 /* As três perguntas do planejamento, uma resposta por semana. */
 function respostasLer(userId, diaIso) { const o = ritLer("resp_" + (userId || "anon") + "_" + diaIso, null); return o && typeof o === "object" ? o : { entreguei: "", foco: "", impedimento: "" }; }
 function respostasGravar(userId, diaIso, o) { return ritGravar("resp_" + (userId || "anon") + "_" + diaIso, { entreguei: String(o.entreguei || "").slice(0, 500), foco: String(o.foco || "").slice(0, 500), impedimento: String(o.impedimento || "").slice(0, 500) }); }
+
+/* As tres perguntas no banco (tabela opcional respostas). Isto e conteudo de
+   trabalho, nao diario pessoal: o proprio ritual manda dizer em voz alta o que
+   entreguei, no que vou focar e onde travei. Por isso o time inteiro le. A nota
+   de energia continua FORA daqui, so no aparelho de quem deu a nota - animo de
+   pessoa virando historico consultavel muda a nota, nao o animo. */
+function mapResposta(r) {
+  return {
+    id: r.id,
+    data: r.data || "",
+    ritualId: r.ritual_id || "",
+    entreguei: r.entreguei || "",
+    foco: r.foco || "",
+    impedimento: r.impedimento || "",
+    autor: r.autor_nome || "",
+    autorId: r.autor_id || "",
+    atualizadoEm: r.atualizado_em || "",
+  };
+}
+async function respostasBaixar(token) {
+  const linhas = await sbSelect(token, "respostas", "select=*&order=data.desc&limit=200");
+  return (linhas || []).map(mapResposta);
+}
+function respostaSubir(token, autorId, autorNome, diaIso, ritualId, o) {
+  return sbUpsert(token, "respostas", [{
+    autor_id: autorId,
+    autor_nome: autorNome || null,
+    data: String(diaIso || "").slice(0, 10),
+    ritual_id: String(ritualId || "").slice(0, 30),
+    entreguei: String((o && o.entreguei) || "").slice(0, 500),
+    foco: String((o && o.foco) || "").slice(0, 500),
+    impedimento: String((o && o.impedimento) || "").slice(0, 500),
+    atualizado_em: new Date().toISOString(),
+  }], "autor_id,data,ritual_id");
+}
+/* O que o time respondeu para aquela reuniao. Resposta antiga de ritual que
+   nao gravou id entra tambem, senao o historico do aparelho ficava invisivel. */
+function respostasDoDia(lista, diaIso, ritualId) {
+  return (lista || []).filter((r) => r && r.data === diaIso
+    && (!ritualId || !r.ritualId || r.ritualId === ritualId));
+}
+function respostaVazia(r) {
+  return !String((r && r.entreguei) || "").trim()
+    && !String((r && r.foco) || "").trim()
+    && !String((r && r.impedimento) || "").trim();
+}
+/* Quem pediu ajuda. Isto e pauta, nao ficha: sobe para o inicio da reuniao
+   para o impedimento nao aparecer so no dia do prazo estourado. */
+function impedimentosDoDia(lista, diaIso, ritualId) {
+  return respostasDoDia(lista, diaIso, ritualId)
+    .filter((r) => String(r.impedimento || "").trim())
+    .map((r) => ({ autor: r.autor || "alguem do time", texto: String(r.impedimento).trim() }));
+}
+/* Combinado que vence ate o dia da reuniao (ou ja venceu) e o assunto mais
+   concreto que existe para levar para a pauta. */
+function combinadosNaPauta(acoes, diaIso) {
+  return acoesAbertas(acoes || [])
+    .filter((a) => a && a.prazo && String(a.prazo).slice(0, 10) <= diaIso);
+}
+/* Os assuntos previstos, em frase curta, para os dois avisos. Aqui NAO entra o
+   texto do impedimento nem nome de ninguem: aviso de celular aparece na tela de
+   bloqueio, e pedido de ajuda e assunto de reuniao, nao de tela de bloqueio. */
+function assuntosDaReuniao(ritual, respostas, acoes, diaIso) {
+  const fora = [];
+  const imp = impedimentosDoDia(respostas, diaIso, ritual && ritual.id).length;
+  const venc = combinadosNaPauta(acoes, diaIso).length;
+  if (imp) fora.push(imp + (imp > 1 ? " pedidos de ajuda" : " pedido de ajuda"));
+  if (venc) fora.push(venc + (venc > 1 ? " combinados vencendo" : " combinado vencendo"));
+  return fora;
+}
 
 /* ---------- push de servidor: o aviso chega com o app FECHADO ----------
    A chave publica VAPID abaixo diz ao navegador QUEM pode mandar aviso pra
@@ -3168,6 +3249,16 @@ function AppInterno() {
           mudarRit({ atas: atasLer(perfil.id), atasNoBanco: false });
         }
       })();
+      // As tres perguntas: tabela opcional (respostas). Sem ela cada pessoa ve
+      // somente a propria resposta, guardada no proprio aparelho.
+      (async () => {
+        try {
+          mudarRit({ respostas: await respostasBaixar(token), respostasNoBanco: true });
+        } catch (e) {
+          console.warn("[respostas]", e.message);
+          mudarRit({ respostas: [], respostasNoBanco: false });
+        }
+      })();
       // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
       // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
       (async () => {
@@ -3728,6 +3819,32 @@ function AppInterno() {
     mudarRit({ anjo: rodada ? { inicio: rodada.inicio, fim: rodada.fim, protegido } : null });
     return "Rodada aberta. Cada pessoa enxerga só quem ela cuida.";
   };
+  /* As tres perguntas. Guarda sempre no aparelho primeiro - se o banco estiver
+     fora, a pessoa nao perde o texto que acabou de escrever - e depois tenta
+     subir. O retorno e a frase que a tela mostra, sem enfeite. */
+  const responderPerguntas = async (ritualId, resp) => {
+    const diaIso = dataISO(new Date());
+    respostasGravar(user.id, diaIso, resp);
+    if (demo) return "Demonstração: nada é gravado de verdade.";
+    if (!rit.respostasNoBanco) return "Guardado só neste aparelho: a tabela respostas ainda não existe no banco.";
+    try {
+      await respostaSubir(sessao.token, user.id, user.nome, diaIso, ritualId, resp);
+      const minha = {
+        id: user.id + "_" + diaIso + "_" + ritualId,
+        data: diaIso, ritualId: ritualId,
+        entreguei: String(resp.entreguei || ""), foco: String(resp.foco || ""),
+        impedimento: String(resp.impedimento || ""),
+        autor: user.nome, autorId: user.id, atualizadoEm: new Date().toISOString(),
+      };
+      setRit((r) => ({
+        ...r,
+        respostas: (r.respostas || []).filter((x) => !(x.autorId === user.id && x.data === diaIso && x.ritualId === ritualId)).concat([minha]),
+      }));
+      return "O time já vê suas respostas.";
+    } catch (e) {
+      return "Guardado só neste aparelho: " + mensagemAmigavel(e, "ao enviar suas respostas");
+    }
+  };
   /* A ata sai pronta do proprio app: ele ja sabe o ritual, o dia, quem bateu
      ponto e quais combinados nasceram naquela reuniao. Ninguem digita resumo,
      porque resumo digitado a mao e a primeira coisa que o time abandona. */
@@ -3737,7 +3854,10 @@ function AppInterno() {
     const numeros = ritual.id === "mensal"
       ? numerosDoMes(usuarios, registros, faltas, acoes, compAnterior(compDe(new Date())))
       : null;
-    const nova = ataNova(ritual, diaIso, participantes, combinados, numeros, user.nome, user.id);
+    /* A ata leva o que o time respondeu naquele dia: sem isso ela viraria uma
+       lista de tarefas sem contexto, e em dois meses ninguem lembra o porque. */
+    const respostas = respostasDoDia(rit.respostas || [], diaIso, ritual.id);
+    const nova = ataNova(ritual, diaIso, participantes, combinados, numeros, user.nome, user.id, respostas);
     if (demo || !rit.atasNoBanco) {
       if (!demo) atasGravar(user.id, [nova].concat(rit.atas || []));
       mudarRit({ atas: [nova].concat(rit.atas || []) });
@@ -4388,7 +4508,7 @@ function AppInterno() {
             <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao, respostas: rit.respostas || [] }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -4397,7 +4517,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
-          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} onResponder={responderPerguntas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -4826,7 +4946,7 @@ function RelogioVivo() {
   );
 }
 
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro, acoes, onAlternarCombinado }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro, acoes, onAlternarCombinado, respostas = [] }) {
   // Trava anti-duplicidade: 60s de espera após uma batida (evita duplo toque e registro repetido)
   const ultima = registros.filter(r => r.userId === user.id).reduce((m, r) => Math.max(m, new Date(r.ts).getTime()), 0);
   const [batidaRecente, setBatidaRecente] = useState(0);
@@ -4851,7 +4971,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
       <CartaoMomento nome={user.nome} doDia={doDia} />
-      <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} />
+      <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} acoes={acoes} respostas={respostas} />
       {!temLocais && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
       )}
@@ -5255,7 +5375,7 @@ function faseDoDia(doDia) {
 /* O aviso da reunião. Aparece duas vezes: ao encerrar o expediente, falando
    do próximo dia com reunião, e ao chegar, falando da reunião do dia. Além
    do cartão dispara um aviso do celular, uma única vez por etapa. */
-function CartaoReuniao({ user, doDia, onAbrirRoteiro }) {
+function CartaoReuniao({ user, doDia, onAbrirRoteiro, acoes = [], respostas = [] }) {
   const agora = new Date();
   const fase = faseDoDia(doDia);
   const sala = salaLer();
@@ -5273,15 +5393,25 @@ function CartaoReuniao({ user, doDia, onAbrirRoteiro }) {
   }
   const diaIso = alvo ? dataISO(alvo.data) : "";
   const idsAlvo = alvo ? alvo.reunioes.map((r) => r.id).join(",") : "";
+  /* Os assuntos que o time ja colocou na mesa. Contagem, nunca o texto: aviso
+     de celular aparece na tela de bloqueio, e pedido de ajuda de colega nao e
+     assunto para quem estiver olhando o celular por cima do ombro. */
+  const pauta = alvo ? alvo.reunioes.map((r) => assuntosDaReuniao(r, respostas, acoes, diaIso)) : [];
+  const pautaTxt = pauta.map((p) => p.join("+")).join("|");
   useEffect(() => {
     if (!alvo) return;
-    const rot = rotuloDiaReuniao(alvo.data, new Date());
-    alvo.reunioes.forEach((r) => {
-      if (avisoJaDado(user && user.id, diaIso, r.id, etapa)) return;
-      marcarAviso(user && user.id, diaIso, r.id, etapa);
-      notificarAparelho("Ponto Renovar · " + r.nome, textoAvisoReuniao(r, rot), "reuniao-" + r.id + "-" + diaIso + "-" + etapa);
-    });
-  }, [diaIso, idsAlvo, etapa]);
+    /* Espera as respostas chegarem do banco antes de disparar - avisar sem a
+       pauta e pior do que avisar dois segundos depois. */
+    const t = setTimeout(() => {
+      const rot = rotuloDiaReuniao(alvo.data, new Date());
+      alvo.reunioes.forEach((r, i) => {
+        if (avisoJaDado(user && user.id, diaIso, r.id, etapa)) return;
+        marcarAviso(user && user.id, diaIso, r.id, etapa);
+        notificarAparelho("Ponto Renovar · " + r.nome, textoAvisoReuniao(r, rot, pauta[i]), "reuniao-" + r.id + "-" + diaIso + "-" + etapa);
+      });
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [diaIso, idsAlvo, etapa, pautaTxt]);
   if (!alvo) return null;
   const rotulo = rotuloDiaReuniao(alvo.data, agora);
   return (
@@ -5289,7 +5419,7 @@ function CartaoReuniao({ user, doDia, onAbrirRoteiro }) {
       <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>
         {fase === "saida" ? "📌 Antes de ir: reunião " + rotulo : "📌 Reunião " + rotulo}
       </div>
-      {alvo.reunioes.map((r) => (
+      {alvo.reunioes.map((r, iR) => (
         <div key={r.id} style={{ marginTop: 12 }}>
           <div style={{ fontSize: 14, color: C.branco }}>
             {r.icone} <b>{r.nome}</b>
@@ -5301,6 +5431,16 @@ function CartaoReuniao({ user, doDia, onAbrirRoteiro }) {
               <span key={i} style={{ ...S.tag, fontSize: 11 }}>{b.min + " min · " + b.titulo}</span>
             ))}
           </div>
+          {(pauta[iR] || []).length ? (
+            <div style={{ fontSize: 12.5, color: C.amarelo, marginTop: 8 }}>
+              Já na mesa: {(pauta[iR] || []).join(" e ")}.
+            </div>
+          ) : null}
+          {impedimentosDoDia(respostas, diaIso, r.id).length ? (
+            <div style={{ fontSize: 12, color: C.cinza, marginTop: 4 }}>
+              Pediram ajuda: {impedimentosDoDia(respostas, diaIso, r.id).map((x) => x.autor).join(", ")}.
+            </div>
+          ) : null}
         </div>
       ))}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
@@ -5419,21 +5559,36 @@ function FormEnergia({ user, hojeIso }) {
 
 /* As três perguntas do planejamento. "O que entreguei" já vem preenchido com
    os combinados que você fechou desde a última reunião. */
-function FormPerguntas({ user, hojeIso, acoes }) {
+function FormPerguntas({ user, usuarios, hojeIso, acoes, ritual, respostas, respostasNoBanco, onResponder }) {
   const ant = reuniaoAnterior(new Date());
   const desde = ant ? dataISO(ant.data) : "";
   const feitas = desde ? acoesConcluidasDesde(acoes, desde) : [];
-  const [r, setR] = useState(() => respostasLer(user.id, hojeIso));
-  const [salvo, setSalvo] = useState(false);
+  const ritualId = (ritual && ritual.id) || "";
+  /* O que veio do banco vale mais que o rascunho do aparelho: se a pessoa
+     respondeu no celular, o mesmo texto tem que aparecer no computador. */
+  const doBanco = respostasDoDia(respostas, hojeIso, ritualId)
+    .filter((x) => x.autorId === user.id)[0] || null;
+  const [r, setR] = useState(() => doBanco
+    ? { entreguei: doBanco.entreguei, foco: doBanco.foco, impedimento: doBanco.impedimento }
+    : respostasLer(user.id, hojeIso));
+  const [salvando, setSalvando] = useState(false);
+  const [aviso, setAviso] = useState("");
   useEffect(() => {
     if (!r.entreguei && feitas.length) setR((o) => ({ ...o, entreguei: feitas.map((a) => "• " + a.texto).join("\n") }));
   }, [feitas.length]);
+  async function guardar() {
+    setSalvando(true);
+    setAviso("");
+    try { setAviso(await onResponder(ritualId, r)); }
+    catch (e) { setAviso(mensagemAmigavel(e, "ao guardar suas respostas")); }
+    setSalvando(false);
+  }
   function campo(chave, rotulo, dica) {
     return (
       <div style={{ marginTop: 12 }}>
         <div style={{ fontSize: 12.5, color: C.branco }}>{rotulo}</div>
         <textarea style={{ ...S.input, marginTop: 6, minHeight: 66 }} maxLength={500} value={r[chave]}
-          onChange={(e) => { setR({ ...r, [chave]: e.target.value }); setSalvo(false); }} placeholder={dica} />
+          onChange={(e) => { setR({ ...r, [chave]: e.target.value }); setAviso(""); }} placeholder={dica} />
       </div>
     );
   }
@@ -5443,9 +5598,109 @@ function FormPerguntas({ user, hojeIso, acoes }) {
       {campo("foco", "No que eu vou focar nesta semana?", "no máximo três frentes")}
       {campo("impedimento", "Tenho algum impedimento ou preciso de ajuda?", "diga cedo, não no fim do prazo")}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
-        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }}
-          onClick={() => { respostasGravar(user.id, hojeIso, r); setSalvo(true); }}>Guardar respostas</button>
-        {salvo && <span style={{ fontSize: 12, color: C.verde }}>guardado ✔</span>}
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13, opacity: salvando ? 0.6 : 1 }}
+          disabled={salvando} onClick={guardar}>{salvando ? "Guardando…" : "Guardar respostas"}</button>
+        {aviso ? <span style={{ fontSize: 12, color: C.cinza }}>{aviso}</span> : null}
+      </div>
+      <RespostasDoTime user={user} usuarios={usuarios} respostas={respostas}
+        respostasNoBanco={respostasNoBanco} hojeIso={hojeIso} ritualId={ritualId} />
+    </div>
+  );
+}
+
+/* O bloco de dependencias comeca pelo que ja esta travado. Antes ele abria
+   direto o formulario de combinado, o que assumia que alguem lembraria de cabeca
+   quem pediu ajuda dez minutos antes. Agora a lista vem do que o time escreveu
+   e do que esta vencendo, e o combinado nasce em cima disso. */
+function PainelImpedimentos({ respostas, acoes, hojeIso, ritual }) {
+  const imp = impedimentosDoDia(respostas, hojeIso, ritual && ritual.id);
+  const venc = combinadosNaPauta(acoes, hojeIso);
+  if (!imp.length && !venc.length) {
+    return (
+      <p style={{ fontSize: 12, color: C.cinza, margin: "0 0 14px", lineHeight: 1.6 }}>
+        Ninguém marcou impedimento e nada está vencendo hoje. Ainda vale a pergunta em voz alta: o que você precisa de mim para avançar?
+      </p>
+    );
+  }
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {imp.length ? (
+        <div style={{ marginBottom: venc.length ? 12 : 0 }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.branco }}>Pedidos de ajuda desta reunião</div>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {imp.map((x, i) => (
+              <div key={i} style={{ border: "1px solid " + C.borda, borderLeft: "3px solid " + C.amarelo, borderRadius: 10, padding: "8px 12px" }}>
+                <div style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</div>
+                <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>{x.texto}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {venc.length ? (
+        <div>
+          <div style={{ ...S.display, fontSize: 13, color: C.branco }}>Combinados vencendo</div>
+          <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+            {venc.slice(0, 8).map((a) => (
+              <div key={a.id} style={{ fontSize: 12.5, color: C.cinza }}>
+                • {a.texto} <span style={{ color: a.prazo < hojeIso ? C.vermelho : C.amarelo }}>({a.dono || "sem dono"} · {fmtData(a.prazo)})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <p style={{ fontSize: 12, color: C.cinza, margin: "12px 0 0", lineHeight: 1.6 }}>
+        Cada item acima sai daqui como combinado com dono e prazo, ou sai como decidido que não se faz. Ficar na lista sem dono é o jeito mais silencioso de não resolver.
+      </p>
+    </div>
+  );
+}
+
+/* As respostas do time lado a lado. Sem isto o ritual das tres perguntas nao
+   existe de verdade: cada um lia so a propria folha e a reuniao voltava a ser
+   "agora conta o que voce fez", que e a versao chata e inutil da mesma coisa.
+   Quem nao respondeu aparece como nao respondeu, sem vermelho e sem cobranca -
+   a reuniao e as 09:15, dificilmente todo mundo escreveu antes. */
+function RespostasDoTime({ user, usuarios, respostas, respostasNoBanco, hojeIso, ritualId }) {
+  const doDia = respostasDoDia(respostas, hojeIso, ritualId);
+  const ativos = (usuarios || []).filter((u) => u && u.ativo !== false);
+  const linhas = ativos.map((u) => ({
+    nome: u.nome,
+    eu: u.id === user.id,
+    r: doDia.filter((x) => x.autorId === u.id)[0] || null,
+  }));
+  const responderam = linhas.filter((l) => l.r && !respostaVazia(l.r)).length;
+  return (
+    <div style={{ marginTop: 18, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 13.5, color: C.branco }}>As três perguntas do time hoje</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+        {respostasNoBanco
+          ? "Todo mundo do time lê estas respostas — é o que faz a reunião começar já sabendo do que falar."
+          : "Guardado só neste aparelho: a tabela respostas ainda não existe no banco, então cada um vê apenas a própria resposta."}
+      </p>
+      {!respostasNoBanco ? null : (
+        <div style={{ fontSize: 12, color: C.cinza, marginBottom: 10 }}>
+          {responderam} de {linhas.length} já escreveram.
+        </div>
+      )}
+      <div style={{ display: "grid", gap: 10 }}>
+        {linhas.map((l) => (
+          <div key={l.nome} style={{ border: "1px solid " + C.borda, borderRadius: 12, padding: "10px 12px" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <b style={{ fontSize: 13, color: C.branco }}>{l.nome}</b>
+              {l.eu ? <span style={{ ...S.tag, fontSize: 10.5 }}>você</span> : null}
+            </div>
+            {!l.r || respostaVazia(l.r) ? (
+              <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>ainda não escreveu — dá para responder na hora, em voz alta.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {l.r.entreguei ? <div style={{ fontSize: 12.5, color: C.cinza, whiteSpace: "pre-wrap" }}><b style={{ color: C.branco }}>Entregou:</b> {l.r.entreguei}</div> : null}
+                {l.r.foco ? <div style={{ fontSize: 12.5, color: C.cinza, whiteSpace: "pre-wrap" }}><b style={{ color: C.branco }}>Foco:</b> {l.r.foco}</div> : null}
+                {l.r.impedimento ? <div style={{ fontSize: 12.5, color: C.amarelo, whiteSpace: "pre-wrap" }}><b>Precisa de ajuda:</b> {l.r.impedimento}</div> : null}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -5542,7 +5797,8 @@ function ListaCombinados({ acoes, onAlternar, hojeIso, compacta }) {
    Supabase, nenhum dado saindo do navegador de quem escreveu. */
 function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala,
   registros = [], faltas = [], onGerarAta,
-  rit = { conquistas: [], elogios: [], motivadores: [], anjo: null, atas: [] }, onConquista, onElogio, onMotivadores, onSortearAnjo }) {
+  rit = { conquistas: [], elogios: [], motivadores: [], anjo: null, atas: [], respostas: [] },
+  onConquista, onElogio, onMotivadores, onSortearAnjo, onResponder }) {
   const agora = new Date();
   const hojeIso = dataISO(agora);
   const [aba, setAba] = useState("roteiro");
@@ -5616,9 +5872,17 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
           )}>
             {(bloco) => (
               bloco.tipo === "energia" ? <FormEnergia user={user} hojeIso={hojeIso} />
-                : bloco.tipo === "metas" ? <FormPerguntas user={user} hojeIso={hojeIso} acoes={acoes} />
+                : bloco.tipo === "metas" ? <FormPerguntas user={user} usuarios={usuarios} hojeIso={hojeIso} acoes={acoes}
+                    ritual={ritual} respostas={rit.respostas || []} respostasNoBanco={!!rit.respostasNoBanco}
+                    onResponder={onResponder} />
                   : bloco.tipo === "numeros" ? <PainelNumerosMes user={user} usuarios={usuarios} registros={registros} faltas={faltas} acoes={acoes} />
                     : bloco.tipo === "elogios" ? <FormElogioReuniao user={user} usuarios={usuarios} origem={ritual.nome} onElogio={onElogio} />
+                      : bloco.tipo === "acoes" ? (
+                        <>
+                          <PainelImpedimentos respostas={rit.respostas || []} acoes={acoes} hojeIso={hojeIso} ritual={ritual} />
+                          <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
+                        </>
+                      )
                       : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
             )}
           </Roteiro>
@@ -6049,6 +6313,20 @@ function CartaoAta({ ata }) {
       ) : (
         <div style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Nenhum combinado saiu desta reunião.</div>
       )}
+      {(ata.respostas || []).length ? (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ fontSize: 12, color: C.cinza, cursor: "pointer" }}>O que cada um respondeu</summary>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {(ata.respostas || []).map((x, i) => (
+              <div key={i} style={{ borderLeft: "2px solid " + C.borda, paddingLeft: 10 }}>
+                <b style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</b>
+                {x.foco ? <div style={{ fontSize: 12, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>Foco: {x.foco}</div> : null}
+                {x.impedimento ? <div style={{ fontSize: 12, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>Precisava de ajuda: {x.impedimento}</div> : null}
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -7571,6 +7849,7 @@ const TABELAS_OPCIONAIS = [
   { nome: "anjo_rodada", para: "rodadas da dinamica do anjo" },
   { nome: "anjo_par", para: "pares sorteados do anjo" },
   { nome: "atas", para: "atas automaticas das reunioes" },
+  { nome: "respostas", para: "as tres perguntas do planejamento" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -7882,7 +8161,45 @@ create policy "atas: autor ou gestor corrige" on public.atas
   using (autor_id = auth.uid()
     or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
   with check (autor_id = auth.uid()
-    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+-- A ata tambem guarda o que cada um respondeu naquela reuniao. Separado do
+-- create acima de proposito: quem ja rodou o bloco antes so precisa desta linha.
+alter table public.atas add column if not exists respostas jsonb not null default '[]'::jsonb;
+
+-- As tres perguntas do planejamento: o que entreguei, no que vou focar, onde
+-- travei. Uma linha por pessoa por reuniao. Sem isto cada um so ve a propria
+-- resposta no proprio aparelho e a reuniao volta a ser "conta o que voce fez".
+-- A nota de energia NAO tem tabela e nao vai ter: animo e assunto do circulo.
+create table if not exists public.respostas (
+  id uuid primary key default gen_random_uuid(),
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  data date not null,
+  ritual_id text not null,
+  entreguei text,
+  foco text,
+  impedimento text,
+  atualizado_em timestamptz not null default now(),
+  unique (autor_id, data, ritual_id)
+);
+create index if not exists respostas_data_idx on public.respostas (data desc);
+alter table public.respostas enable row level security;
+
+-- O time le as respostas: e exatamente para isso que a reuniao existe.
+drop policy if exists "respostas: o time le" on public.respostas;
+create policy "respostas: o time le" on public.respostas
+  for select to authenticated using (true);
+
+-- Cada um responde por si. Ninguem responde no lugar do colega, nem o gestor.
+drop policy if exists "respostas: cada um escreve a sua" on public.respostas;
+create policy "respostas: cada um escreve a sua" on public.respostas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+drop policy if exists "respostas: cada um corrige a sua" on public.respostas;
+create policy "respostas: cada um corrige a sua" on public.respostas
+  for update to authenticated
+  using (autor_id = auth.uid()) with check (autor_id = auth.uid());
+`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */

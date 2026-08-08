@@ -462,7 +462,44 @@ create policy "atas: autor ou gestor corrige" on public.atas
   using (autor_id = auth.uid()
     or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
   with check (autor_id = auth.uid()
-    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));```
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+-- A ata tambem guarda o que cada um respondeu naquela reuniao. Separado do
+-- create acima de proposito: quem ja rodou o bloco antes so precisa desta linha.
+alter table public.atas add column if not exists respostas jsonb not null default '[]'::jsonb;
+
+-- As tres perguntas do planejamento: o que entreguei, no que vou focar, onde
+-- travei. Uma linha por pessoa por reuniao. Sem isto cada um so ve a propria
+-- resposta no proprio aparelho e a reuniao volta a ser "conta o que voce fez".
+-- A nota de energia NAO tem tabela e nao vai ter: animo e assunto do circulo.
+create table if not exists public.respostas (
+  id uuid primary key default gen_random_uuid(),
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  data date not null,
+  ritual_id text not null,
+  entreguei text,
+  foco text,
+  impedimento text,
+  atualizado_em timestamptz not null default now(),
+  unique (autor_id, data, ritual_id)
+);
+create index if not exists respostas_data_idx on public.respostas (data desc);
+alter table public.respostas enable row level security;
+
+-- O time le as respostas: e exatamente para isso que a reuniao existe.
+drop policy if exists "respostas: o time le" on public.respostas;
+create policy "respostas: o time le" on public.respostas
+  for select to authenticated using (true);
+
+-- Cada um responde por si. Ninguem responde no lugar do colega, nem o gestor.
+drop policy if exists "respostas: cada um escreve a sua" on public.respostas;
+create policy "respostas: cada um escreve a sua" on public.respostas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+drop policy if exists "respostas: cada um corrige a sua" on public.respostas;
+create policy "respostas: cada um corrige a sua" on public.respostas
+  for update to authenticated
+  using (autor_id = auth.uid()) with check (autor_id = auth.uid());```
 
 ## Push de servidor (lembrete com o app fechado)
 
@@ -643,6 +680,34 @@ A lista de participantes **nao e controle de presenca**. Nao existe falta de
 reuniao no app e nada disso encosta em premio, avaliacao ou desligamento - a tela
 diz isso embaixo do botao. Sem a tabela `atas` no banco, a ata cai pro aparelho
 de quem encerrou e a tela avisa, igual aos outros rituais.
+
+### As tres perguntas do time e a pauta real
+
+As tres perguntas do planejamento (o que entreguei, no que vou focar, tenho
+impedimento) ficavam so no aparelho de quem escreveu. Com a tabela opcional
+`respostas` elas passam a aparecer lado a lado no bloco "Metas da semana":
+cada pessoa escreve a sua, o time inteiro le, e quem ainda nao escreveu aparece
+como nao escreveu, sem cobranca - a reuniao e as 09:15, dificilmente todo mundo
+escreveu antes.
+
+Quem marcou impedimento sobe para o topo do bloco "Dependencias", junto dos
+combinados que vencem naquele dia ou que ja venceram. E dali que sai o combinado
+com dono e prazo.
+
+Os dois avisos de reuniao (ao sair do trabalho e ao chegar no dia seguinte)
+passam a citar quantos pedidos de ajuda e quantos combinados vencendo estao na
+mesa. Apenas a contagem, nunca o texto e nunca o nome: aviso de celular aparece
+na tela de bloqueio, e pedido de ajuda de colega nao e assunto de tela de
+bloqueio. Nome e texto aparecem dentro do app, para quem entrou com a propria
+conta.
+
+A ata da reuniao passa a guardar tambem o que cada um respondeu naquele dia, num
+"O que cada um respondeu" que abre e fecha.
+
+A nota de energia do check-in continua fora do banco, de proposito, e nao vai ter
+tabela. Ela fica no aparelho de quem deu a nota, e a media mensal so aparece para
+a propria pessoa. Animo virando historico consultavel pela lideranca muda a nota
+que a pessoa da, nao o animo dela.
 
 ### Aviso de reuniao com o app fechado
 
