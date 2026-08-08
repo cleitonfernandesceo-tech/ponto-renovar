@@ -149,7 +149,7 @@ apoio: nao substitui a conferencia do contador nem a homologacao/fiscalizacao tr
 
 ## Tabelas opcionais (SQL)
 
-O app funciona sem estas duas tabelas, mas o **termo de imagem/CFTV** e os **aceites**
+O app funciona sem estas tabelas, mas o **termo de imagem/CFTV** e os **aceites**
 (codigo de conduta e espelho mensal) so ficam gravados no banco depois de criar as duas.
 O proprio app avisa: *Painel do gestor -> Diagnostico do sistema* mostra o que falta e
 tem o botao **Copiar SQL**. O mesmo conteudo esta abaixo - rode uma vez no SQL Editor do Supabase.
@@ -311,6 +311,120 @@ create policy "config: gestor cuida" on public.config_time
   for all to authenticated
   using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
   with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Mural de conquistas: vitoria e superacao contadas em voz alta pro time.
+-- Nada daqui vira ponto de premio: reconhecimento com nota vira meta.
+create table if not exists public.conquistas (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  tipo text not null default 'vitoria',
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  criado_em timestamptz not null default now(),
+  constraint conquistas_tipo_valido check (tipo in ('vitoria', 'superacao'))
+);
+create index if not exists conquistas_recentes_idx on public.conquistas (criado_em desc);
+alter table public.conquistas enable row level security;
+
+drop policy if exists "conquistas: o time le" on public.conquistas;
+create policy "conquistas: o time le" on public.conquistas
+  for select to authenticated using (true);
+
+drop policy if exists "conquistas: cada um conta a sua" on public.conquistas;
+create policy "conquistas: cada um conta a sua" on public.conquistas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+drop policy if exists "conquistas: autor corrige" on public.conquistas;
+create policy "conquistas: autor corrige" on public.conquistas
+  for update to authenticated using (autor_id = auth.uid()) with check (autor_id = auth.uid());
+
+-- Circulo de elogios: quem agradece assina o que escreveu e ninguem elogia a
+-- si mesmo - por isso o check compara de_id com para_id.
+create table if not exists public.elogios (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  de_id uuid not null references public.usuarios (id) on delete cascade,
+  de_nome text,
+  para_id uuid not null references public.usuarios (id) on delete cascade,
+  para_nome text,
+  origem text,
+  criado_em timestamptz not null default now(),
+  constraint elogios_nao_e_pra_si check (de_id <> para_id)
+);
+create index if not exists elogios_recentes_idx on public.elogios (criado_em desc);
+alter table public.elogios enable row level security;
+
+drop policy if exists "elogios: o time le" on public.elogios;
+create policy "elogios: o time le" on public.elogios
+  for select to authenticated using (true);
+
+drop policy if exists "elogios: quem elogia assina" on public.elogios;
+create policy "elogios: quem elogia assina" on public.elogios
+  for insert to authenticated with check (de_id = auth.uid() and de_id <> para_id);
+
+-- O que me motiva: tres fatores escritos pela propria pessoa pra conversar com
+-- a lideranca. So existe linha aqui se ela apertou compartilhar.
+create table if not exists public.motivadores (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  nome text,
+  fator_1 text,
+  fator_2 text,
+  fator_3 text,
+  atualizado_em timestamptz not null default now()
+);
+alter table public.motivadores enable row level security;
+
+drop policy if exists "motivadores: dono cuida" on public.motivadores;
+create policy "motivadores: dono cuida" on public.motivadores
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "motivadores: gestor le" on public.motivadores;
+create policy "motivadores: gestor le" on public.motivadores
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Dinamica do anjo: o gestor abre a rodada e o app sorteia os pares.
+create table if not exists public.anjo_rodada (
+  id uuid primary key default gen_random_uuid(),
+  inicio date not null,
+  fim date not null,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  constraint anjo_rodada_periodo check (fim >= inicio)
+);
+alter table public.anjo_rodada enable row level security;
+
+drop policy if exists "anjo rodada: o time le" on public.anjo_rodada;
+create policy "anjo rodada: o time le" on public.anjo_rodada
+  for select to authenticated using (true);
+
+drop policy if exists "anjo rodada: gestor abre" on public.anjo_rodada;
+create policy "anjo rodada: gestor abre" on public.anjo_rodada
+  for insert to authenticated with check (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- O par so pode ser lido pelo proprio anjo: e o banco que guarda o segredo, e
+-- nao a tela. Depois do sorteio nem o gestor consulta o par dos outros.
+create table if not exists public.anjo_par (
+  id uuid primary key default gen_random_uuid(),
+  rodada_id uuid not null references public.anjo_rodada (id) on delete cascade,
+  anjo_id uuid not null references public.usuarios (id) on delete cascade,
+  protegido_id uuid not null references public.usuarios (id) on delete cascade,
+  protegido_nome text,
+  criado_em timestamptz not null default now(),
+  unique (rodada_id, anjo_id),
+  constraint anjo_par_nao_e_de_si check (anjo_id <> protegido_id)
+);
+alter table public.anjo_par enable row level security;
+
+drop policy if exists "anjo par: so o proprio anjo le" on public.anjo_par;
+create policy "anjo par: so o proprio anjo le" on public.anjo_par
+  for select to authenticated using (anjo_id = auth.uid());
+
+drop policy if exists "anjo par: gestor sorteia" on public.anjo_par;
+create policy "anjo par: gestor sorteia" on public.anjo_par
+  for insert to authenticated with check (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
 ```
 
 ## Push de servidor (lembrete com o app fechado)
@@ -429,6 +543,39 @@ a CSP da pagina usa `frame-src 'none'`.
 O **check-in de energia** (nota de 1 a 10 pro proprio animo) NAO vai pro banco,
 de proposito: e dado sensivel, fica so no aparelho de quem escreveu e nunca
 aparece pro gestor. O mesmo vale pras respostas das tres perguntas.
+
+### Mural, elogios, o que me motiva e a dinamica do anjo
+
+Quatro rituais que falam de pessoa e nao de tarefa. Todos seguem a mesma regra
+dos combinados: com a tabela no banco valem pro time inteiro, sem ela caem pro
+aparelho de quem escreveu e a tela avisa isso com todas as letras.
+
+| Ritual | Tabela | Quem le |
+| --- | --- | --- |
+| Mural de conquistas | `conquistas` | o time inteiro |
+| Gratidao e elogios | `elogios` | o time inteiro, com assinatura de quem elogiou |
+| O que me motiva | `motivadores` | o dono e o gestor, e so se a pessoa compartilhar |
+| Dinamica do anjo | `anjo_rodada` e `anjo_par` | cada pessoa ve so de quem ela e anjo |
+
+O **mural** aceita dois tipos, `vitoria` e `superacao`, com `check` no banco.
+Nos **elogios** o banco impede elogiar a si mesmo (`check (de_id <> para_id)`),
+entao a regra nao depende da tela.
+
+O **que me motiva** nasce so no aparelho. So sobe pro banco quando a pessoa
+aperta *Compartilhar com a lideranca* - e a tela diz antes quem vai ler. Pra
+desfazer, basta apagar os tres campos e compartilhar de novo.
+
+Na **dinamica do anjo** o gestor abre a rodada (padrao de 14 dias) e o app
+sorteia: a lista e embaralhada e girada uma casa, entao ninguem tira a si mesmo
+e todo mundo e cuidado por alguem. Os pares sobem com `Prefer: return=minimal`,
+ou seja, nem quem sorteia recebe a lista de volta, e a policy de leitura do
+`anjo_par` so devolve a linha de quem esta perguntando. Isso e privacidade de
+aplicacao, nao segredo absoluto: quem administra o Supabase sempre consegue
+consultar a tabela, e a tela fala isso na cara do usuario.
+
+Nada disso vira ponto: conquista e elogio **nao entram** na gamificacao nem no
+premio de assiduidade. Reconhecimento que vale nota deixa de ser reconhecimento
+e vira meta - e ai as pessoas escrevem pra pontuar, nao pra agradecer.
 
 ### Aviso de reuniao com o app fechado
 
