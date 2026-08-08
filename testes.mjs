@@ -41,7 +41,9 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial,
   custoDaEquipe, REGIMES_EMPRESA, STATUS_CANDIDATO, TIPOS_DOCUMENTO, DOCS_ADMISSAO, STATUS_EXAME,
   sortearAnjos, anjoPeriodoPadrao, ANJO_DIAS_PADRAO,
-  numerosDoMes, compAnterior, compExtenso, ataNova, participantesDoDia, combinadosDaReuniao };`;
+  numerosDoMes, compAnterior, compExtenso, ataNova, participantesDoDia, combinadosDaReuniao,
+  mapResposta, respostasDoDia, respostaVazia, impedimentosDoDia, combinadosNaPauta,
+  assuntosDaReuniao, textoAvisoReuniao, acoesAbertas };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -671,6 +673,89 @@ t("ata e numero do mes nao entram na gamificacao nem no premio",
 t("o README explica os numeros da retrospectiva e a ata",
   leia("README.md").includes("### Numeros da retrospectiva e ata automatica") &&
   leia("README.md").includes("sai time, nao sai pessoa"));
+
+// ══════════════════════════════════════════════════════════════════
+secao("As tres perguntas do time e a pauta real da reuniao");
+const respT = [
+  { id: "1", data: "2026-08-10", ritualId: "semanal", entreguei: "planilha", foco: "custos", impedimento: "preciso do acesso ao ERP", autor: "Marina", autorId: "u2" },
+  { id: "2", data: "2026-08-10", ritualId: "semanal", entreguei: "", foco: "suporte", impedimento: "", autor: "Rafael", autorId: "u3" },
+  { id: "3", data: "2026-08-03", ritualId: "semanal", entreguei: "x", foco: "y", impedimento: "z", autor: "Marina", autorId: "u2" },
+  { id: "4", data: "2026-08-10", ritualId: "mensal", entreguei: "", foco: "", impedimento: "", autor: "Juliana", autorId: "u4" },
+];
+const acoesT = [
+  { id: "a1", texto: "enviar planilha", dono: "Marina", prazo: "2026-08-09", feito: false },
+  { id: "a2", texto: "revisar contrato", dono: "Rafael", prazo: "2026-08-10", feito: false },
+  { id: "a3", texto: "ja resolvido", dono: "Rafael", prazo: "2026-08-10", feito: true },
+  { id: "a4", texto: "futuro", dono: "Juliana", prazo: "2026-09-01", feito: false },
+  { id: "a5", texto: "sem prazo", dono: "", prazo: "", feito: false },
+];
+const ritT = { id: "semanal", nome: "Planejamento da semana", inicio: "09:15", duracaoMin: 45,
+  blocos: [{ titulo: "Check-in de energia" }, { titulo: "Metas da semana" }, { titulo: "Dependências" }] };
+
+t("as respostas do dia saem separadas por ritual",
+  m.respostasDoDia(respT, "2026-08-10", "semanal").length === 2, "duas do semanal");
+t("resposta em branco nao conta como respondida",
+  m.respostaVazia(respT[3]) === true && m.respostaVazia(respT[1]) === false);
+t("resposta inexistente nao explode", m.respostaVazia(null) === true);
+t("so quem pediu ajuda entra na lista de impedimentos",
+  m.impedimentosDoDia(respT, "2026-08-10", "semanal").length === 1);
+t("o impedimento chega com autor e texto",
+  m.impedimentosDoDia(respT, "2026-08-10", "semanal")[0].autor === "Marina" &&
+  m.impedimentosDoDia(respT, "2026-08-10", "semanal")[0].texto === "preciso do acesso ao ERP");
+t("combinado vencido e do dia entram na pauta, feito e futuro nao",
+  m.combinadosNaPauta(acoesT, "2026-08-10").length === 2);
+t("combinado sem prazo nao vira pauta de vencimento",
+  !m.combinadosNaPauta(acoesT, "2026-08-10").some((a) => a.id === "a5"));
+t("os assuntos previstos contam ajuda e vencimento",
+  m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10").join(" | ") === "1 pedido de ajuda | 2 combinados vencendo");
+t("sem nada na mesa o app nao inventa assunto",
+  m.assuntosDaReuniao(ritT, [], [], "2026-08-10").length === 0);
+t("o aviso do celular NAO leva o texto do impedimento nem nome de ninguem",
+  !m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10").join(" ").includes("ERP") &&
+  !m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10").join(" ").includes("Marina"));
+t("o aviso continua dizendo nome, hora e pauta da reuniao",
+  m.textoAvisoReuniao(ritT, "amanhã").includes("Planejamento da semana") &&
+  m.textoAvisoReuniao(ritT, "amanhã").includes("09:15") &&
+  m.textoAvisoReuniao(ritT, "amanhã").includes("Metas da semana"));
+t("o aviso soma os assuntos quando existem",
+  m.textoAvisoReuniao(ritT, "amanhã", m.assuntosDaReuniao(ritT, respT, acoesT, "2026-08-10"))
+    .includes("Já na mesa: 1 pedido de ajuda e 2 combinados vencendo."));
+t("o aviso sem assuntos nao ganha frase vazia",
+  !m.textoAvisoReuniao(ritT, "hoje", []).includes("Já na mesa") &&
+  !m.textoAvisoReuniao(ritT, "hoje").includes("Já na mesa"));
+t("a ata guarda o que cada um respondeu naquele dia",
+  m.ataNova(ritT, "2026-08-10", ["Marina"], [], null, "Cleiton", "u1",
+    m.respostasDoDia(respT, "2026-08-10", "semanal")).respostas.length === 2);
+t("ata sem respostas fica com lista vazia, nao com undefined",
+  Array.isArray(m.ataNova(ritT, "2026-08-10", [], [], null, "Cleiton", "u1").respostas));
+t("mapResposta traduz as colunas do banco",
+  m.mapResposta({ id: "9", data: "2026-08-10", ritual_id: "semanal", entreguei: "a", foco: "b",
+    impedimento: "c", autor_nome: "Marina", autor_id: "u2" }).autor === "Marina");
+t("mapResposta com linha vazia devolve campos vazios",
+  m.mapResposta({}).entreguei === "" && m.mapResposta({}).impedimento === "");
+
+t("o bloco de metas abre as tres perguntas com o painel do time",
+  src.includes('bloco.tipo === "metas" ? <FormPerguntas') && src.includes("<RespostasDoTime"));
+t("o bloco de dependencias comeca pelo que esta travado",
+  src.includes('bloco.tipo === "acoes" ? (') && src.includes("<PainelImpedimentos"));
+t("o SQL cria a tabela de respostas com RLS ligada",
+  /create table if not exists public\.respostas/.test(sqlBloco) &&
+  /alter table public\.respostas enable row level security/.test(sqlBloco));
+t("cada um escreve so a propria resposta",
+  sqlBloco.includes("for insert to authenticated with check (autor_id = auth.uid())"));
+t("a coluna de respostas da ata entra por alter, pra quem ja rodou o SQL antes",
+  sqlBloco.includes("alter table public.atas add column if not exists respostas"));
+t("as respostas entram no diagnostico de tabelas do gestor", /\{ nome: "respostas"/.test(src));
+t("sem a tabela as respostas caem pro aparelho em vez de quebrar a tela",
+  src.includes("respostasNoBanco: false") && src.includes("a tabela respostas ainda não existe no banco"));
+t("a nota de energia continua fora do banco",
+  !/create table if not exists public\.energia/.test(sqlBloco) &&
+  !/sbInsert\(token, "energia"|sbUpsert\(token, "energia"/.test(src));
+t("a media de energia continua sendo so da propria pessoa",
+  src.includes("Só você vê esta linha"));
+t("o README explica as tres perguntas no banco e o limite do aviso",
+  leia("README.md").includes("### As tres perguntas do time e a pauta real") &&
+  leia("README.md").includes("respostas"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
