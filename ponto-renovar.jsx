@@ -1900,13 +1900,20 @@ function rotuloDiaReuniao(alvo, base) {
 
 function textoAvisoReuniao(ritual, rotulo, assuntos) {
   const extra = (assuntos || []).filter(Boolean);
+  /* Com tres assuntos, "a e b e c" fica ruim de ler na tela de bloqueio. */
+  const lista = extra.length > 1
+    ? extra.slice(0, -1).join(", ") + " e " + extra[extra.length - 1]
+    : extra.join("");
   return ritual.nome + " " + rotulo + " às " + ritual.inicio + " (" + ritual.duracaoMin + " min). Pauta: " + ritual.blocos.map((b) => b.titulo).join(" · ") + "."
-    + (extra.length ? " Já na mesa: " + extra.join(" e ") + "." : "");
+    + (extra.length ? " Já na mesa: " + lista + "." : "");
 }
 
-/* Combinados, respostas e check-in ficam só neste aparelho (localStorage),
-   como a hidratação. Nesta primeira versão nada disso vai para o banco:
-   é um caderno pessoal, o gestor não lê a nota de ânimo de ninguém. */
+/* Guarda no próprio aparelho (localStorage), como a hidratação. Hoje só o
+   check-in de energia PARA aqui: combinados, respostas das três perguntas e
+   atas já sobem para o banco quando as tabelas opcionais existem, e este
+   armazenamento passou a ser a rede de segurança de quem está sem tabela ou
+   sem internet. A nota de ânimo continua fora do banco de propósito — humor
+   de pessoa virando histórico consultável muda a nota, não o humor. */
 const RIT_PREFIXO = "pr_ritual_";
 function ritLer(chave, padrao) {
   try {
@@ -2303,6 +2310,9 @@ function ataNova(ritual, diaIso, participantes, combinados, numeros, autor, auto
       entreguei: String((x && x.entreguei) || "").slice(0, 500),
       foco: String((x && x.foco) || "").slice(0, 500),
       impedimento: String((x && x.impedimento) || "").slice(0, 500),
+      /* Guardado dentro da propria resposta, sem coluna nova no banco: ata que
+         nao mostra repeticao deixa o mesmo travamento parecer novidade. */
+      travado: !!(x && x.travado),
     })),
     numeros: numeros || null,
     autor: String(autor || "").trim().slice(0, 80),
@@ -2458,7 +2468,7 @@ function respostaVazia(r) {
 function impedimentosDoDia(lista, diaIso, ritualId) {
   return respostasDoDia(lista, diaIso, ritualId)
     .filter((r) => String(r.impedimento || "").trim())
-    .map((r) => ({ autor: r.autor || "alguem do time", texto: String(r.impedimento).trim() }));
+    .map((r) => ({ autor: r.autor || "alguem do time", autorId: r.autorId || "", texto: String(r.impedimento).trim() }));
 }
 /* Combinado que vence ate o dia da reuniao (ou ja venceu) e o assunto mais
    concreto que existe para levar para a pauta. */
@@ -2473,9 +2483,120 @@ function assuntosDaReuniao(ritual, respostas, acoes, diaIso) {
   const fora = [];
   const imp = impedimentosDoDia(respostas, diaIso, ritual && ritual.id).length;
   const venc = combinadosNaPauta(acoes, diaIso).length;
+  /* Repetido da reuniao passada entra como assunto separado: e a diferenca
+     entre "temos pedidos de ajuda" e "temos pedido de ajuda que nao andou". */
+  const trav = impedimentosTravados(respostas, ritual && ritual.id, diaIso).length;
   if (imp) fora.push(imp + (imp > 1 ? " pedidos de ajuda" : " pedido de ajuda"));
+  if (trav) fora.push(trav + (trav > 1 ? " repetidos da reunião passada" : " repetido da reunião passada"));
   if (venc) fora.push(venc + (venc > 1 ? " combinados vencendo" : " combinado vencendo"));
   return fora;
+}
+
+/* ---------- impedimento que nao anda ----------
+   Perguntar "tem impedimento?" toda semana e facil. O que corroi um time e o
+   impedimento que a pessoa repete na reuniao seguinte e ninguem move. Quando
+   isso acontece quase nunca e falta de esforco: falta uma decisao que a pessoa
+   sozinha nao pode tomar. Por isso o app marca o ASSUNTO travado, nunca a
+   pessoa, e oferece a unica saida honesta - virar combinado com dono e prazo. */
+function chaveAutorResposta(r) {
+  return String((r && (r.autorId || r.autor)) || "").trim().toLowerCase();
+}
+/* Dia da ocorrencia anterior do MESMO ritual. O limite de 45 dias cobre o
+   mensal com folga e evita varrer o ano inteiro quando o ritual nao existe. */
+function reuniaoAnteriorDoRitual(ritualId, diaIso, dias) {
+  const iso = String(diaIso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || !ritualId) return "";
+  const base = dataLocal(iso);
+  if (!base || isNaN(base.getTime())) return "";
+  const limite = dias || 45;
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  for (let i = 0; i < limite; i++) {
+    d.setDate(d.getDate() - 1);
+    if (reunioesDoDia(d).some((r) => r && r.id === ritualId)) return dataISO(d);
+  }
+  return "";
+}
+/* O dia de reuniao que vale para olhar agora: hoje, se hoje tem esse ritual;
+   senao a ultima vez que ele aconteceu. E assim que uma terca-feira consegue
+   falar do que travou na segunda, em vez de mostrar tela vazia. */
+function ocorrenciaRitualAteHoje(ritualId, diaIso, dias) {
+  const iso = String(diaIso || "").slice(0, 10);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? dataLocal(iso) : null;
+  if (d && !isNaN(d.getTime()) && reunioesDoDia(d).some((r) => r && r.id === ritualId)) return iso;
+  return reuniaoAnteriorDoRitual(ritualId, diaIso, dias);
+}
+/* Mesma pessoa pediu ajuda na reuniao passada deste ritual e pediu de novo
+   agora. Comparar por pessoa, e nao por texto, e de proposito: quem esta
+   travado raramente descreve o problema com as mesmas palavras duas vezes. */
+function impedimentosTravados(respostas, ritualId, diaIso, diaAnteriorIso) {
+  const ant = diaAnteriorIso || reuniaoAnteriorDoRitual(ritualId, diaIso);
+  if (!ant) return [];
+  const antes = respostasDoDia(respostas, ant, ritualId).filter((r) => String(r.impedimento || "").trim());
+  if (!antes.length) return [];
+  return respostasDoDia(respostas, diaIso, ritualId)
+    .filter((r) => String(r.impedimento || "").trim())
+    .map((r) => {
+      const par = antes.filter((x) => chaveAutorResposta(x) === chaveAutorResposta(r))[0];
+      if (!par) return null;
+      return {
+        autor: r.autor || "alguem do time",
+        autorId: r.autorId || "",
+        texto: String(r.impedimento).trim(),
+        anterior: String(par.impedimento).trim(),
+        desde: ant,
+      };
+    })
+    .filter(Boolean);
+}
+/* Os pedidos de ajuda do dia, cada um sabendo se ja veio da reuniao passada. */
+function impedimentosComHistorico(respostas, ritualId, diaIso) {
+  const trav = {};
+  impedimentosTravados(respostas, ritualId, diaIso).forEach((x) => { trav[chaveAutorResposta(x)] = x; });
+  return impedimentosDoDia(respostas, diaIso, ritualId).map((x) => {
+    const t = trav[chaveAutorResposta(x)];
+    return {
+      autor: x.autor,
+      autorId: x.autorId || "",
+      texto: x.texto,
+      travado: !!t,
+      anterior: t ? t.anterior : "",
+      desde: t ? t.desde : "",
+    };
+  });
+}
+/* Acompanhamento COLETIVO dos combinados. Nao tem nome, nao tem ranking e nao
+   tem nada por pessoa: o gestor precisa saber se o time esta afogado, nao quem
+   esta devendo. Quem ficou com o que continua visivel so no roteiro, onde o
+   proprio time olha junto. Numero por pessoa aqui viraria placar, e placar de
+   tarefa atrasada e o caminho mais curto para o time parar de pedir ajuda. */
+function acompanhamentoCombinados(acoes, respostas, hojeIso) {
+  const abertas = acoesAbertas(acoes);
+  const comPrazo = abertas.filter((a) => String(a.prazo || "").trim());
+  const atrasados = comPrazo.filter((a) => String(a.prazo).slice(0, 10) < hojeIso);
+  const vencemHoje = comPrazo.filter((a) => String(a.prazo).slice(0, 10) === hojeIso);
+  let atrasoMaiorDias = 0;
+  const ref = /^\d{4}-\d{2}-\d{2}$/.test(String(hojeIso || "")) ? dataLocal(hojeIso) : null;
+  if (ref) {
+    atrasados.forEach((a) => {
+      const d = dataLocal(String(a.prazo).slice(0, 10));
+      const dif = Math.round((ref - d) / 86400000);
+      if (dif > atrasoMaiorDias) atrasoMaiorDias = dif;
+    });
+  }
+  const travados = RITUAIS.reduce((soma, r) => {
+    const dia = ocorrenciaRitualAteHoje(r.id, hojeIso);
+    return soma + (dia ? impedimentosTravados(respostas, r.id, dia).length : 0);
+  }, 0);
+  return {
+    abertos: abertas.length,
+    semPrazo: abertas.length - comPrazo.length,
+    semDono: abertas.filter((a) => !String(a.dono || "").trim()).length,
+    atrasados: atrasados.length,
+    vencemHoje: vencemHoje.length,
+    atrasoMaiorDias,
+    travados,
+    vazio: abertas.length === 0 && travados === 0,
+  };
 }
 
 /* ---------- push de servidor: o aviso chega com o app FECHADO ----------
@@ -3857,7 +3978,12 @@ function AppInterno() {
     /* A ata leva o que o time respondeu naquele dia: sem isso ela viraria uma
        lista de tarefas sem contexto, e em dois meses ninguem lembra o porque. */
     const respostas = respostasDoDia(rit.respostas || [], diaIso, ritual.id);
-    const nova = ataNova(ritual, diaIso, participantes, combinados, numeros, user.nome, user.id, respostas);
+    /* Marca quem ja tinha pedido a mesma ajuda na reuniao anterior deste
+       ritual. Sem isso a ata de cada mes parece um problema novo. */
+    const travados = {};
+    impedimentosTravados(rit.respostas || [], ritual.id, diaIso).forEach((x) => { travados[chaveAutorResposta(x)] = true; });
+    const respostasAta = respostas.map((r) => ({ ...r, travado: !!travados[chaveAutorResposta(r)] }));
+    const nova = ataNova(ritual, diaIso, participantes, combinados, numeros, user.nome, user.id, respostasAta);
     if (demo || !rit.atasNoBanco) {
       if (!demo) atasGravar(user.id, [nova].concat(rit.atas || []));
       mudarRit({ atas: [nova].concat(rit.atas || []) });
@@ -4522,7 +4648,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, demo }} />
+            <TelaGestor {...{ acoes, respostas: rit.respostas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, demo }} />
           )}
         </main>
       </div>
@@ -5612,9 +5738,10 @@ function FormPerguntas({ user, usuarios, hojeIso, acoes, ritual, respostas, resp
    direto o formulario de combinado, o que assumia que alguem lembraria de cabeca
    quem pediu ajuda dez minutos antes. Agora a lista vem do que o time escreveu
    e do que esta vencendo, e o combinado nasce em cima disso. */
-function PainelImpedimentos({ respostas, acoes, hojeIso, ritual }) {
-  const imp = impedimentosDoDia(respostas, hojeIso, ritual && ritual.id);
+function PainelImpedimentos({ respostas, acoes, hojeIso, ritual, onVirarCombinado }) {
+  const imp = impedimentosComHistorico(respostas, ritual && ritual.id, hojeIso);
   const venc = combinadosNaPauta(acoes, hojeIso);
+  const travados = imp.filter((x) => x.travado);
   if (!imp.length && !venc.length) {
     return (
       <p style={{ fontSize: 12, color: C.cinza, margin: "0 0 14px", lineHeight: 1.6 }}>
@@ -5624,14 +5751,42 @@ function PainelImpedimentos({ respostas, acoes, hojeIso, ritual }) {
   }
   return (
     <div style={{ marginBottom: 16 }}>
+      {travados.length ? (
+        <div style={{ border: "1px solid " + C.vermelho, borderRadius: 12, padding: "10px 14px", marginBottom: 12, background: "rgba(220,80,80,0.07)" }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.vermelho }}>Isto já apareceu na reunião passada</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>
+            {travados.length > 1 ? travados.length + " pedidos de ajuda voltaram" : "Um pedido de ajuda voltou"} sem sair do lugar. Pedido que repete quase nunca é falta de esforço de quem pediu: é decisão que ainda não foi tomada, ou prioridade que ninguém trocou. Vale gastar esta reunião nisso antes de falar de qualquer coisa nova.
+          </p>
+        </div>
+      ) : null}
       {imp.length ? (
         <div style={{ marginBottom: venc.length ? 12 : 0 }}>
           <div style={{ ...S.display, fontSize: 13, color: C.branco }}>Pedidos de ajuda desta reunião</div>
           <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             {imp.map((x, i) => (
-              <div key={i} style={{ border: "1px solid " + C.borda, borderLeft: "3px solid " + C.amarelo, borderRadius: 10, padding: "8px 12px" }}>
-                <div style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</div>
+              <div key={i} style={{ border: "1px solid " + C.borda, borderLeft: "3px solid " + (x.travado ? C.vermelho : C.amarelo), borderRadius: 10, padding: "8px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</div>
+                  {x.travado ? (
+                    <span style={{ fontSize: 10.5, color: C.vermelho, border: "1px solid " + C.vermelho, borderRadius: 20, padding: "1px 8px" }}>
+                      já pediu em {fmtData(x.desde)}
+                    </span>
+                  ) : null}
+                </div>
                 <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>{x.texto}</div>
+                {x.travado && x.anterior && x.anterior !== x.texto ? (
+                  <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 4, opacity: 0.85, whiteSpace: "pre-wrap" }}>
+                    na reunião passada: {x.anterior}
+                  </div>
+                ) : null}
+                {onVirarCombinado ? (
+                  <button
+                    style={{ ...S.btnGhost, padding: "4px 10px", fontSize: 11.5, marginTop: 8 }}
+                    onClick={() => onVirarCombinado(x)}
+                  >
+                    Virar combinado
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>
@@ -5709,12 +5864,24 @@ function RespostasDoTime({ user, usuarios, respostas, respostasNoBanco, hojeIso,
 /* Combinado = o que foi acordado na reunião, com dono e prazo. É isto que
    fecha o ciclo: vira lembrete no Bater ponto e volta preenchido na
    pergunta "o que eu entreguei" da reunião seguinte. */
-function FormCombinado({ user, usuarios, origem, onCriar }) {
+function FormCombinado({ user, usuarios, origem, onCriar, rascunho }) {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const [texto, setTexto] = useState("");
   const [dono, setDono] = useState(user.nome || "");
   const [prazo, setPrazo] = useState("");
+  const [veioDe, setVeioDe] = useState("");
+  /* Pedido de ajuda vindo do painel de impedimentos ja entra escrito aqui.
+     Reescrever a mao o que o colega acabou de dizer e exatamente a etapa onde
+     o combinado costuma morrer. O DONO nao vem preenchido de proposito: quem
+     pediu ajuda quase nunca e quem consegue destravar. */
+  const rascunhoSeq = rascunho ? rascunho.seq : 0;
+  useEffect(() => {
+    if (!rascunho || !rascunho.texto) return;
+    setTexto(String(rascunho.texto).slice(0, 280));
+    setVeioDe(rascunho.autor || "");
+    setErro("");
+  }, [rascunhoSeq]);
   const nomes = (usuarios || []).filter((u) => u && u.nome && u.ativo !== false).map((u) => u.nome);
   const opcoes = nomes.length ? nomes : [user.nome || "eu"];
   /* Gravar pode ir ao banco agora, entao pode demorar e pode falhar.
@@ -5728,6 +5895,7 @@ function FormCombinado({ user, usuarios, origem, onCriar }) {
       await onCriar(acaoNova(texto, dono, prazo, origem));
       setTexto("");
       setPrazo("");
+      setVeioDe("");
     } catch (e) {
       setErro(mensagemAmigavel(e, "ao registrar o combinado"));
     } finally {
@@ -5737,6 +5905,11 @@ function FormCombinado({ user, usuarios, origem, onCriar }) {
   return (
     <div>
       <div style={{ fontSize: 13, color: C.branco, marginBottom: 8 }}>Registrar um combinado desta etapa</div>
+      {veioDe && texto.trim() ? (
+        <p style={{ fontSize: 11.5, color: C.amarelo, margin: "0 0 6px", lineHeight: 1.5 }}>
+          Veio do pedido de ajuda de {veioDe}. Escolha quem destrava e até quando — sem dono e sem data isto volta igual na próxima reunião.
+        </p>
+      ) : null}
       <textarea style={{ ...S.input, minHeight: 60 }} maxLength={280} value={texto}
         onChange={(e) => setTexto(e.target.value)} placeholder="O que ficou acordado, em uma frase" />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
@@ -5805,6 +5978,9 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
   const [salaTxt, setSalaTxt] = useState(sala || "");
   const [salvandoSala, setSalvandoSala] = useState(false);
   const [avisoSala, setAvisoSala] = useState("");
+  /* Rascunho de combinado nascido de um pedido de ajuda. Fica aqui, e nao
+     dentro do formulario, porque quem aperta o botao e o painel de cima. */
+  const [rascunhoComb, setRascunhoComb] = useState(null);
   /* O gestor pode abrir a tela antes de o link chegar do banco. */
   useEffect(() => { setSalaTxt(sala || ""); }, [sala]);
   async function salvarSala() {
@@ -5879,8 +6055,9 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
                     : bloco.tipo === "elogios" ? <FormElogioReuniao user={user} usuarios={usuarios} origem={ritual.nome} onElogio={onElogio} />
                       : bloco.tipo === "acoes" ? (
                         <>
-                          <PainelImpedimentos respostas={rit.respostas || []} acoes={acoes} hojeIso={hojeIso} ritual={ritual} />
-                          <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
+                          <PainelImpedimentos respostas={rit.respostas || []} acoes={acoes} hojeIso={hojeIso} ritual={ritual}
+                            onVirarCombinado={(x) => setRascunhoComb({ texto: x.texto, autor: x.autor, seq: Date.now() })} />
+                          <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} rascunho={rascunhoComb} />
                         </>
                       )
                       : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
@@ -6321,7 +6498,7 @@ function CartaoAta({ ata }) {
               <div key={i} style={{ borderLeft: "2px solid " + C.borda, paddingLeft: 10 }}>
                 <b style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</b>
                 {x.foco ? <div style={{ fontSize: 12, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>Foco: {x.foco}</div> : null}
-                {x.impedimento ? <div style={{ fontSize: 12, color: C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>Precisava de ajuda: {x.impedimento}</div> : null}
+                {x.impedimento ? <div style={{ fontSize: 12, color: x.travado ? C.vermelho : C.cinza, marginTop: 3, whiteSpace: "pre-wrap" }}>Precisava de ajuda: {x.impedimento}{x.travado ? " (já era o mesmo pedido da reunião anterior)" : ""}</div> : null}
               </div>
             ))}
           </div>
@@ -8444,7 +8621,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, demo }) {
+function TelaGestor({ acoes = [], respostas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, demo }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -8490,6 +8667,47 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
             <p style={{ fontSize: 11, color: C.cinza, marginTop: 10, lineHeight: 1.5 }}>
               Só entram nesta conta os dias em que o colaborador registrou <b>saída e volta do almoço</b> (4 marcações). Em dias com um único par de marcações o resultado é o mesmo nas duas regras — a correção do intervalo e a da jornada se anulam.
             </p>
+          </div>
+        );
+      })()}
+      {(() => {
+        /* Acompanhamento dos combinados. De propósito sem nome, sem ranking e
+           sem contagem por pessoa: placar de tarefa atrasada é o caminho mais
+           curto para o time parar de pedir ajuda em voz alta. */
+        const hojeIsoG = dataISO(new Date());
+        const ac = acompanhamentoCombinados(acoes, respostas, hojeIsoG);
+        return (
+          <div style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: "4px solid " + (ac.travados || ac.atrasados ? C.amarelo : C.borda) }}>
+            <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🤝 Acompanhamento dos combinados</div>
+            <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+              Números do time inteiro. Aqui não existe nome, nem ranking, nem contagem por pessoa: isto serve para você perceber se o time aceitou trabalho demais, não para cobrar alguém. Quem ficou com o quê aparece no roteiro, onde o próprio time olha junto.
+            </p>
+            {ac.vazio ? (
+              <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>
+                Nenhum combinado em aberto e nada repetido da reunião passada. Se o time se reuniu e nada saiu escrito, o problema não está neste painel: está na reunião terminar sem ninguém ficar com nada.
+              </p>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <CartaoNumero rotulo="Em aberto" valor={ac.abertos} nota="combinados que ainda não fecharam" />
+                  <CartaoNumero rotulo="Vencem hoje" valor={ac.vencemHoje} cor={ac.vencemHoje ? C.amarelo : C.branco} nota="dá para perguntar hoje, não depois" />
+                  <CartaoNumero rotulo="Já venceram" valor={ac.atrasados} cor={ac.atrasados ? C.vermelho : C.branco}
+                    nota={ac.atrasados ? "o mais antigo estourou há " + ac.atrasoMaiorDias + (ac.atrasoMaiorDias === 1 ? " dia" : " dias") : "nenhum prazo estourado"} />
+                  <CartaoNumero rotulo="Sem dono ou sem prazo" valor={ac.semDono + ac.semPrazo} cor={ac.semDono + ac.semPrazo ? C.amarelo : C.branco} nota="combinado sem dono e sem data é intenção, não combinado" />
+                  <CartaoNumero rotulo="Repetidos" valor={ac.travados} cor={ac.travados ? C.vermelho : C.branco} nota="pedidos de ajuda que voltaram na reunião seguinte" />
+                </div>
+                {ac.travados ? (
+                  <p style={{ fontSize: 12.5, color: C.branco, margin: "12px 0 0", lineHeight: 1.6 }}>
+                    <b>Leia o número de repetidos antes dos outros.</b> Alguém pediu a mesma ajuda em duas reuniões seguidas e nada mudou. Isso raramente é falta de esforço de quem pediu: costuma ser decisão que só você pode tomar, prioridade que ninguém trocou ou acesso que ninguém liberou. O texto do pedido fica no roteiro do time, não aqui.
+                  </p>
+                ) : null}
+                {ac.atrasados && !ac.travados ? (
+                  <p style={{ fontSize: 12.5, color: C.cinza, margin: "12px 0 0", lineHeight: 1.6 }}>
+                    Prazo estourado em série quase nunca se resolve cobrando mais rápido. Vale olhar quanto trabalho novo entrou desde a última reunião antes de pedir explicação a alguém.
+                  </p>
+                ) : null}
+              </>
+            )}
           </div>
         );
       })()}
