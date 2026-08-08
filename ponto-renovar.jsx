@@ -1597,7 +1597,7 @@ function baixarArquivo(conteudo, nome) {
    No iPhone o construtor new Notification() não existe (nem instalado): só o
    service worker consegue exibir aviso do sistema. Por isso tentamos primeiro
    o registration.showNotification e caímos pro construtor no desktop. */
-const TELAS_ATALHO = ["ponto", "espelho", "banco", "holerite", "ferias"];
+const TELAS_ATALHO = ["ponto", "espelho", "banco", "holerite", "ferias", "time"];
 
 function telaInicial() {
   try {
@@ -1943,6 +1943,59 @@ function acaoNova(texto, dono, prazo, origem) {
 function acoesAbertas(lista) { return (lista || []).filter((a) => a && !a.feito); }
 function acoesAtrasadas(lista, hojeIso) { return acoesAbertas(lista).filter((a) => a.prazo && a.prazo < hojeIso); }
 function acoesConcluidasDesde(lista, iso) { return (lista || []).filter((a) => a && a.feito && a.feitoEm && a.feitoEm >= iso); }
+
+/* ---------- combinados no banco (tabela opcional) ----------
+   A primeira versao guardava combinado so no aparelho de quem escreveu, e
+   por isso o colega nunca via a tarefa que sobrou pra ele. Com a tabela
+   `combinados` criada, o app le e grava no Supabase; sem ela tudo continua
+   no localStorage, igual antes. Tabela que falta nao pode quebrar tela. */
+function mapCombinado(r) {
+  return {
+    id: r.id,
+    texto: r.texto || "",
+    dono: r.dono_nome || "",
+    donoId: r.dono_id || "",
+    prazo: r.prazo || "",
+    origem: r.origem || "",
+    feito: !!r.feito,
+    feitoEm: r.feito_em || "",
+    criadoEm: r.criado_em || "",
+    criadoPor: r.criado_por || "",
+  };
+}
+async function combinadosBaixar(token) {
+  const linhas = await sbSelect(token, "combinados", "select=*&order=criado_em.desc&limit=300");
+  return (linhas || []).map(mapCombinado);
+}
+async function combinadoInserir(token, autorId, acao, donoId) {
+  const linhas = await sbInsert(token, "combinados", [{
+    texto: acao.texto,
+    dono_id: donoId || null,
+    dono_nome: acao.dono || null,
+    prazo: acao.prazo || null,
+    origem: acao.origem || null,
+    criado_por: autorId,
+  }]);
+  return mapCombinado((linhas && linhas[0]) || {});
+}
+function combinadoMarcar(token, id, feito) {
+  const patch = { feito: !!feito, feito_em: feito ? new Date().toISOString() : null };
+  return sbUpdate(token, "combinados", "id=eq." + encodeURIComponent(id), patch);
+}
+
+/* Ajuste do time (hoje so o link da sala) mora numa tabela chave/valor: o
+   gestor grava uma vez e todo mundo enxerga o mesmo link. Antes isso ficava
+   no localStorage do gestor, ou seja, ninguem mais via. */
+async function configBaixar(token) {
+  const linhas = await sbSelect(token, "config_time", "select=chave,valor");
+  const o = {};
+  (linhas || []).forEach((r) => { o[r.chave] = r.valor || ""; });
+  return o;
+}
+function configGravar(token, userId, chave, valor) {
+  const linha = { chave, valor: valor || "", atualizado_por: userId || null, atualizado_em: new Date().toISOString() };
+  return sbUpsert(token, "config_time", [linha], "chave");
+}
 
 /* Videochamada: o app não hospeda vídeo. O gestor cola o link da sala
    (Meet, Jitsi, Zoom) e o app apenas abre em aba nova, com o mesmo link
@@ -2503,6 +2556,11 @@ function AppInterno() {
   const [credenciais, setCredenciais] = useState([]); // credenciais WebAuthn (dados públicos)
   const [consImagem, setConsImagem] = useState([]); // termo de imagem: ciência do CFTV + autorização pra divulgação
   const [aceites, setAceites] = useState([]); // aceites do codigo de conduta e do espelho mensal
+  /* Combinados e link da sala: tabelas opcionais. Enquanto elas nao existirem
+     no banco, acoesNoBanco fica falso e tudo continua no localStorage. */
+  const [acoes, setAcoes] = useState([]);
+  const [acoesNoBanco, setAcoesNoBanco] = useState(false);
+  const [sala, setSala] = useState(() => salaLer());
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
   const [carregandoSecundarios, setCarregandoSecundarios] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: "erro"|"ok", texto }
@@ -2681,6 +2739,26 @@ function AppInterno() {
           setAceites(rows.map(mapAceite));
         } catch (e) { console.warn("[aceites]", e.message); }
       })();
+      // Combinados das reunioes: tabela opcional (combinados). Sem ela o app
+      // volta pro caderno local do aparelho, que foi como a primeira versao saiu.
+      (async () => {
+        try {
+          setAcoes(await combinadosBaixar(token));
+          setAcoesNoBanco(true);
+        } catch (e) {
+          console.warn("[combinados]", e.message);
+          setAcoes(acoesLer(perfil.id));
+          setAcoesNoBanco(false);
+        }
+      })();
+      // Link da sala de videochamada: tabela opcional (config_time). O gestor
+      // grava uma vez e o time inteiro passa a ver o mesmo link.
+      (async () => {
+        try {
+          const cfg = await configBaixar(token);
+          if (cfg.sala_video) setSala(salaGravar(cfg.sala_video));
+        } catch (e) { console.warn("[config do time]", e.message); }
+      })();
       // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
       // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
       (async () => {
@@ -2810,6 +2888,7 @@ function AppInterno() {
 
   const sair = () => {
     setUser(null); setSessao(null); setDemo(false);
+    setAcoes([]); setAcoesNoBanco(false);
     setUsuarios([]); setRegistros([]); setFaltas([]); setJustificativas([]); setAtestados([]); setFerias([]); setLogs([]);
     setFluxoPonto(null); setComprovante(null);
   };
@@ -3132,6 +3211,46 @@ function AppInterno() {
     if (!user || demo || notifStatus !== "granted") return;
     registrarPush(sessao?.token, user.id, demo);
   }, [user, sessao, notifStatus, demo]);
+
+  /* ---------- combinados das reunioes ----------
+     Com a tabela no banco o combinado vale pro time todo; sem ela cai de
+     volta pro aparelho. As duas rotas devolvem a mesma lista pra tela, entao
+     nenhuma parte da UI precisa saber onde o dado foi parar. */
+  const criarCombinado = async (acao) => {
+    if (demo || !acoesNoBanco) {
+      const lista = [acao].concat(acoes);
+      if (!demo) acoesGravar(user.id, lista);
+      setAcoes(lista);
+      return;
+    }
+    const alvo = usuarios.filter((u) => u.nome === acao.dono)[0];
+    const salva = await combinadoInserir(sessao.token, user.id, acao, alvo ? alvo.id : null);
+    setAcoes((l) => [salva].concat(l));
+  };
+  const alternarCombinado = async (id) => {
+    const alvo = acoes.filter((a) => a.id === id)[0];
+    if (!alvo) return;
+    const feito = !alvo.feito;
+    const feitoEm = feito ? new Date().toISOString() : "";
+    if (!demo && acoesNoBanco) await combinadoMarcar(sessao.token, id, feito);
+    const lista = acoes.map((a) => (a.id === id ? { ...a, feito, feitoEm } : a));
+    if (!demo && !acoesNoBanco) acoesGravar(user.id, lista);
+    setAcoes(lista);
+  };
+  /* Sala de videochamada: o gestor grava e a frase de volta diz, sem enfeite,
+     se o time inteiro passou a enxergar ou se ficou so neste aparelho. */
+  const salvarSalaVideo = async (url) => {
+    const limpo = salaGravar(url);
+    setSala(limpo);
+    if (!limpo && String(url || "").trim()) return "Endereço inválido: nada foi salvo.";
+    if (demo) return "Demonstração: nada é gravado de verdade.";
+    try {
+      await configGravar(sessao.token, user.id, "sala_video", limpo);
+      return limpo ? "Link salvo — o time inteiro passa a ver esta sala." : "Link removido.";
+    } catch (e) {
+      return "Salvo só neste aparelho: " + mensagemAmigavel(e, "ao gravar no banco");
+    }
+  };
 
   /* ---------- banco de horas → folga ---------- */
   const solicitarFolga = async (horas, dataFolga) => {
@@ -3775,7 +3894,7 @@ function AppInterno() {
             <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -3784,7 +3903,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
-          {tela === "time" && <TelaTime user={user} usuarios={usuarios} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -4213,7 +4332,7 @@ function RelogioVivo() {
   );
 }
 
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro, acoes, onAlternarCombinado }) {
   // Trava anti-duplicidade: 60s de espera após uma batida (evita duplo toque e registro repetido)
   const ultima = registros.filter(r => r.userId === user.id).reduce((m, r) => Math.max(m, new Date(r.ts).getTime()), 0);
   const [batidaRecente, setBatidaRecente] = useState(0);
@@ -4374,7 +4493,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
             <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) · {a.faltas} falta(s)</div>
           </div>
           <CartaoBemEstar userId={user.id} />
-      <CartaoCombinados user={user} onAbrirRoteiro={onAbrirRoteiro} />
+      <CartaoCombinados acoes={acoes} onAlternar={onAlternarCombinado} onAbrirRoteiro={onAbrirRoteiro} />
         </div>
       </div>
     </div>
@@ -4840,18 +4959,30 @@ function FormPerguntas({ user, hojeIso, acoes }) {
 /* Combinado = o que foi acordado na reunião, com dono e prazo. É isto que
    fecha o ciclo: vira lembrete no Bater ponto e volta preenchido na
    pergunta "o que eu entreguei" da reunião seguinte. */
-function FormCombinado({ user, usuarios, origem, acoes, onMudar }) {
+function FormCombinado({ user, usuarios, origem, onCriar }) {
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
   const [texto, setTexto] = useState("");
   const [dono, setDono] = useState(user.nome || "");
   const [prazo, setPrazo] = useState("");
   const nomes = (usuarios || []).filter((u) => u && u.nome && u.ativo !== false).map((u) => u.nome);
   const opcoes = nomes.length ? nomes : [user.nome || "eu"];
-  function salvar() {
-    if (!texto.trim()) return;
-    const lista = (acoes || []).concat([acaoNova(texto, dono, prazo, origem)]);
-    acoesGravar(user.id, lista);
-    onMudar(lista);
-    setTexto(""); setPrazo("");
+  /* Gravar pode ir ao banco agora, entao pode demorar e pode falhar.
+     Enquanto nao volta, o botao trava; se falhar, a frase fica na tela
+     e o texto do usuario NAO e apagado. */
+  async function salvar() {
+    if (!texto.trim() || salvando) return;
+    setSalvando(true);
+    setErro("");
+    try {
+      await onCriar(acaoNova(texto, dono, prazo, origem));
+      setTexto("");
+      setPrazo("");
+    } catch (e) {
+      setErro(mensagemAmigavel(e, "ao registrar o combinado"));
+    } finally {
+      setSalvando(false);
+    }
   }
   return (
     <div>
@@ -4863,19 +4994,22 @@ function FormCombinado({ user, usuarios, origem, acoes, onMudar }) {
           {opcoes.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <input type="date" style={{ ...S.input, flex: "1 1 150px" }} value={prazo} onChange={(e) => setPrazo(e.target.value)} />
-        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvar} disabled={!texto.trim()}>Combinar</button>
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvar} disabled={!texto.trim() || salvando}>{salvando ? "Gravando..." : "Combinar"}</button>
       </div>
+      {erro && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0", lineHeight: 1.5 }}>{erro}</p>}
     </div>
   );
 }
 
-function ListaCombinados({ user, acoes, onMudar, hojeIso, compacta }) {
+function ListaCombinados({ acoes, onAlternar, hojeIso, compacta }) {
   const abertas = acoesAbertas(acoes);
   const atrasadas = acoesAtrasadas(acoes, hojeIso);
-  function alternar(id) {
-    const lista = (acoes || []).map((a) => (a.id === id ? { ...a, feito: !a.feito, feitoEm: !a.feito ? new Date().toISOString() : "" } : a));
-    acoesGravar(user.id, lista);
-    onMudar(lista);
+  const [ocupado, setOcupado] = useState("");
+  async function alternar(id) {
+    if (ocupado) return;
+    setOcupado(id);
+    try { await onAlternar(id); } catch { /* onAlternar ja mostra o aviso; aqui so libera o clique */ }
+    finally { setOcupado(""); }
   }
   const mostrar = compacta ? abertas.slice(0, 4) : (acoes || []).slice().sort((a, b) => Number(a.feito) - Number(b.feito) || String(a.prazo || "9").localeCompare(String(b.prazo || "9")));
   if (!mostrar.length) {
@@ -4911,13 +5045,22 @@ function ListaCombinados({ user, acoes, onMudar, hojeIso, compacta }) {
 /* Tela Nosso time: o roteiro das reuniões, os combinados e o check-in.
    Nesta primeira versão tudo mora no aparelho — nenhuma tabela nova no
    Supabase, nenhum dado saindo do navegador de quem escreveu. */
-function TelaTime({ user, usuarios }) {
+function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala }) {
   const agora = new Date();
   const hojeIso = dataISO(agora);
   const [aba, setAba] = useState("roteiro");
-  const [acoes, setAcoes] = useState(() => acoesLer(user.id));
-  const [sala, setSala] = useState(() => salaLer());
-  const [salaTxt, setSalaTxt] = useState(() => salaLer());
+  const [salaTxt, setSalaTxt] = useState(sala || "");
+  const [salvandoSala, setSalvandoSala] = useState(false);
+  const [avisoSala, setAvisoSala] = useState("");
+  /* O gestor pode abrir a tela antes de o link chegar do banco. */
+  useEffect(() => { setSalaTxt(sala || ""); }, [sala]);
+  async function salvarSala() {
+    setSalvandoSala(true);
+    setAvisoSala("");
+    try { setAvisoSala(await onSalvarSala(salaTxt)); }
+    catch (e) { setAvisoSala(mensagemAmigavel(e, "ao salvar o link da sala")); }
+    finally { setSalvandoSala(false); }
+  }
   const [ritualId, setRitualId] = useState(() => {
     const d = reunioesDoDia(new Date());
     if (d.length) return d[0].id;
@@ -4969,7 +5112,7 @@ function TelaTime({ user, usuarios }) {
             {(bloco) => (
               bloco.tipo === "energia" ? <FormEnergia user={user} hojeIso={hojeIso} />
                 : bloco.tipo === "metas" ? <FormPerguntas user={user} hojeIso={hojeIso} acoes={acoes} />
-                  : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} acoes={acoes} onMudar={setAcoes} />
+                  : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
             )}
           </Roteiro>
         </div>
@@ -4977,9 +5120,10 @@ function TelaTime({ user, usuarios }) {
       {aba === "combinados" && (
         <div style={{ ...S.card, padding: 16 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.branco, marginBottom: 12 }}>Combinados do time</div>
-          <FormCombinado user={user} usuarios={usuarios} origem="avulso" acoes={acoes} onMudar={setAcoes} />
+          <p style={{ fontSize: 12, color: C.cinza, margin: "-6px 0 12px", lineHeight: 1.6 }}>{acoesNoBanco ? "Todo mundo do time vê e pode acompanhar esta lista." : "Guardado só neste aparelho: a tabela combinados ainda não existe no banco."}</p>
+          <FormCombinado user={user} usuarios={usuarios} origem="avulso" onCriar={onCriar} />
           <div style={{ marginTop: 16 }}>
-            <ListaCombinados user={user} acoes={acoes} onMudar={setAcoes} hojeIso={hojeIso} />
+            <ListaCombinados acoes={acoes} onAlternar={onAlternar} hojeIso={hojeIso} />
           </div>
         </div>
       )}
@@ -5011,9 +5155,10 @@ function TelaTime({ user, usuarios }) {
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <input style={{ ...S.input, flex: "1 1 240px" }} value={salaTxt} onChange={(e) => setSalaTxt(e.target.value)} placeholder="https://meet.google.com/xxx-xxxx-xxx" />
-            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={() => setSala(salaGravar(salaTxt))}>Salvar</button>
+            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvarSala} disabled={salvandoSala}>{salvandoSala ? "Salvando..." : "Salvar"}</button>
           </div>
           {salaTxt && !salaValida(salaTxt) && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0" }}>Endereço inválido — precisa começar com https://</p>}
+          {avisoSala && <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>{avisoSala}</p>}
         </div>
       )}
     </div>
@@ -5022,8 +5167,7 @@ function TelaTime({ user, usuarios }) {
 
 /* Combinados abertos aparecem no Bater ponto: o que foi acordado na reunião
    encontra a pessoa no lugar em que ela entra todo dia. */
-function CartaoCombinados({ user, onAbrirRoteiro }) {
-  const [acoes, setAcoes] = useState(() => acoesLer(user.id));
+function CartaoCombinados({ acoes, onAlternar, onAbrirRoteiro }) {
   const hojeIso = dataISO(new Date());
   if (!acoesAbertas(acoes).length) return null;
   return (
@@ -5033,7 +5177,7 @@ function CartaoCombinados({ user, onAbrirRoteiro }) {
         <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={onAbrirRoteiro}>Ver todos</button>
       </div>
       <div style={{ marginTop: 8 }}>
-        <ListaCombinados user={user} acoes={acoes} onMudar={setAcoes} hojeIso={hojeIso} compacta />
+        <ListaCombinados acoes={acoes} onAlternar={onAlternar} hojeIso={hojeIso} compacta />
       </div>
     </div>
   );
@@ -6477,6 +6621,8 @@ const TABELAS_OPCIONAIS = [
   { nome: "aceites", para: "aceite do código de conduta e do espelho" },
   { nome: "candidatos", para: "recrutamento e currículos" },
   { nome: "documentos_rh", para: "documentos do colaborador" },
+  { nome: "combinados", para: "combinados das reunioes do time" },
+  { nome: "config_time", para: "link da sala de videochamada" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -6581,7 +6727,62 @@ create policy "documentos: gestor cuida" on public.documentos_rh
 
 drop policy if exists "documentos: dono le o proprio" on public.documentos_rh;
 create policy "documentos: dono le o proprio" on public.documentos_rh
-  for select to authenticated using (usuario_id = auth.uid());`;
+  for select to authenticated using (usuario_id = auth.uid());
+
+-- Combinados das reunioes: o que ficou acordado, com dono e prazo.
+-- Sem esta tabela o combinado fica so no aparelho de quem escreveu.
+create table if not exists public.combinados (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  dono_id uuid references public.usuarios (id) on delete set null,
+  dono_nome text,
+  prazo date,
+  origem text,
+  feito boolean not null default false,
+  feito_em timestamptz,
+  criado_por uuid not null references public.usuarios (id) on delete cascade,
+  criado_em timestamptz not null default now()
+);
+create index if not exists combinados_abertos_idx on public.combinados (feito, prazo);
+alter table public.combinados enable row level security;
+
+-- Combinado de reuniao e assunto do time inteiro: todos leem, todos registram.
+drop policy if exists "combinados: o time le" on public.combinados;
+create policy "combinados: o time le" on public.combinados
+  for select to authenticated using (true);
+
+drop policy if exists "combinados: o time registra" on public.combinados;
+create policy "combinados: o time registra" on public.combinados
+  for insert to authenticated with check (criado_por = auth.uid());
+
+-- Concluir e do dono, de quem registrou ou do gestor - nao de qualquer um.
+drop policy if exists "combinados: dono conclui" on public.combinados;
+create policy "combinados: dono conclui" on public.combinados
+  for update to authenticated
+  using (dono_id = auth.uid() or criado_por = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (dono_id = auth.uid() or criado_por = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Ajuste do time em chave/valor. Hoje guarda so 'sala_video', o link fixo da
+-- videochamada: o gestor grava uma vez e o time inteiro passa a enxergar.
+create table if not exists public.config_time (
+  chave text primary key,
+  valor text,
+  atualizado_por uuid references public.usuarios (id) on delete set null,
+  atualizado_em timestamptz not null default now()
+);
+alter table public.config_time enable row level security;
+
+drop policy if exists "config: o time le" on public.config_time;
+create policy "config: o time le" on public.config_time
+  for select to authenticated using (true);
+
+drop policy if exists "config: gestor cuida" on public.config_time;
+create policy "config: gestor cuida" on public.config_time
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */
