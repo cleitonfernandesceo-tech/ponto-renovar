@@ -235,6 +235,7 @@ alter table public.guias_fiscais add column if not exists pago_em date;
 alter table public.guias_fiscais add column if not exists valor_pago numeric(12,2);
 alter table public.guias_fiscais add column if not exists comprovante_url text;
 alter table public.guias_fiscais add column if not exists observacao text;
+alter table public.guias_fiscais add column if not exists linha_digitavel text;
 
 alter table public.candidatos enable row level security;
 alter table public.documentos_rh enable row level security;

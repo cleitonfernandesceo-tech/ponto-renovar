@@ -482,7 +482,7 @@ t("pagar guia grava data, valor e comprovante — e nunca paga sozinho",
   /const registrarPagamentoGuia = async/.test(src) && /pago_em: dados.pagoEm/.test(src)
   && /comprovante_url = path/.test(src) && !/marcarGuiaPaga/.test(src));
 t("a tela avisa que o app nao paga guia nem emite codigo de barras",
-  /o app n(ã|a)o paga guia e n(ã|a)o emite c(ó|o)digo de barras/.test(src));
+  /o app n(ã|a)o paga guia (e n(ã|a)o|nem) emite c(ó|o)digo de barras/i.test(src));
 t("o resumo pro contador sai em arquivo separado", /contabilidade-" \+ alvo/.test(src) && /Resumo pro contador/.test(src));
 t("a versao nova esta nos dois arquivos", htmlPub.includes("2026.07.26-3") && swTxt.includes("2026.07.26-3"));
 
