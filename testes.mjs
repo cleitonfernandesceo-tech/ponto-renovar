@@ -47,7 +47,9 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   chaveAutorResposta, reuniaoAnteriorDoRitual, ocorrenciaRitualAteHoje, impedimentosTravados,
   impedimentosComHistorico, acompanhamentoCombinados, RITUAIS, ritualPorId, reunioesDoDia,
   SALAS_RITUAIS, PRESENCA_MIN, chaveSalaNoBanco, salaDoRitual, salasLer, salasGravar,
-  enderecoSalaSugerido, sortearSementeSala, mapPresenca, presencaAtiva, textoPresenca };`;
+  enderecoSalaSugerido, sortearSementeSala, mapPresenca, presencaAtiva, textoPresenca,
+  RESUMO_JANELA_DIAS, rituaisDaJanela, autoresQueResponderam, temAtaDaReuniao,
+  prioridadeDaSemana, resumoDaSemana };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -911,6 +913,82 @@ t("cada um so bate a propria presenca",
   src.includes("for insert to authenticated with check (usuario_id = auth.uid())"));
 t("o diagnostico lista a tabela nova", src.includes('nome: "presenca_chamada"'));
 t("o README explica as salas por ritual", leia("README.md").includes("### Sala de videochamada por ritual"));
+
+secao("Resumo da semana do gestor");
+const respSem = [
+  { data: "2026-08-10", ritualId: "semanal", autor: "Marina", autorId: "u2", entreguei: "a", foco: "b", impedimento: "" },
+  { data: "2026-08-10", ritualId: "semanal", autor: "Marina", autorId: "u2", entreguei: "c", foco: "", impedimento: "" },
+  { data: "2026-08-10", ritualId: "semanal", autor: "Rafael", autorId: "u3", entreguei: "", foco: "", impedimento: "" },
+];
+const timeSem = [
+  { id: "u1", nome: "Cleiton", papel: "gestor" },
+  { id: "u2", nome: "Marina", papel: "colaborador" },
+  { id: "u3", nome: "Rafael", papel: "colaborador" },
+];
+t("a janela padrao do resumo e de sete dias", m.RESUMO_JANELA_DIAS === 7);
+t("a janela enxerga a segunda-feira que ja passou",
+  m.rituaisDaJanela("2026-08-14", 7).some((o) => o.ritual.id === "semanal" && o.data === "2026-08-10"));
+t("a janela nao inventa reuniao no futuro",
+  m.rituaisDaJanela("2026-08-14", 7).every((o) => o.data <= "2026-08-14"));
+t("data invalida devolve janela vazia em vez de quebrar",
+  m.rituaisDaJanela("ontem", 7).length === 0);
+t("domingo sozinho nao tem ritual", m.rituaisDaJanela("2026-08-09", 1).length === 0);
+t("a mesma pessoa respondendo duas vezes conta como uma",
+  m.autoresQueResponderam(respSem, "2026-08-10", "semanal") === 1);
+t("resposta em branco nao conta como pessoa que escreveu",
+  m.autoresQueResponderam(respSem, "2026-08-10", "semanal") === 1);
+t("dia sem resposta nenhuma da zero",
+  m.autoresQueResponderam(respSem, "2026-08-17", "semanal") === 0);
+t("ata do dia e do ritual e encontrada",
+  m.temAtaDaReuniao([{ data: "2026-08-10", ritualId: "semanal" }], "2026-08-10", "semanal"));
+t("ata antiga sem ritual gravado ainda vale pela data",
+  m.temAtaDaReuniao([{ data: "2026-08-10" }], "2026-08-10", "semanal"));
+t("ata de outro ritual no mesmo dia nao conta",
+  m.temAtaDaReuniao([{ data: "2026-08-10", ritualId: "mensal" }], "2026-08-10", "semanal") === false);
+t("sem ata nenhuma a reuniao aparece em aberto",
+  m.temAtaDaReuniao([], "2026-08-10", "semanal") === false);
+t("pedido de ajuda repetido vem antes de qualquer prazo",
+  m.prioridadeDaSemana({ semRegistro: 2, semAta: 2, encontros: 3, combinados: { travados: 1, atrasados: 5, semDono: 2, semPrazo: 2 } }).chave === "travado");
+t("reuniao sem nada escrito vem antes de prazo estourado",
+  m.prioridadeDaSemana({ semRegistro: 1, semAta: 0, encontros: 2, combinados: { travados: 0, atrasados: 3, semDono: 0, semPrazo: 0 } }).chave === "sem-registro");
+t("prazo estourado vem antes de combinado sem dono",
+  m.prioridadeDaSemana({ semRegistro: 0, semAta: 0, encontros: 2, combinados: { travados: 0, atrasados: 1, semDono: 4, semPrazo: 0 } }).chave === "atrasado");
+t("combinado sem dono vem antes de reuniao sem ata",
+  m.prioridadeDaSemana({ semRegistro: 0, semAta: 2, encontros: 2, combinados: { travados: 0, atrasados: 0, semDono: 1, semPrazo: 0 } }).chave === "sem-dono");
+t("reuniao sem ata sobra como ultimo aviso",
+  m.prioridadeDaSemana({ semRegistro: 0, semAta: 1, encontros: 2, combinados: { travados: 0, atrasados: 0, semDono: 0, semPrazo: 0 } }).chave === "sem-ata");
+t("semana limpa nao inventa alarme",
+  m.prioridadeDaSemana({ semRegistro: 0, semAta: 0, encontros: 2, combinados: { travados: 0, atrasados: 0, semDono: 0, semPrazo: 0 } }) === null);
+t("janela sem ritual nenhum diz isso com todas as letras",
+  m.prioridadeDaSemana({ semRegistro: 0, semAta: 0, encontros: 0, combinados: { travados: 0, atrasados: 0, semDono: 0, semPrazo: 0 } }).chave === "sem-encontro");
+t("so uma prioridade sai por vez",
+  typeof m.prioridadeDaSemana({ semRegistro: 3, semAta: 3, encontros: 3, combinados: { travados: 2, atrasados: 2, semDono: 2, semPrazo: 2 } }).titulo === "string");
+const rsSem = m.resumoDaSemana([], respSem, [], timeSem, "2026-08-14");
+t("o resumo mede a janela pedida", rsSem.dias === 7 && rsSem.fim === "2026-08-14" && rsSem.inicio === "2026-08-08");
+t("o resumo acha a reuniao da semana", rsSem.encontros >= 1);
+t("o resumo conta o tamanho do time sem o gestor", rsSem.rituais.every((r) => r.time === 2));
+t("a segunda com resposta nao aparece como silencio",
+  rsSem.rituais.some((r) => r.data === "2026-08-10" && r.id === "semanal" && r.responderam === 1 && r.semRegistro === false));
+t("reuniao sem ata fica marcada",
+  rsSem.rituais.some((r) => r.data === "2026-08-10" && r.semAta === true));
+t("o resumo nao se diz vazio quando houve reuniao", rsSem.vazio === false);
+const rsMudo = m.resumoDaSemana([], [], [], timeSem, "2026-08-14");
+t("semana sem ninguem escrevendo levanta a bandeira certa",
+  rsMudo.semRegistro >= 1 && rsMudo.prioridade.chave === "sem-registro");
+t("reuniao muda nao e cobrada tambem por falta de ata", rsMudo.semAta === 0);
+t("data invalida no resumo nao quebra a tela",
+  m.resumoDaSemana([], [], [], timeSem, "qualquer").encontros === 0);
+t("o resumo carrega os numeros dos combinados junto",
+  typeof rsSem.combinados.abertos === "number" && typeof rsSem.combinados.travados === "number");
+t("o resumo diz na tela que nao le a nota de energia",
+  src.includes("nao tem media anonima"));
+t("a nota de animo continua fora do painel coletivo",
+  src.includes("A nota do check-in de energia fica de fora DE PROPOSITO"));
+t("o painel do gestor mostra o resumo da semana", src.includes("🗒️ Resumo da semana"));
+t("o gestor recebe as atas para saber o que ficou sem registro",
+  src.includes("atas: rit.atas || []"));
+t("o README explica o resumo da semana",
+  leia("README.md").includes("### Resumo da semana do gestor"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
