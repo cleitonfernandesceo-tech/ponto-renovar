@@ -1646,6 +1646,132 @@ function legendaLembretes(status, instalado) {
   return "toque em Ativar para receber aviso do celular; sem isso o lembrete s\u00f3 aparece dentro do app.";
 }
 
+/* ================= Momentos: a frase certa na hora certa =================
+   Bater ponto e obrigacao; abrir o app com gosto, nao. Uma linha curta na
+   chegada, outra na saida, e um recado decente no primeiro e no ultimo dia
+   de casa custam zero de banco de dados e mudam o jeito que o app soa.
+
+   Regra que nao se quebra: NADA de sorteio a cada render. A frase sai do
+   dia do ano somado ao nome da pessoa, entao ela le a MESMA frase o dia
+   inteiro e uma diferente amanha. Com Math.random() a frase ficaria
+   piscando a cada tique do relogio, que roda de segundo em segundo. */
+const FRASES_CHEGADA = [
+  "Comece pelo mais facil — o resto engrena depois.",
+  "Chegou, ja e meio caminho: o dia rende mais quando comeca sem correria.",
+  "Um dia de cada vez, e hoje e este.",
+  "Antes de tudo, respire fundo uma vez. Agora sim.",
+  "Feito e melhor que perfeito.",
+  "Time que chega junto entrega junto.",
+  "Comece devagar que o ritmo vem sozinho.",
+  "O que sai daqui vira o servico de alguem la fora.",
+  "Hoje tambem da pra aprender alguma coisa nova.",
+  "Sua presenca conta mais do que parece por aqui.",
+];
+const FRASES_SAIDA = [
+  "Encerrado. O que ficou pra amanha pode esperar — descanse.",
+  "Bom descanso. Amanha o assunto continua.",
+  "Fechou o dia. Desligue de verdade: o expediente acabou.",
+  "Obrigado pelo dia de hoje. Va com calma na volta.",
+  "O trabalho fica, voce vai.",
+  "Dia cumprido. Aproveite o resto dele com quem voce gosta.",
+  "Ponto batido, consciencia tranquila. Ate amanha!",
+  "Descansar tambem e parte do trabalho.",
+  "Fim de expediente: guarde energia pra amanha.",
+  "Va bem. E chegue bem.",
+];
+const FRASES_BOAS_VINDAS = [
+  "Que bom ter voce aqui. Pergunte tudo o que precisar — ninguem nasce sabendo o caminho da casa.",
+  "Bem-vindo(a) ao time. Comece no seu ritmo: os primeiros dias sao pra entender, nao pra correr.",
+  "Sua chegada fecha uma lacuna no servico e abre uma cadeira na equipe. Seja bem-vindo(a)!",
+  "A partir de hoje voce faz parte disso. Conte com a gente.",
+  "Aqui o ponto e simples: registre a jornada e o resto a gente combina conversando.",
+  "Feliz comeco. Que este seja um lugar onde voce cresca.",
+];
+/* Desligamento nao pede frase motivacional — pede respeito e sobriedade.
+   Estas linhas sao SUGESTAO pro gestor copiar, nunca envio automatico. */
+const FRASES_DESPEDIDA = [
+  "Obrigado pelo tempo e pelo trabalho dedicados a empresa. Desejamos sucesso no proximo passo.",
+  "O ciclo aqui se encerra e o respeito fica. Boa sorte no que vem.",
+  "Agradecemos cada dia trabalhado. As portas seguem abertas pro futuro.",
+  "Toda passagem deixa marca. Obrigado pela sua, e sucesso adiante.",
+  "Fica o reconhecimento pelo trabalho entregue. Desejamos o melhor daqui pra frente.",
+  "Obrigado por ter feito parte do time. Que o proximo caminho seja bom.",
+];
+
+function diaDoAno(dt) {
+  const d = dt || new Date();
+  const ini = new Date(d.getFullYear(), 0, 1);
+  return Math.floor((d.getTime() - ini.getTime()) / 86400000);
+}
+function sementeTexto(txt) {
+  const t = String(txt || "");
+  let s = 7;
+  for (let i = 0; i < t.length; i++) s = (s * 31 + t.charCodeAt(i)) % 100003;
+  return s;
+}
+/* Determinista: mesma pessoa + mesmo dia = mesma frase, sempre. */
+function fraseDoDia(lista, chave, dt) {
+  if (!lista || !lista.length) return "";
+  return lista[(diaDoAno(dt) + sementeTexto(chave)) % lista.length];
+}
+function saudacaoDaHora(dt) {
+  const h = (dt || new Date()).getHours();
+  if (h < 5) return "Boa madrugada";
+  if (h < 12) return "Bom dia";
+  if (h < 18) return "Boa tarde";
+  return "Boa noite";
+}
+function primeiroNome(nome) {
+  const p = String(nome || "").trim().split(/\s+/);
+  return p[0] || "";
+}
+
+/* ================= Hidratacao e pausas =================
+   Onde o dado fica: SO no aparelho (localStorage). Quantos copos alguem bebeu
+   nao e dado de jornada, nao vira coluna no banco e nao aparece pro gestor —
+   isso seria vigiar saude alheia. Se a pessoa limpar o navegador, o contador
+   zera, e esta tudo bem: e um empurraozinho, nao registro legal.
+   Nao e recomendacao medica. A meta usa a referencia popular de 8 copos e da
+   pra ajustar no proprio cartao; quem tem restricao medica ajusta ou ignora. */
+const AGUA_META_PADRAO = 8;
+const AGUA_COPO_ML = 250;
+const AGUA_INTERVALO_MIN = 90;
+const DICAS_PAUSA = [
+  "Olhe pra algo distante por 20 segundos — descansa a vista da tela.",
+  "Levante e ande um pouco: o corpo cobra caro cada hora sentado.",
+  "Solte os ombros e gire o pescoco devagar, sem forcar.",
+  "Se der, coma algo de verdade no intervalo — cafe nao e almoco.",
+  "Confira a postura: pes no chao, costas apoiadas.",
+];
+function aguaChaveDoDia(userId, dt) {
+  const d = dt || new Date();
+  const dia = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  return "pr_agua_" + (userId || "anon") + "_" + dia;
+}
+function aguaLer(userId, dt) {
+  try {
+    const v = parseInt(localStorage.getItem(aguaChaveDoDia(userId, dt)) || "0", 10);
+    return v > 0 ? v : 0;
+  } catch { return 0; }
+}
+function aguaGravar(userId, copos, dt) {
+  const v = copos > 0 ? copos : 0;
+  try { localStorage.setItem(aguaChaveDoDia(userId, dt), String(v)); } catch {}
+  return v;
+}
+/* Meta escolhida pela pessoa (some junto se ela limpar o navegador). */
+function aguaLerMeta(userId) {
+  try {
+    const v = parseInt(localStorage.getItem("pr_agua_meta_" + (userId || "anon")) || "0", 10);
+    return v >= 4 && v <= 16 ? v : AGUA_META_PADRAO;
+  } catch { return AGUA_META_PADRAO; }
+}
+function aguaGravarMeta(userId, meta) {
+  const v = meta < 4 ? 4 : (meta > 16 ? 16 : meta);
+  try { localStorage.setItem("pr_agua_meta_" + (userId || "anon"), String(v)); } catch {}
+  return v;
+}
+
 /* ---------- push de servidor: o aviso chega com o app FECHADO ----------
    A chave publica VAPID abaixo diz ao navegador QUEM pode mandar aviso pra
    este aparelho; a privada mora so nos segredos do Supabase. A inscricao do
@@ -1939,17 +2065,33 @@ function MedidorPremio({ m }) {
    que "grafite" deixou de ser marrom (era um tom terroso, provavel engano de
    digitacao) e virou o azul-ardosia do tema; e entraram tokens de borda,
    sombra e vidro pra nao ficar cor solta espalhada pelo arquivo. */
-const C = { preto: "#0D1B2A", carvao: "#10233B", grafite: "#152840", amarelo: "#FF7A1A", vermelho: "#F87171", verde: "#35C26E", cinza: "#8FA3BF", branco: "#F5F7FA", azul: "#4C9AFF", dourado: "#F5C36B", borda: "#1E3450", bordaForte: "#2A4568", vidro: "rgba(255,255,255,0.04)", sombra: "0 10px 28px rgba(0,0,0,0.30)", sombraForte: "0 18px 44px rgba(0,0,0,0.45)" };
+const C = { preto: "#0D1B2A", carvao: "#10233B", grafite: "#152840", amarelo: "#FF7A1A", vermelho: "#F87171", verde: "#35C26E", cinza: "#8FA3BF", branco: "#F5F7FA", azul: "#4C9AFF", dourado: "#F5C36B", borda: "#1E3450", bordaForte: "#2A4568", vidro: "rgba(255,255,255,0.04)", sombra: "0 10px 28px rgba(0,0,0,0.30)", sombraForte: "0 18px 44px rgba(0,0,0,0.45)",
+  /* Camada de relevo. Um lugar so pra definir "3D": luz no topo (como se a luz
+     viesse de cima), corte escuro no pe, e duas sombras de distancia diferente
+     — perto pra dar contato e longe pra dar altura. Mudar aqui muda o app todo. */
+  luzTopo: "inset 0 1px 0 rgba(255,255,255,0.10)",
+  sombra3d: "inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -1px 0 rgba(0,0,0,0.30), 0 2px 4px rgba(0,0,0,0.20), 0 14px 30px -10px rgba(0,0,0,0.52)",
+  sombra3dForte: "inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -2px 0 rgba(0,0,0,0.34), 0 4px 10px rgba(0,0,0,0.26), 0 28px 60px -16px rgba(0,0,0,0.64)",
+  brilhoLaranja: "0 0 0 1px rgba(255,122,26,0.28), 0 12px 34px -8px rgba(255,122,26,0.45)",
+  vidroForte: "rgba(255,255,255,0.075)",
+  agua: "#38BDF8" };
 /* Estilos base. Mexer aqui muda o app todo de uma vez: cartao, botao e campo
    ganharam profundidade (degrade sutil + sombra) e canto um pouco mais macio. */
 const S = {
-  app: { minHeight: "100vh", background: "radial-gradient(1100px 520px at 50% -8%, rgba(255,122,26,0.10), transparent 60%), radial-gradient(900px 460px at 8% 4%, rgba(76,154,255,0.07), transparent 62%), " + C.preto, color: C.branco, fontFamily: "-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif" },
+  /* isolation:isolate faz deste div um contexto proprio de empilhamento. Sem isso
+     o brilho animado (#root>div::before, z-index -1 na folha de estilo global)
+     ficaria ATRAS deste fundo opaco e ninguem veria nada. */
+  app: { minHeight: "100vh", isolation: "isolate", background: "radial-gradient(1100px 520px at 50% -8%, rgba(255,122,26,0.13), transparent 60%), radial-gradient(900px 460px at 8% 4%, rgba(76,154,255,0.09), transparent 62%), radial-gradient(820px 520px at 96% 90%, rgba(56,189,248,0.07), transparent 64%), linear-gradient(180deg, #0F2136, " + C.preto + " 55%, #0A1522), " + C.preto, color: C.branco, fontFamily: "-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif" },
   display: { fontFamily: "'Oswald','Arial Narrow',-apple-system,'Segoe UI',system-ui,sans-serif", textTransform: "uppercase", letterSpacing: "0.02em", fontWeight: 700 },
-  card: { background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012)), " + C.carvao, border: "1px solid " + C.borda, borderRadius: 16, padding: 20, boxShadow: C.sombra },
-  btn: { background: "linear-gradient(135deg, #FF8F35, #F06A05)", color: "#141007", fontWeight: 700, border: "none", borderRadius: 12, padding: "12px 20px", cursor: "pointer", fontSize: 15, boxShadow: "0 8px 20px rgba(255,122,26,0.26)" },
-  btnGhost: { background: C.vidro, color: C.branco, border: "1px solid " + C.bordaForte, borderRadius: 12, padding: "10px 16px", cursor: "pointer" },
-  input: { background: C.grafite, border: "1px solid " + C.bordaForte, borderRadius: 12, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15 },
+  card: { background: "linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.010) 44%, rgba(0,0,0,0.10)), " + C.carvao, border: "1px solid " + C.borda, borderRadius: 18, padding: 20, boxShadow: C.sombra3d },
+  btn: { background: "linear-gradient(180deg, #FFA85E, #FF8A2B 46%, #E9620A)", color: "#141007", fontWeight: 800, border: "none", borderRadius: 14, padding: "12px 20px", cursor: "pointer", fontSize: 15, textShadow: "0 1px 0 rgba(255,255,255,0.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.45), inset 0 -2px 0 rgba(0,0,0,0.20), 0 8px 20px rgba(255,122,26,0.26), 0 18px 36px -14px rgba(255,122,26,0.38)" },
+  btnGhost: { background: "linear-gradient(180deg, " + C.vidroForte + ", rgba(255,255,255,0.015))", color: C.branco, border: "1px solid " + C.bordaForte, borderRadius: 14, padding: "10px 16px", cursor: "pointer", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.07), 0 8px 18px -10px rgba(0,0,0,0.60)" },
+  input: { background: C.grafite, border: "1px solid " + C.bordaForte, borderRadius: 14, padding: "12px 14px", color: C.branco, width: "100%", fontSize: 15, boxShadow: "inset 0 2px 6px rgba(0,0,0,0.28)" },
   tag: (bg, fg) => ({ background: bg, color: fg || "#111", borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, letterSpacing: "0.03em", display: "inline-block" }),
+  /* Cartao de destaque: mais alto que um card comum. */
+  heroi: { position: "relative", overflow: "hidden", borderRadius: 22, padding: 28, background: "linear-gradient(180deg, rgba(255,255,255,0.065), rgba(255,255,255,0.010) 42%, rgba(0,0,0,0.14)), " + C.carvao, border: "1px solid " + C.bordaForte, boxShadow: C.sombra3dForte },
+  /* Etiqueta redonda de apoio (contadores, status curtos). */
+  pilula: { display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: C.branco, background: C.vidroForte, border: "1px solid " + C.bordaForte, boxShadow: C.luzTopo },
 };
 
 const Badge = ({ st }) => {
@@ -3525,6 +3667,7 @@ function TelaConvite({ token, onConcluir, onVoltar }) {
         {carregando && <p style={{ textAlign: "center", color: C.cinza, marginTop: 24 }}>Verificando convite…</p>}
         {!carregando && conv && (
           <div style={{ marginTop: 20 }}>
+            <CartaoBoasVindas nome={conv.nome} />
             <div style={{ background: C.grafite, borderRadius: 10, padding: 14, fontSize: 14, lineHeight: 1.8 }}>
               👤 <b>{conv.nome}</b><br />
               ✉️ {conv.email}<br />
@@ -3661,16 +3804,190 @@ function Login({ onSupabase, onDemo, onReset }) {
    entao o app INTEIRO era redesenhado 1x por segundo - em celular fraco e isso
    que da a sensacao de travamento. Agora so este pedacinho pisca a cada
    segundo; o resto da tela redesenha a cada 20 segundos. */
+/* ================= Pecas visuais com relevo =================
+   O app e escuro e chapado por natureza. Estas pecas dao volume sem imagem
+   nenhuma: tudo e gradiente, sombra interna e sombra externa — ou seja, zero
+   download extra, nada pra CSP barrar e funciona offline igual. */
+
+/* Anel de progresso com conic-gradient: um circulo pintado ate X graus e um
+   disco escuro por cima deixando so a borda a mostra. Mais leve que SVG. */
+function AnelProgresso({ pct, tamanho, espessura, cor, children }) {
+  const t = tamanho || 210;
+  const e = espessura || 11;
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const cc = cor || C.amarelo;
+  return (
+    <div className="pr-anel" style={{ position: "relative", width: t, height: t, margin: "0 auto", borderRadius: "50%", background: `conic-gradient(from -90deg, ${cc} ${p * 3.6}deg, rgba(255,255,255,0.055) 0deg)`, boxShadow: `0 0 0 1px ${C.borda}, 0 22px 44px -20px rgba(0,0,0,0.8)` }}>
+      <div style={{ position: "absolute", top: e, right: e, bottom: e, left: e, borderRadius: "50%", background: `radial-gradient(130% 130% at 50% 0%, ${C.grafite}, ${C.preto})`, boxShadow: "inset 0 3px 12px rgba(0,0,0,0.6), inset 0 -1px 0 rgba(255,255,255,0.05)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* Cartao do momento: chegou, esta em jornada ou encerrou o dia. */
+function CartaoMomento({ nome, doDia }) {
+  const agora = new Date();
+  const lista = doDia || [];
+  const ult = lista.reduce((m, r) => (!m || new Date(r.ts).getTime() > new Date(m.ts).getTime() ? r : m), null);
+  const fase = !ult ? "chegada" : (ult.tipo === "entrada" ? "jornada" : "saida");
+  const pn = primeiroNome(nome);
+  const cor = fase === "saida" ? C.azul : (fase === "jornada" ? C.verde : C.amarelo);
+  /* Aceno em vez de sol: o cartao aparece de madrugada tambem e sol as 22h fica ridiculo. */
+  const icone = fase === "saida" ? "\uD83C\uDF19" : (fase === "jornada" ? "\u26A1" : "\uD83D\uDC4B");
+  const titulo = fase === "chegada"
+    ? `${saudacaoDaHora(agora)}${pn ? ", " + pn : ""}!`
+    : fase === "jornada"
+      ? `Em jornada desde ${fmtHora(ult.ts)}`
+      : `Expediente encerrado \u00e0s ${fmtHora(ult.ts)}`;
+  const frase = fase === "saida"
+    ? fraseDoDia(FRASES_SAIDA, nome, agora)
+    : fase === "jornada"
+      ? fraseDoDia(DICAS_PAUSA, nome + "|pausa", agora)
+      : fraseDoDia(FRASES_CHEGADA, nome, agora);
+  return (
+    <div className="pr-relevo" style={{ ...S.card, marginTop: 14, padding: 16, display: "flex", gap: 14, alignItems: "center", borderLeft: `3px solid ${cor}` }}>
+      <div className="pr-medalha" aria-hidden="true" style={{ background: `radial-gradient(130% 130% at 30% 18%, ${cor}, rgba(0,0,0,0.42))` }}>{icone}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...S.display, fontSize: 15, color: cor }}>{titulo}</div>
+        <p style={{ fontSize: 13, color: C.branco, margin: "4px 0 0", lineHeight: 1.6 }}>{frase}</p>
+      </div>
+    </div>
+  );
+}
+
+/* Hidratacao e pausa. Contador do dia guardado SO no aparelho; o aviso do
+   celular sai do proprio app e nada disso chega ao gestor nem ao servidor. */
+function CartaoBemEstar({ userId }) {
+  const [meta, setMeta] = useState(() => aguaLerMeta(userId));
+  const [copos, setCopos] = useState(() => aguaLer(userId));
+  useEffect(() => { setMeta(aguaLerMeta(userId)); setCopos(aguaLer(userId)); }, [userId]);
+  useEffect(() => {
+    const t = setInterval(() => {
+      const hr = new Date().getHours();
+      if (hr < 8 || hr >= 18) return;
+      if (aguaLer(userId) >= aguaLerMeta(userId)) return;
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          notificarAparelho("Hora de beber \u00e1gua \uD83D\uDCA7", "Um copo agora e o dia rende melhor. Toque pra marcar no app.", "agua");
+        }
+      } catch {}
+    }, AGUA_INTERVALO_MIN * 60000);
+    return () => clearInterval(t);
+  }, [userId]);
+  const hr = new Date().getHours();
+  const esperado = hr <= 8 ? 0 : Math.min(meta, Math.round(((hr - 8) / 10) * meta));
+  const atrasado = copos < esperado;
+  const pct = meta > 0 ? Math.min(100, (copos / meta) * 100) : 0;
+  const dica = fraseDoDia(DICAS_PAUSA, String(userId) + "|dica", new Date());
+  return (
+    <div className="pr-relevo" style={{ ...S.card, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ ...S.display, fontSize: 14, color: C.agua }}>💧 Hidratação de hoje</div>
+        <div style={{ fontSize: 11, color: C.cinza }}>{copos * AGUA_COPO_ML} ml de {meta * AGUA_COPO_ML} ml</div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+        {Array.from({ length: meta }, (_, i) => (
+          <button key={i} className="pr-copo" aria-pressed={i < copos} aria-label={`Marcar ${i + 1} copo(s) de \u00e1gua`}
+            onClick={() => setCopos(aguaGravar(userId, i < copos ? i : i + 1))}
+            style={{ width: 26, height: 34, borderRadius: "6px 6px 11px 11px", cursor: "pointer", border: "1px solid " + (i < copos ? C.agua : C.bordaForte),
+              background: i < copos ? "linear-gradient(180deg, rgba(56,189,248,0.30), #0EA5E9)" : "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.20))",
+              boxShadow: i < copos ? "inset 0 1px 0 rgba(255,255,255,0.55), 0 8px 16px -8px rgba(56,189,248,0.85)" : "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -2px 6px rgba(0,0,0,0.35)" }} />
+        ))}
+      </div>
+      <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 999, height: 7, marginTop: 12, overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.55)" }}>
+        <div style={{ width: pct + "%", height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #0EA5E9, " + C.agua + ")", boxShadow: "0 0 14px rgba(56,189,248,0.65)" }} />
+      </div>
+      <p style={{ fontSize: 12.5, color: atrasado ? C.agua : C.cinza, margin: "10px 0 0", lineHeight: 1.55 }}>
+        {copos >= meta ? "Meta do dia fechada. \uD83D\uDC4F" : atrasado ? "Faz um tempo desde o \u00faltimo copo \u2014 bora?" : "No ritmo. Pr\u00f3ximo copo em at\u00e9 " + AGUA_INTERVALO_MIN + " min."}
+      </p>
+      <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.55 }}>🧘 {dica}</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: C.cinza }}>Meta</span>
+        <button style={{ ...S.btnGhost, padding: "4px 11px", fontSize: 13 }} aria-label="Diminuir a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta - 1))}>−</button>
+        <b style={{ fontSize: 13 }}>{meta}</b>
+        <button style={{ ...S.btnGhost, padding: "4px 11px", fontSize: 13 }} aria-label="Aumentar a meta de copos" onClick={() => setMeta(aguaGravarMeta(userId, meta + 1))}>+</button>
+        <span style={{ fontSize: 10.5, color: C.cinza }}>copos de {AGUA_COPO_ML} ml</span>
+      </div>
+      <p style={{ fontSize: 10.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
+        Fica só neste aparelho: o gestor não vê nada disso e nada vai pro servidor. Não é orientação médica — quem tem restrição de líquidos segue o próprio médico.
+      </p>
+    </div>
+  );
+}
+
+/* Primeiro contato de quem foi contratado: a tela do convite. */
+function CartaoBoasVindas({ nome }) {
+  const pn = primeiroNome(nome);
+  return (
+    <div className="pr-relevo" style={{ marginTop: 16, borderRadius: 16, padding: 16, background: "linear-gradient(180deg, rgba(255,122,26,0.18), rgba(255,122,26,0.04))", border: "1px solid rgba(255,122,26,0.35)", boxShadow: C.brilhoLaranja }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>🎉 Bem-vindo(a){pn ? ", " + pn : ""}!</div>
+      <p style={{ fontSize: 13, color: C.branco, margin: "6px 0 0", lineHeight: 1.65 }}>{fraseDoDia(FRASES_BOAS_VINDAS, nome, new Date())}</p>
+    </div>
+  );
+}
+
+/* Desligamento: o app nao manda nada pra ninguem. Oferece um texto sobrio pro
+   gestor copiar e enviar do jeito dele. Despedida e conversa de pessoa. */
+function CartaoDespedida({ usuarios = [], rescisoes = [] }) {
+  const [copiado, setCopiado] = useState(null);
+  const nomeDe = (id) => (usuarios.find((u) => u.id === id) || {}).nome || id;
+  const recentes = rescisoes.slice().sort((a, b) => String(b.dataDeslig).localeCompare(String(a.dataDeslig))).slice(0, 3);
+  if (!recentes.length) return null;
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🤝 Mensagem de despedida (sugestão)</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+        O sistema não envia nada por conta própria. Se fizer sentido, copie o texto e mande você mesmo — desligamento é conversa de pessoa, não de software.
+      </p>
+      {recentes.map((r) => {
+        const nm = nomeDe(r.userId);
+        const txt = primeiroNome(nm) + ", " + fraseDoDia(FRASES_DESPEDIDA, nm, new Date());
+        return (
+          <div key={r.id} style={{ borderTop: "1px solid " + C.borda, padding: "10px 0", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <b style={{ fontSize: 13.5 }}>{nm}</b>
+              <p style={{ fontSize: 12.5, color: C.branco, margin: "4px 0 0", lineHeight: 1.6 }}>{txt}</p>
+            </div>
+            <button style={{ ...S.btnGhost, padding: "7px 12px", fontSize: 12 }} onClick={async () => {
+              try { await navigator.clipboard.writeText(txt); setCopiado(r.id); } catch { setCopiado("erro"); }
+            }}>{copiado === r.id ? "\u2714 Copiada" : "Copiar"}</button>
+          </div>
+        );
+      })}
+      {copiado === "erro" && <p style={{ fontSize: 11.5, color: C.vermelho, margin: "8px 0 0" }}>Não foi possível copiar neste navegador — selecione o texto na mão.</p>}
+    </div>
+  );
+}
+
 function RelogioVivo() {
   const [agora, setAgora] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setAgora(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+  /* Quanto do expediente de hoje ja passou. Sem prop nenhuma de proposito: o
+     componente se resolve sozinho e o pai nao redesenha por causa do relogio. */
+  const exp = expedienteDoDia(agora);
+  const minAgora = agora.getHours() * 60 + agora.getMinutes();
+  const temJanela = exp.entradaMin != null && exp.saidaMin != null && exp.saidaMin > exp.entradaMin;
+  const pct = temJanela ? ((minAgora - exp.entradaMin) / (exp.saidaMin - exp.entradaMin)) * 100 : 0;
+  const hh = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+  const legenda = !temJanela
+    ? "sem expediente hoje"
+    : minAgora < exp.entradaMin
+      ? "come\u00e7a \u00e0s " + hh(exp.entradaMin)
+      : minAgora >= exp.saidaMin
+        ? "expediente encerrado"
+        : "faltam " + hh(exp.saidaMin - minAgora) + " pra " + hh(exp.saidaMin);
+  const corAnel = !temJanela ? C.cinza : (pct >= 100 ? C.verde : C.amarelo);
   return (
     <>
-      <div style={{ ...S.display, fontSize: 64, color: C.amarelo, lineHeight: 1 }}>{agora.toLocaleTimeString("pt-BR")}</div>
-      <div style={{ color: C.cinza, marginTop: 6 }}>{agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+      <AnelProgresso pct={pct} tamanho={216} espessura={12} cor={corAnel}>
+        <div className="pr-relogio" style={{ ...S.display, fontSize: 40, color: C.amarelo, lineHeight: 1 }}>{agora.toLocaleTimeString("pt-BR")}</div>
+        <div style={{ fontSize: 11, color: C.cinza, letterSpacing: "0.04em" }}>{legenda}</div>
+      </AnelProgresso>
+      <div style={{ color: C.cinza, marginTop: 14 }}>{agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
     </>
   );
 }
@@ -3699,6 +4016,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
+      <CartaoMomento nome={user.nome} doDia={doDia} />
       {!temLocais && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
       )}
@@ -3831,6 +4149,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
             <div style={{ ...S.display, fontSize: 30, color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</div>
             <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) · {a.faltas} falta(s)</div>
           </div>
+          <CartaoBemEstar userId={user.id} />
         </div>
       </div>
     </div>
@@ -5973,6 +6292,7 @@ function TelaGestor({ usuarios, registros, faltas, justificativas, atestados, fe
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
       <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
        <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
+        <CartaoDespedida usuarios={usuarios} rescisoes={rescisoes} />
        <SecaoExames usuarios={usuarios} exames={examesOcupacionais} rescisoes={rescisoes} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
        <SecaoRecrutamento candidatos={candidatos} onCriar={onCriarCandidato} onMudarStatus={onMudarStatusCandidato} onContratar={onContratarCandidato} onAbrir={onAbrirArquivo} demo={demo} />
        <SecaoDocumentos usuarios={usuarios} documentos={documentosRH} exames={examesOcupacionais} onAnexar={onAnexarDocumento} onAbrir={onAbrirArquivo} />
