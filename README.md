@@ -256,6 +256,61 @@ create policy "documentos: gestor cuida" on public.documentos_rh
 drop policy if exists "documentos: dono le o proprio" on public.documentos_rh;
 create policy "documentos: dono le o proprio" on public.documentos_rh
   for select to authenticated using (usuario_id = auth.uid());
+
+-- Combinados das reunioes: o que ficou acordado, com dono e prazo.
+-- Sem esta tabela o combinado fica so no aparelho de quem escreveu.
+create table if not exists public.combinados (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  dono_id uuid references public.usuarios (id) on delete set null,
+  dono_nome text,
+  prazo date,
+  origem text,
+  feito boolean not null default false,
+  feito_em timestamptz,
+  criado_por uuid not null references public.usuarios (id) on delete cascade,
+  criado_em timestamptz not null default now()
+);
+create index if not exists combinados_abertos_idx on public.combinados (feito, prazo);
+alter table public.combinados enable row level security;
+
+-- Combinado de reuniao e assunto do time inteiro: todos leem, todos registram.
+drop policy if exists "combinados: o time le" on public.combinados;
+create policy "combinados: o time le" on public.combinados
+  for select to authenticated using (true);
+
+drop policy if exists "combinados: o time registra" on public.combinados;
+create policy "combinados: o time registra" on public.combinados
+  for insert to authenticated with check (criado_por = auth.uid());
+
+-- Concluir e do dono, de quem registrou ou do gestor - nao de qualquer um.
+drop policy if exists "combinados: dono conclui" on public.combinados;
+create policy "combinados: dono conclui" on public.combinados
+  for update to authenticated
+  using (dono_id = auth.uid() or criado_por = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (dono_id = auth.uid() or criado_por = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Ajuste do time em chave/valor. Hoje guarda so 'sala_video', o link fixo da
+-- videochamada: o gestor grava uma vez e o time inteiro passa a enxergar.
+create table if not exists public.config_time (
+  chave text primary key,
+  valor text,
+  atualizado_por uuid references public.usuarios (id) on delete set null,
+  atualizado_em timestamptz not null default now()
+);
+alter table public.config_time enable row level security;
+
+drop policy if exists "config: o time le" on public.config_time;
+create policy "config: o time le" on public.config_time
+  for select to authenticated using (true);
+
+drop policy if exists "config: gestor cuida" on public.config_time;
+create policy "config: gestor cuida" on public.config_time
+  for all to authenticated
+  using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
 ```
 
 ## Push de servidor (lembrete com o app fechado)
@@ -344,3 +399,87 @@ select cron.schedule(
 Teste rapido: com o app aberto e o aviso autorizado, chame a funcao com
 `{ "teste": true }` usando o token do usuario logado - ela manda um aviso so
 para os aparelhos daquela pessoa.
+
+## Rituais do time (reunioes, combinados e sala)
+
+O calendario nao tem cadastro: ele e deterministico, calculado pelo `RITUAIS`
+do `ponto-renovar.jsx` e espelhado na Edge Function.
+
+| Ritual | Quando | Horario | Duracao |
+| --- | --- | --- | --- |
+| Planejamento da semana | toda segunda-feira | 09:15 | 45 min |
+| Resolucao de problemas (3 Pilares) | segunda de semana ISO par | 14:00 | 60 min |
+| Retrospectiva do mes | ultima sexta do mes | 15:00 | 60 min |
+
+Cada reuniao avisa **duas vezes**: ao bater a saida no dia anterior e ao bater a
+entrada no dia. Os dois avisos dizem o ritual, o horario, a duracao e a pauta
+prevista. Com o app aberto o aviso e um cartao na tela; com o app fechado quem
+manda e a Edge Function (secao abaixo).
+
+Os **combinados** (o que ficou acordado, com dono e prazo) vao pra tabela
+`combinados`: todo mundo do time le, e concluir e do dono, de quem registrou
+ou do gestor. Enquanto a tabela nao existir o app guarda no proprio aparelho e
+diz isso na tela, sem quebrar nada.
+
+O **link da sala de videochamada** fica em `config_time`, na chave
+`sala_video`: o gestor cola uma vez e o time inteiro passa a ver o mesmo link.
+O app nao hospeda video, so abre o link (Meet, Jitsi, Zoom) em aba nova, porque
+a CSP da pagina usa `frame-src 'none'`.
+
+O **check-in de energia** (nota de 1 a 10 pro proprio animo) NAO vai pro banco,
+de proposito: e dado sensivel, fica so no aparelho de quem escreveu e nunca
+aparece pro gestor. O mesmo vale pras respostas das tres perguntas.
+
+### Aviso de reuniao com o app fechado
+
+O codigo da funcao mora em `supabase/functions/lembretes-push/index.ts` - e a
+copia versionada do que roda no Supabase (o `build.mjs` nao mexe nesse arquivo).
+Depois de editar, publique com:
+
+    supabase functions deploy lembretes-push
+
+O agendamento reaproveita a trava `push_lembretes_log` (chave usuario/dia/etapa),
+entao ninguem recebe o mesmo aviso duas vezes nem que o cron repita:
+
+```sql
+-- Fim da tarde (16h-20h de Brasilia = 19-23 UTC): "antes de ir, tem reuniao..."
+select cron.schedule(
+  'reuniao-push-saida',
+  '10 19,20,21,22,23 * * 1-5',
+  $job$
+  select net.http_post(
+    url := 'https://SEU-PROJETO.supabase.co/functions/v1/lembretes-push',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apikey', '<CHAVE_PUBLICAVEL>',
+      'Authorization', 'Bearer <CHAVE_PUBLICAVEL>'
+    ),
+    body := '{"etapa":"reuniao_saida"}'::jsonb,
+    timeout_milliseconds := 25000
+  );
+  $job$
+);
+
+-- Comeco do dia (6h-9h de Brasilia = 9-12 UTC): "hoje tem reuniao as..."
+select cron.schedule(
+  'reuniao-push-chegada',
+  '10 9,10,11,12 * * 1-5',
+  $job$
+  select net.http_post(
+    url := 'https://SEU-PROJETO.supabase.co/functions/v1/lembretes-push',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apikey', '<CHAVE_PUBLICAVEL>',
+      'Authorization', 'Bearer <CHAVE_PUBLICAVEL>'
+    ),
+    body := '{"etapa":"reuniao_chegada"}'::jsonb,
+    timeout_milliseconds := 25000
+  );
+  $job$
+);
+```
+
+Domingo e feriado nacional nao avisam. O aviso de saida procura quem ja bateu a
+saida e, a partir das 19h, vai pra todo mundo; o de chegada faz o mesmo com a
+entrada, liberando geral as 9h. Quem nao tem aparelho inscrito no push nao
+entra na lista - o cartao na tela continua valendo.
