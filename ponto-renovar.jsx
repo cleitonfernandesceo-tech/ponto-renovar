@@ -1997,6 +1997,208 @@ function configGravar(token, userId, chave, valor) {
   return sbUpsert(token, "config_time", [linha], "chave");
 }
 
+/* ---------- mural de conquistas e circulo de elogios (tabelas opcionais) ----------
+   Vitoria que ninguem conta vira rotina esquecida, e elogio que fica so na
+   cabeca nao chega em ninguem. As tabelas `conquistas` e `elogios` deixam os
+   dois visiveis pro time inteiro. Sem elas nada quebra: o mural volta pro
+   aparelho de quem escreveu e a tela avisa isso com todas as letras.
+   Regra que nao muda: nada daqui vira ponto de premio nem de gamificacao.
+   Reconhecimento que vale nota deixa de ser reconhecimento e vira meta. */
+function ritVazio() {
+  return {
+    conquistas: [], conquistasNoBanco: false,
+    elogios: [], elogiosNoBanco: false,
+    motivadores: [], motivaNoBanco: false,
+    anjo: null, anjoNoBanco: false,
+  };
+}
+function conquistaNova(texto, tipo, autor, autorId) {
+  return {
+    id: "c" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+    texto: String(texto || "").trim().slice(0, 400),
+    tipo: tipo === "superacao" ? "superacao" : "vitoria",
+    autor: String(autor || "").trim().slice(0, 80),
+    autorId: autorId || "",
+    criadoEm: new Date().toISOString(),
+  };
+}
+function conquistasLer(userId) {
+  const l = ritLer("conquistas_" + (userId || "anon"), []);
+  return Array.isArray(l) ? l : [];
+}
+function conquistasGravar(userId, lista) {
+  return ritGravar("conquistas_" + (userId || "anon"), (lista || []).slice(0, 120));
+}
+function mapConquista(r) {
+  return {
+    id: r.id,
+    texto: r.texto || "",
+    tipo: r.tipo === "superacao" ? "superacao" : "vitoria",
+    autor: r.autor_nome || "",
+    autorId: r.autor_id || "",
+    criadoEm: r.criado_em || "",
+  };
+}
+async function conquistasBaixar(token) {
+  const linhas = await sbSelect(token, "conquistas", "select=*&order=criado_em.desc&limit=60");
+  return (linhas || []).map(mapConquista);
+}
+async function conquistaInserir(token, autorId, autorNome, item) {
+  const linhas = await sbInsert(token, "conquistas", [{
+    texto: item.texto,
+    tipo: item.tipo,
+    autor_id: autorId,
+    autor_nome: autorNome || null,
+  }]);
+  return mapConquista((linhas && linhas[0]) || {});
+}
+
+function elogioNovo(texto, de, deId, para, paraId, origem) {
+  return {
+    id: "e" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+    texto: String(texto || "").trim().slice(0, 300),
+    de: String(de || "").trim().slice(0, 80),
+    deId: deId || "",
+    para: String(para || "").trim().slice(0, 80),
+    paraId: paraId || "",
+    origem: String(origem || "").slice(0, 40),
+    criadoEm: new Date().toISOString(),
+  };
+}
+function elogiosLer(userId) {
+  const l = ritLer("elogios_" + (userId || "anon"), []);
+  return Array.isArray(l) ? l : [];
+}
+function elogiosGravar(userId, lista) {
+  return ritGravar("elogios_" + (userId || "anon"), (lista || []).slice(0, 120));
+}
+function mapElogio(r) {
+  return {
+    id: r.id,
+    texto: r.texto || "",
+    de: r.de_nome || "",
+    deId: r.de_id || "",
+    para: r.para_nome || "",
+    paraId: r.para_id || "",
+    origem: r.origem || "",
+    criadoEm: r.criado_em || "",
+  };
+}
+async function elogiosBaixar(token) {
+  const linhas = await sbSelect(token, "elogios", "select=*&order=criado_em.desc&limit=80");
+  return (linhas || []).map(mapElogio);
+}
+async function elogioInserir(token, deId, deNome, item) {
+  const linhas = await sbInsert(token, "elogios", [{
+    texto: item.texto,
+    de_id: deId,
+    de_nome: deNome || null,
+    para_id: item.paraId,
+    para_nome: item.para || null,
+    origem: item.origem || null,
+  }]);
+  return mapElogio((linhas && linhas[0]) || {});
+}
+/* ---------- o que me motiva (tabela opcional) ----------
+   Tres fatores que fazem a pessoa querer trabalhar, escritos por ela mesma.
+   Diferente da nota de animo, isto nasceu pra ser conversado com a lideranca:
+   por isso existe um botao separado de compartilhar e a tela diz, antes de
+   qualquer coisa, quem vai ler. Enquanto ninguem aperta o botao o texto fica
+   so no aparelho. Compartilhar de novo com os campos vazios desfaz. */
+function motivaLer(userId) {
+  const l = ritLer("motiva_" + (userId || "anon"), ["", "", ""]);
+  return Array.isArray(l) ? [l[0] || "", l[1] || "", l[2] || ""] : ["", "", ""];
+}
+function motivaGravar(userId, fatores) {
+  const f = fatores || [];
+  return ritGravar("motiva_" + (userId || "anon"), [f[0] || "", f[1] || "", f[2] || ""]);
+}
+function mapMotivador(r) {
+  return {
+    userId: r.usuario_id || "",
+    nome: r.nome || "",
+    fatores: [r.fator_1, r.fator_2, r.fator_3].map((x) => String(x || "").trim()).filter(Boolean),
+    atualizadoEm: r.atualizado_em || "",
+  };
+}
+async function motivadoresBaixar(token) {
+  const linhas = await sbSelect(token, "motivadores", "select=*&order=atualizado_em.desc");
+  return (linhas || []).map(mapMotivador);
+}
+function motivadorGravar(token, userId, nome, fatores) {
+  const f = (fatores || []).map((x) => String(x || "").trim().slice(0, 160));
+  return sbUpsert(token, "motivadores", [{
+    usuario_id: userId,
+    nome: nome || null,
+    fator_1: f[0] || null,
+    fator_2: f[1] || null,
+    fator_3: f[2] || null,
+    atualizado_em: new Date().toISOString(),
+  }], "usuario_id");
+}
+
+/* ---------- dinamica do anjo (tabelas opcionais) ----------
+   Cada pessoa cuida em silencio de um colega por uma ou duas semanas: reparar
+   no que falta, elogiar, dar suporte. Presente caro fica de fora de proposito,
+   o combinado e sobre atencao e nao sobre dinheiro.
+   O sorteio embaralha a lista e roda uma casa: assim ninguem tira a si mesmo e
+   todo mundo e cuidado por alguem, sem precisar sortear de novo ate dar certo
+   (que e justamente o que trava quando o time e pequeno). */
+const ANJO_DIAS_PADRAO = 14; // uma a duas semanas: mais que isso o time cansa
+function sortearAnjos(ids, aleatorio) {
+  const u = [];
+  (ids || []).forEach((x) => { if (x && u.indexOf(x) < 0) u.push(x); });
+  if (u.length < 2) return [];
+  const r = typeof aleatorio === "function" ? aleatorio : Math.random;
+  for (let i = u.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    const t = u[i]; u[i] = u[j]; u[j] = t;
+  }
+  return u.map((anjo, i) => ({ anjo, protegido: u[(i + 1) % u.length] }));
+}
+function anjoPeriodoPadrao(hoje) {
+  const ini = hoje instanceof Date ? hoje : new Date();
+  const fim = new Date(ini.getTime());
+  fim.setDate(fim.getDate() + ANJO_DIAS_PADRAO - 1);
+  return { inicio: dataISO(ini), fim: dataISO(fim) };
+}
+function anjoLer(userId) {
+  const o = ritLer("anjo_" + (userId || "anon"), null);
+  return o && o.inicio ? o : null;
+}
+function anjoGravar(userId, dados) {
+  return ritGravar("anjo_" + (userId || "anon"), dados);
+}
+function mapAnjoRodada(r) {
+  return { id: r.id, inicio: r.inicio || "", fim: r.fim || "", criadoPor: r.criado_por || "" };
+}
+async function anjoRodadaAtual(token, hojeIso) {
+  const linhas = await sbSelect(token, "anjo_rodada", "select=*&fim=gte." + hojeIso + "&order=inicio.desc&limit=1");
+  const r = (linhas || [])[0];
+  return r ? mapAnjoRodada(r) : null;
+}
+/* A policy de leitura do anjo_par so devolve a linha de quem esta perguntando:
+   e o banco, e nao a tela, que guarda o segredo de quem cuida de quem. */
+async function anjoProtegidoDaRodada(token, rodadaId) {
+  const linhas = await sbSelect(token, "anjo_par", "select=protegido_nome&rodada_id=eq." + rodadaId + "&limit=1");
+  const r = (linhas || [])[0];
+  return r ? (r.protegido_nome || "") : "";
+}
+async function anjoSortear(token, gestorId, pessoas, inicio, fim) {
+  const linhas = await sbInsert(token, "anjo_rodada", [{ inicio, fim, criado_por: gestorId }]);
+  const rodada = mapAnjoRodada((linhas && linhas[0]) || {});
+  const nomes = {};
+  (pessoas || []).forEach((p) => { nomes[p.id] = p.nome; });
+  const pares = sortearAnjos((pessoas || []).map((p) => p.id));
+  if (!pares.length) throw new Error("Precisa de pelo menos duas pessoas ativas pra sortear.");
+  await sbInsert(token, "anjo_par", pares.map((p) => ({
+    rodada_id: rodada.id,
+    anjo_id: p.anjo,
+    protegido_id: p.protegido,
+    protegido_nome: nomes[p.protegido] || null,
+  })), true); // return=minimal: nem quem sorteia recebe os pares de volta
+  return rodada;
+}
 /* Videochamada: o app não hospeda vídeo. O gestor cola o link da sala
    (Meet, Jitsi, Zoom) e o app apenas abre em aba nova, com o mesmo link
    nos dois avisos. Só aceita https para não virar porta de entrada. */
@@ -2561,6 +2763,11 @@ function AppInterno() {
   const [acoes, setAcoes] = useState([]);
   const [acoesNoBanco, setAcoesNoBanco] = useState(false);
   const [sala, setSala] = useState(() => salaLer());
+  /* Mural, elogios, motivadores e anjo tambem moram em tabelas opcionais. Um
+     objeto so guarda a lista e o "isto esta no banco?" de cada ritual, entao
+     nenhuma tela precisa perguntar de onde o dado veio. */
+  const [rit, setRit] = useState(() => ritVazio());
+  const mudarRit = (p) => setRit((r) => ({ ...r, ...p }));
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
   const [carregandoSecundarios, setCarregandoSecundarios] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: "erro"|"ok", texto }
@@ -2759,6 +2966,42 @@ function AppInterno() {
           if (cfg.sala_video) setSala(salaGravar(cfg.sala_video));
         } catch (e) { console.warn("[config do time]", e.message); }
       })();
+      // Mural, elogios, motivadores e anjo: tabelas opcionais tambem. Cada uma
+      // cai sozinha pro aparelho se nao existir - uma nao derruba as outras.
+      (async () => {
+        try {
+          mudarRit({ conquistas: await conquistasBaixar(token), conquistasNoBanco: true });
+        } catch (e) {
+          console.warn("[conquistas]", e.message);
+          mudarRit({ conquistas: conquistasLer(perfil.id), conquistasNoBanco: false });
+        }
+      })();
+      (async () => {
+        try {
+          mudarRit({ elogios: await elogiosBaixar(token), elogiosNoBanco: true });
+        } catch (e) {
+          console.warn("[elogios]", e.message);
+          mudarRit({ elogios: elogiosLer(perfil.id), elogiosNoBanco: false });
+        }
+      })();
+      (async () => {
+        try {
+          mudarRit({ motivadores: await motivadoresBaixar(token), motivaNoBanco: true });
+        } catch (e) { console.warn("[motivadores]", e.message); }
+      })();
+      // O par do anjo vem numa consulta separada: a policy so devolve a linha
+      // de quem esta perguntando, entao ninguem baixa a lista dos outros.
+      (async () => {
+        try {
+          const rodada = await anjoRodadaAtual(token, dataISO(new Date()));
+          if (!rodada) { mudarRit({ anjo: null, anjoNoBanco: true }); return; }
+          const protegido = await anjoProtegidoDaRodada(token, rodada.id);
+          mudarRit({ anjo: { inicio: rodada.inicio, fim: rodada.fim, protegido }, anjoNoBanco: true });
+        } catch (e) {
+          console.warn("[anjo]", e.message);
+          mudarRit({ anjo: anjoLer(perfil.id), anjoNoBanco: false });
+        }
+      })();
       // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
       // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
       (async () => {
@@ -2888,7 +3131,7 @@ function AppInterno() {
 
   const sair = () => {
     setUser(null); setSessao(null); setDemo(false);
-    setAcoes([]); setAcoesNoBanco(false);
+    setAcoes([]); setAcoesNoBanco(false); setRit(ritVazio());
     setUsuarios([]); setRegistros([]); setFaltas([]); setJustificativas([]); setAtestados([]); setFerias([]); setLogs([]);
     setFluxoPonto(null); setComprovante(null);
   };
@@ -3252,6 +3495,73 @@ function AppInterno() {
     }
   };
 
+  /* ---------- rituais do time: mural, elogios, motivadores e anjo ----------
+     Mesma ideia dos combinados: com a tabela no banco o registro vale pro time
+     inteiro; sem ela cai pro aparelho de quem escreveu. Quem chama daqui de
+     dentro nao precisa saber a diferenca. */
+  const publicarConquista = async (texto, tipo) => {
+    const item = conquistaNova(texto, tipo, user.nome, user.id);
+    if (demo || !rit.conquistasNoBanco) {
+      const lista = [item].concat(rit.conquistas);
+      if (!demo) conquistasGravar(user.id, lista);
+      mudarRit({ conquistas: lista });
+      return;
+    }
+    const salva = await conquistaInserir(sessao.token, user.id, user.nome, item);
+    setRit((r) => ({ ...r, conquistas: [salva].concat(r.conquistas) }));
+  };
+  const registrarElogio = async (alvo, texto) => {
+    const item = elogioNovo(texto, user.nome, user.id, alvo.nome, alvo.id, "circulo");
+    if (demo || !rit.elogiosNoBanco) {
+      const lista = [item].concat(rit.elogios);
+      if (!demo) elogiosGravar(user.id, lista);
+      mudarRit({ elogios: lista });
+      return;
+    }
+    const salvo = await elogioInserir(sessao.token, user.id, user.nome, item);
+    setRit((r) => ({ ...r, elogios: [salvo].concat(r.elogios) }));
+  };
+  /* Guardar e compartilhar sao coisas diferentes de proposito: o texto so sobe
+     pro banco quando a pessoa aperta o botao que avisa que a lideranca le. */
+  const salvarMotivadores = async (fatores, compartilhar) => {
+    motivaGravar(user.id, fatores);
+    if (!compartilhar) return "Guardado só neste aparelho.";
+    if (demo) return "Demonstração: nada é gravado de verdade.";
+    try {
+      await motivadorGravar(sessao.token, user.id, user.nome, fatores);
+      const limpos = (fatores || []).map((x) => String(x || "").trim()).filter(Boolean);
+      setRit((r) => ({
+        ...r,
+        motivaNoBanco: true,
+        motivadores: r.motivadores.filter((m) => m.userId !== user.id).concat(
+          limpos.length ? [{ userId: user.id, nome: user.nome, fatores: limpos, atualizadoEm: new Date().toISOString() }] : []),
+      }));
+      return limpos.length ? "Compartilhado com a liderança." : "Compartilhamento desfeito.";
+    } catch (e) {
+      return "Guardado só neste aparelho: " + mensagemAmigavel(e, "ao gravar no banco");
+    }
+  };
+  /* O gestor abre a rodada; o sorteio acontece aqui e sobe sem devolver a
+     lista. Depois o app pergunta de volta so o par de quem esta logado. */
+  const sortearAnjoRodada = async (inicio, fim) => {
+    if (!inicio || !fim || fim < inicio) return "Confira as datas: o fim não pode ser antes do início.";
+    const ativos = usuarios.filter((u) => u && u.ativo !== false);
+    if (ativos.length < 2) return "Precisa de pelo menos duas pessoas ativas pra sortear.";
+    if (demo || !rit.anjoNoBanco) {
+      const pares = sortearAnjos(ativos.map((u) => u.id));
+      const meu = pares.filter((p) => p.anjo === user.id)[0];
+      const alvo = meu ? ativos.filter((u) => u.id === meu.protegido)[0] : null;
+      const dados = { inicio, fim, protegido: alvo ? alvo.nome : "" };
+      if (!demo) anjoGravar(user.id, dados);
+      mudarRit({ anjo: dados });
+      return demo ? "Demonstração: o sorteio ficou só nesta tela." : "Sorteio feito só neste aparelho: as tabelas do anjo ainda não existem no banco.";
+    }
+    await anjoSortear(sessao.token, user.id, ativos, inicio, fim);
+    const rodada = await anjoRodadaAtual(sessao.token, dataISO(new Date()));
+    const protegido = rodada ? await anjoProtegidoDaRodada(sessao.token, rodada.id) : "";
+    mudarRit({ anjo: rodada ? { inicio: rodada.inicio, fim: rodada.fim, protegido } : null });
+    return "Rodada aberta. Cada pessoa enxerga só quem ela cuida.";
+  };
   /* ---------- banco de horas → folga ---------- */
   const solicitarFolga = async (horas, dataFolga) => {
     const h = +horas;
@@ -3903,7 +4213,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
-          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -5045,7 +5355,8 @@ function ListaCombinados({ acoes, onAlternar, hojeIso, compacta }) {
 /* Tela Nosso time: o roteiro das reuniões, os combinados e o check-in.
    Nesta primeira versão tudo mora no aparelho — nenhuma tabela nova no
    Supabase, nenhum dado saindo do navegador de quem escreveu. */
-function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala }) {
+function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala,
+  rit = { conquistas: [], elogios: [], motivadores: [], anjo: null }, onConquista, onElogio, onMotivadores, onSortearAnjo }) {
   const agora = new Date();
   const hojeIso = dataISO(agora);
   const [aba, setAba] = useState("roteiro");
@@ -5071,10 +5382,14 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
   const ehGestor = user.papel === "gestor";
   const prox = proximasReunioes(agora, 21);
   const hist = energiaLer(user.id).slice(-12);
-  const abas = [["roteiro", "🗓️ Roteiro"], ["combinados", "✅ Combinados"], ["energia", "🔋 Meu check-in"]];
+  const abas = [["roteiro", "🗓️ Roteiro"], ["combinados", "✅ Combinados"], ["mural", "🏆 Mural"],
+    ["motiva", "💡 O que me motiva"], ["anjo", "😇 Anjo"], ["energia", "🔋 Meu check-in"]];
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Nosso time</h1>
+      {rit.anjo && rit.anjo.protegido && (
+        <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 8, lineHeight: 1.5 }}>😇 Nesta rodada você é o anjo de <b style={{ color: C.branco }}>{rit.anjo.protegido}</b>.</div>
+      )}
       {prox && (
         <div className="pr-relevo" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: "4px solid " + C.amarelo }}>
           <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>PRÓXIMA REUNIÃO</div>
@@ -5147,6 +5462,17 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
           </div>
         </div>
       )}
+      {aba === "mural" && (
+        <AbaMural user={user} usuarios={usuarios} conquistas={rit.conquistas} elogios={rit.elogios}
+          onConquista={onConquista} onElogio={onElogio}
+          conquistasNoBanco={rit.conquistasNoBanco} elogiosNoBanco={rit.elogiosNoBanco} />
+      )}
+      {aba === "motiva" && (
+        <AbaMotiva user={user} motivadores={rit.motivadores} motivaNoBanco={rit.motivaNoBanco} onSalvar={onMotivadores} />
+      )}
+      {aba === "anjo" && (
+        <AbaAnjo user={user} usuarios={usuarios} anjo={rit.anjo} anjoNoBanco={rit.anjoNoBanco} onSortear={onSortearAnjo} />
+      )}
       {ehGestor && (
         <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
           <div style={{ ...S.display, fontSize: 14, color: C.branco }}>🎥 Sala de videochamada</div>
@@ -5165,6 +5491,231 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
   );
 }
 
+/* ---------- mural, elogios, motivadores e anjo na tela ----------
+   Quatro rituais que falam de pessoa, nao de tarefa. Cada bloco diz, antes de
+   qualquer campo, onde o que voce escreve vai parar e quem consegue ler. */
+function diaCurtoIso(iso) {
+  const s = String(iso || "");
+  return s.length >= 10 ? s.slice(8, 10) + "/" + s.slice(5, 7) : "";
+}
+
+function AbaMural({ user, usuarios, conquistas, elogios, onConquista, onElogio, conquistasNoBanco, elogiosNoBanco }) {
+  const [texto, setTexto] = useState("");
+  const [tipo, setTipo] = useState("vitoria");
+  const [salvandoC, setSalvandoC] = useState(false);
+  const [erroC, setErroC] = useState("");
+  const [elogio, setElogio] = useState("");
+  const [para, setPara] = useState("");
+  const [salvandoE, setSalvandoE] = useState(false);
+  const [erroE, setErroE] = useState("");
+  const colegas = (usuarios || []).filter((u) => u && u.id !== user.id && u.ativo !== false);
+  /* A lista de colegas chega do banco depois da primeira pintura da tela:
+     sem isto o select ficaria preso no vazio pra sempre. */
+  useEffect(() => {
+    if (!para && colegas.length) setPara(colegas[0].id);
+  }, [usuarios]);
+  async function publicar() {
+    if (!texto.trim() || salvandoC) return;
+    setSalvandoC(true);
+    setErroC("");
+    try { await onConquista(texto, tipo); setTexto(""); }
+    catch (e) { setErroC(mensagemAmigavel(e, "ao publicar no mural")); }
+    finally { setSalvandoC(false); }
+  }
+  async function elogiar() {
+    const alvo = colegas.filter((u) => u.id === para)[0];
+    if (!elogio.trim() || !alvo || salvandoE) return;
+    setSalvandoE(true);
+    setErroE("");
+    try { await onElogio(alvo, elogio); setElogio(""); }
+    catch (e) { setErroE(mensagemAmigavel(e, "ao registrar o elogio")); }
+    finally { setSalvandoE(false); }
+  }
+  return (
+    <div>
+      <div style={{ ...S.card, padding: 16 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>Mural de conquistas</div>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+          {conquistasNoBanco
+            ? "Vitória contada em voz alta vira memória do time. Todo mundo aqui lê o que você publicar."
+            : "Guardado só neste aparelho: a tabela conquistas ainda não existe no banco."}
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          {[["vitoria", "🏆 Vitória"], ["superacao", "💪 Superação"]].map(([k, rot]) => (
+            <button key={k} onClick={() => setTipo(k)}
+              style={{ ...(tipo === k ? S.btn : S.btnGhost), padding: "6px 14px", fontSize: 12.5 }}>{rot}</button>
+          ))}
+        </div>
+        <textarea style={{ ...S.input, minHeight: 64 }} maxLength={400} value={texto}
+          onChange={(e) => setTexto(e.target.value)} placeholder="O que deu certo, ou o que foi difícil e você superou" />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={publicar} disabled={!texto.trim() || salvandoC}>{salvandoC ? "Publicando..." : "Publicar no mural"}</button>
+        </div>
+        {erroC && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0", lineHeight: 1.5 }}>{erroC}</p>}
+        <div style={{ marginTop: 16 }}>
+          {(conquistas || []).length ? (conquistas || []).map((c) => (
+            <div key={c.id} style={{ borderTop: "1px solid " + C.borda, padding: "10px 0" }}>
+              <div style={{ fontSize: 13.5, color: C.branco, lineHeight: 1.5 }}>
+                <span style={{ marginRight: 6 }}>{c.tipo === "superacao" ? "💪" : "🏆"}</span>{c.texto}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 4 }}>{(c.autor || "alguém do time") + (diaCurtoIso(c.criadoEm) ? " · " + diaCurtoIso(c.criadoEm) : "")}</div>
+            </div>
+          )) : <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>O mural está vazio. A primeira conquista pode ser pequena — o que importa é começar a contar.</p>}
+        </div>
+      </div>
+
+      <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>Gratidão e elogios</div>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+          {elogiosNoBanco
+            ? "Escreva para quem te ajudou ou para quem você admira no dia a dia. O elogio fica visível para o time e assinado por você."
+            : "Guardado só neste aparelho: a tabela elogios ainda não existe no banco."}
+        </p>
+        {colegas.length ? (
+          <div>
+            <select style={{ ...S.input, marginBottom: 8 }} value={para} onChange={(e) => setPara(e.target.value)}>
+              {colegas.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            </select>
+            <textarea style={{ ...S.input, minHeight: 60 }} maxLength={300} value={elogio}
+              onChange={(e) => setElogio(e.target.value)} placeholder="Pelo que você quer agradecer, ou o que essa pessoa faz bem" />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={elogiar} disabled={!elogio.trim() || salvandoE}>{salvandoE ? "Enviando..." : "Enviar elogio"}</button>
+            </div>
+          </div>
+        ) : <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>Ainda não há colegas cadastrados para elogiar.</p>}
+        {erroE && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0", lineHeight: 1.5 }}>{erroE}</p>}
+        <div style={{ marginTop: 16 }}>
+          {(elogios || []).length ? (elogios || []).map((e) => (
+            <div key={e.id} style={{ borderTop: "1px solid " + C.borda, padding: "10px 0" }}>
+              <div style={{ fontSize: 13.5, color: C.branco, lineHeight: 1.5 }}>{e.texto}</div>
+              <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 4 }}>{(e.de || "alguém") + " → " + (e.para || "time") + (diaCurtoIso(e.criadoEm) ? " · " + diaCurtoIso(e.criadoEm) : "")}</div>
+            </div>
+          )) : <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>Nenhum elogio registrado ainda.</p>}
+        </div>
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "14px 0 0", lineHeight: 1.6, borderTop: "1px solid " + C.borda, paddingTop: 12 }}>
+          Elogio e conquista não valem ponto no prêmio nem na gamificação, de propósito: reconhecimento que vira nota deixa de ser reconhecimento e vira meta.
+        </p>
+      </div>
+    </div>
+  );
+}
+function AbaMotiva({ user, motivadores, motivaNoBanco, onSalvar }) {
+  const [f, setF] = useState(() => motivaLer(user.id));
+  const [aviso, setAviso] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const ehGestor = user.papel === "gestor";
+  const doTime = (motivadores || []).filter((m) => m.fatores && m.fatores.length);
+  const trocar = (i, v) => setF((l) => l.map((x, k) => (k === i ? v : x)));
+  async function guardar(compartilhar) {
+    if (salvando) return;
+    setSalvando(true);
+    setAviso("");
+    try { setAviso(await onSalvar(f, compartilhar)); }
+    catch (e) { setAviso(mensagemAmigavel(e, "ao gravar o que te motiva")); }
+    finally { setSalvando(false); }
+  }
+  return (
+    <div>
+      <div style={{ ...S.card, padding: 16 }}>
+        <div style={{ ...S.display, fontSize: 15, color: C.branco }}>O que me motiva</div>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+          Três coisas que fazem você querer trabalhar. Enquanto ficar guardado no aparelho, ninguém além de você lê. Se você compartilhar, quem tem acesso de gestor passa a ler — e a ideia é justamente essa: virar assunto de conversa.
+        </p>
+        {[0, 1, 2].map((i) => (
+          <input key={i} style={{ ...S.input, marginBottom: 8 }} maxLength={160} value={f[i] || ""}
+            onChange={(e) => trocar(i, e.target.value)} placeholder={"Fator " + (i + 1)} />
+        ))}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+          <button style={{ ...S.btnGhost, padding: "8px 16px", fontSize: 13 }} onClick={() => guardar(false)} disabled={salvando}>Guardar só neste aparelho</button>
+          <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={() => guardar(true)} disabled={salvando}>{salvando ? "Gravando..." : "Compartilhar com a liderança"}</button>
+        </div>
+        {aviso && <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0", lineHeight: 1.5 }}>{aviso}</p>}
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "12px 0 0", lineHeight: 1.6 }}>
+          Para deixar de compartilhar, apague os três campos e compartilhe de novo.
+        </p>
+      </div>
+      {ehGestor && (
+        <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.branco }}>O que motiva o time</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+            {motivaNoBanco
+              ? "Aparece só quem escolheu compartilhar. Serve de pauta de conversa, não de avaliação."
+              : "A tabela motivadores ainda não existe no banco, então nada do time chega aqui."}
+          </p>
+          {doTime.length ? doTime.map((m) => (
+            <div key={m.userId} style={{ borderTop: "1px solid " + C.borda, padding: "10px 0" }}>
+              <div style={{ fontSize: 13, color: C.branco }}>{m.nome || "colaborador"}</div>
+              <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 4, lineHeight: 1.6 }}>{m.fatores.join(" · ")}</div>
+            </div>
+          )) : <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>Ninguém compartilhou ainda.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AbaAnjo({ user, usuarios, anjo, anjoNoBanco, onSortear }) {
+  const ehGestor = user.papel === "gestor";
+  const padrao = anjoPeriodoPadrao(new Date());
+  const [inicio, setInicio] = useState(padrao.inicio);
+  const [fim, setFim] = useState(padrao.fim);
+  const [aviso, setAviso] = useState("");
+  const [sorteando, setSorteando] = useState(false);
+  const ativos = (usuarios || []).filter((u) => u && u.ativo !== false);
+  async function sortear() {
+    if (sorteando) return;
+    setSorteando(true);
+    setAviso("");
+    try { setAviso(await onSortear(inicio, fim)); }
+    catch (e) { setAviso(mensagemAmigavel(e, "ao sortear os anjos")); }
+    finally { setSorteando(false); }
+  }
+  return (
+    <div>
+      <div className="pr-relevo" style={{ ...S.card, padding: 16, borderLeft: "4px solid " + C.amarelo }}>
+        <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>DINÂMICA DO ANJO</div>
+        {anjo && anjo.protegido ? (
+          <div>
+            <div style={{ fontSize: 15, color: C.branco, marginTop: 8, lineHeight: 1.5 }}>Nesta rodada você é o anjo de <b>{anjo.protegido}</b>.</div>
+            <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 6 }}>{"de " + diaCurtoIso(anjo.inicio) + " até " + diaCurtoIso(anjo.fim)}</div>
+          </div>
+        ) : anjo ? (
+          <div style={{ fontSize: 13.5, color: C.branco, marginTop: 8, lineHeight: 1.5 }}>A rodada está aberta, mas você não entrou neste sorteio.</div>
+        ) : (
+          <div style={{ fontSize: 13.5, color: C.branco, marginTop: 8, lineHeight: 1.5 }}>Nenhuma rodada aberta no momento.</div>
+        )}
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "12px 0 0", lineHeight: 1.6 }}>
+          {anjoNoBanco
+            ? "Só você enxerga de quem você é anjo: a regra está no banco, não na tela. Quem administra o Supabase sempre consegue olhar — não prometa segredo absoluto."
+            : "As tabelas do anjo ainda não existem no banco, então o sorteio fica só neste aparelho e serve apenas para experimentar."}
+        </p>
+      </div>
+      <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
+        <div style={{ ...S.display, fontSize: 14, color: C.branco }}>Como funciona</div>
+        <ul style={{ fontSize: 12.5, color: C.cinza, lineHeight: 1.7, margin: "8px 0 0", paddingLeft: 18 }}>
+          <li>Dura de uma a duas semanas. Mais que isso o time cansa e a brincadeira morre.</li>
+          <li>Nada de presente caro. O combinado é sobre gesto, elogio e ajuda — não sobre dinheiro.</li>
+          <li>Repare no que o colega precisa: um café num dia pesado vale mais que um embrulho.</li>
+          <li>Ninguém tira a si mesmo, e cada pessoa é cuidada por alguém.</li>
+        </ul>
+      </div>
+      {ehGestor && (
+        <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
+          <div style={{ ...S.display, fontSize: 14, color: C.branco }}>Abrir uma rodada</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+            {"O app sorteia entre as " + ativos.length + " pessoas ativas e grava os pares sem devolver a lista para ninguém — nem para você."}
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input type="date" style={{ ...S.input, flex: "1 1 150px" }} value={inicio} onChange={(e) => setInicio(e.target.value)} />
+            <input type="date" style={{ ...S.input, flex: "1 1 150px" }} value={fim} onChange={(e) => setFim(e.target.value)} />
+            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={sortear} disabled={sorteando || ativos.length < 2}>{sorteando ? "Sorteando..." : "Sortear os anjos"}</button>
+          </div>
+          {aviso && <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0", lineHeight: 1.5 }}>{aviso}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
 /* Combinados abertos aparecem no Bater ponto: o que foi acordado na reunião
    encontra a pessoa no lugar em que ela entra todo dia. */
 function CartaoCombinados({ acoes, onAlternar, onAbrirRoteiro }) {
@@ -6623,6 +7174,11 @@ const TABELAS_OPCIONAIS = [
   { nome: "documentos_rh", para: "documentos do colaborador" },
   { nome: "combinados", para: "combinados das reunioes do time" },
   { nome: "config_time", para: "link da sala de videochamada" },
+  { nome: "conquistas", para: "mural de conquistas do time" },
+  { nome: "elogios", para: "circulo de elogios e gratidao" },
+  { nome: "motivadores", para: "o que motiva cada colaborador" },
+  { nome: "anjo_rodada", para: "rodadas da dinamica do anjo" },
+  { nome: "anjo_par", para: "pares sorteados do anjo" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -6782,7 +7338,121 @@ drop policy if exists "config: gestor cuida" on public.config_time;
 create policy "config: gestor cuida" on public.config_time
   for all to authenticated
   using (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
-  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+  with check (exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Mural de conquistas: vitoria e superacao contadas em voz alta pro time.
+-- Nada daqui vira ponto de premio: reconhecimento com nota vira meta.
+create table if not exists public.conquistas (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  tipo text not null default 'vitoria',
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  criado_em timestamptz not null default now(),
+  constraint conquistas_tipo_valido check (tipo in ('vitoria', 'superacao'))
+);
+create index if not exists conquistas_recentes_idx on public.conquistas (criado_em desc);
+alter table public.conquistas enable row level security;
+
+drop policy if exists "conquistas: o time le" on public.conquistas;
+create policy "conquistas: o time le" on public.conquistas
+  for select to authenticated using (true);
+
+drop policy if exists "conquistas: cada um conta a sua" on public.conquistas;
+create policy "conquistas: cada um conta a sua" on public.conquistas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+drop policy if exists "conquistas: autor corrige" on public.conquistas;
+create policy "conquistas: autor corrige" on public.conquistas
+  for update to authenticated using (autor_id = auth.uid()) with check (autor_id = auth.uid());
+
+-- Circulo de elogios: quem agradece assina o que escreveu e ninguem elogia a
+-- si mesmo - por isso o check compara de_id com para_id.
+create table if not exists public.elogios (
+  id uuid primary key default gen_random_uuid(),
+  texto text not null,
+  de_id uuid not null references public.usuarios (id) on delete cascade,
+  de_nome text,
+  para_id uuid not null references public.usuarios (id) on delete cascade,
+  para_nome text,
+  origem text,
+  criado_em timestamptz not null default now(),
+  constraint elogios_nao_e_pra_si check (de_id <> para_id)
+);
+create index if not exists elogios_recentes_idx on public.elogios (criado_em desc);
+alter table public.elogios enable row level security;
+
+drop policy if exists "elogios: o time le" on public.elogios;
+create policy "elogios: o time le" on public.elogios
+  for select to authenticated using (true);
+
+drop policy if exists "elogios: quem elogia assina" on public.elogios;
+create policy "elogios: quem elogia assina" on public.elogios
+  for insert to authenticated with check (de_id = auth.uid() and de_id <> para_id);
+
+-- O que me motiva: tres fatores escritos pela propria pessoa pra conversar com
+-- a lideranca. So existe linha aqui se ela apertou compartilhar.
+create table if not exists public.motivadores (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  nome text,
+  fator_1 text,
+  fator_2 text,
+  fator_3 text,
+  atualizado_em timestamptz not null default now()
+);
+alter table public.motivadores enable row level security;
+
+drop policy if exists "motivadores: dono cuida" on public.motivadores;
+create policy "motivadores: dono cuida" on public.motivadores
+  for all to authenticated using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "motivadores: gestor le" on public.motivadores;
+create policy "motivadores: gestor le" on public.motivadores
+  for select to authenticated using (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Dinamica do anjo: o gestor abre a rodada e o app sorteia os pares.
+create table if not exists public.anjo_rodada (
+  id uuid primary key default gen_random_uuid(),
+  inicio date not null,
+  fim date not null,
+  criado_por uuid references public.usuarios (id) on delete set null,
+  criado_em timestamptz not null default now(),
+  constraint anjo_rodada_periodo check (fim >= inicio)
+);
+alter table public.anjo_rodada enable row level security;
+
+drop policy if exists "anjo rodada: o time le" on public.anjo_rodada;
+create policy "anjo rodada: o time le" on public.anjo_rodada
+  for select to authenticated using (true);
+
+drop policy if exists "anjo rodada: gestor abre" on public.anjo_rodada;
+create policy "anjo rodada: gestor abre" on public.anjo_rodada
+  for insert to authenticated with check (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- O par so pode ser lido pelo proprio anjo: e o banco que guarda o segredo, e
+-- nao a tela. Depois do sorteio nem o gestor consulta o par dos outros.
+create table if not exists public.anjo_par (
+  id uuid primary key default gen_random_uuid(),
+  rodada_id uuid not null references public.anjo_rodada (id) on delete cascade,
+  anjo_id uuid not null references public.usuarios (id) on delete cascade,
+  protegido_id uuid not null references public.usuarios (id) on delete cascade,
+  protegido_nome text,
+  criado_em timestamptz not null default now(),
+  unique (rodada_id, anjo_id),
+  constraint anjo_par_nao_e_de_si check (anjo_id <> protegido_id)
+);
+alter table public.anjo_par enable row level security;
+
+drop policy if exists "anjo par: so o proprio anjo le" on public.anjo_par;
+create policy "anjo par: so o proprio anjo le" on public.anjo_par
+  for select to authenticated using (anjo_id = auth.uid());
+
+drop policy if exists "anjo par: gestor sorteia" on public.anjo_par;
+create policy "anjo par: gestor sorteia" on public.anjo_par
+  for insert to authenticated with check (exists (
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */

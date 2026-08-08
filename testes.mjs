@@ -39,7 +39,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   mensagemAmigavel, limparTexto, emailValido, uuidValido, dataValida, numeroValido, validarArquivo,
   nomeArquivoSeguro, fmtData, dataLocal, addMeses, GEO_MOTIVOS, codigoGeoParaMotivo,\n  alertasConformidade, produtivasDoDia, CONF,
   agendaRH, urgenciaAgenda, prazoEmPalavras, AGENDA_JANELA_DIAS, legendaLembretes, telaInicial,
-  custoDaEquipe, REGIMES_EMPRESA, STATUS_CANDIDATO, TIPOS_DOCUMENTO, DOCS_ADMISSAO, STATUS_EXAME };`;
+  custoDaEquipe, REGIMES_EMPRESA, STATUS_CANDIDATO, TIPOS_DOCUMENTO, DOCS_ADMISSAO, STATUS_EXAME,
+  sortearAnjos, anjoPeriodoPadrao, ANJO_DIAS_PADRAO };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -527,6 +528,70 @@ t("o aviso de reuniao usa a trava de um por pessoa/dia/etapa",
   fnPush.includes("push_lembretes_log?on_conflict=usuario_id,dia,etapa"));
 t("o README explica o agendamento dos dois avisos",
   leia("README.md").includes("reuniao-push-saida") && leia("README.md").includes("reuniao-push-chegada"));
+
+// ══════════════════════════════════════════════════════════════
+secao("Rituais do time: mural, elogios, o que me motiva e anjo");
+t("as tabelas novas entram no diagnostico",
+  ["conquistas", "elogios", "motivadores", "anjo_rodada", "anjo_par"]
+    .every((n) => new RegExp('\\{ nome: "' + n + '"').test(src)));
+t("o SQL cria as cinco tabelas dos rituais novos",
+  ["conquistas", "elogios", "motivadores", "anjo_rodada", "anjo_par"]
+    .every((n) => new RegExp("create table if not exists public\\." + n).test(sqlBloco)));
+t("so o proprio anjo le o par dele",
+  /create policy "anjo par: so o proprio anjo le"[\s\S]*?anjo_id = auth\.uid\(\)/.test(sqlBloco));
+t("ninguem elogia a si mesmo, e o banco que garante",
+  sqlBloco.includes("constraint elogios_nao_e_pra_si check (de_id <> para_id)") &&
+  /with check \(de_id = auth\.uid\(\) and de_id <> para_id\)/.test(sqlBloco));
+t("o que me motiva e lido pelo dono e pelo gestor, e mais ninguem",
+  /create policy "motivadores: dono cuida"[\s\S]*?usuario_id = auth\.uid\(\)/.test(sqlBloco) &&
+  /create policy "motivadores: gestor le"[\s\S]*?u\.tipo = 'gestor'/.test(sqlBloco));
+t("o mural so aceita vitoria ou superacao",
+  sqlBloco.includes("constraint conquistas_tipo_valido check (tipo in ('vitoria', 'superacao'))"));
+t("sem tabela, mural, elogio e anjo caem pro aparelho em vez de quebrar a tela",
+  src.includes("conquistasLer(perfil.id)") && src.includes("elogiosLer(perfil.id)") &&
+  src.includes("anjoLer(perfil.id)"));
+t("a tela diz quando o registro ficou so no aparelho",
+  ["a tabela conquistas ainda não existe no banco",
+   "a tabela elogios ainda não existe no banco"].every((f) => src.includes(f)));
+t("o que me motiva so sobe pro banco quando a pessoa compartilha",
+  src.includes('if (!compartilhar) return "Guardado só neste aparelho.";'));
+t("os pares do anjo sobem sem devolver a lista pra ninguem",
+  /sbInsert\(token, "anjo_par"[\s\S]*?\)\), true\)/.test(src));
+t("as abas novas aparecem na tela do time",
+  ['["mural", "🏆 Mural"]', '["motiva", "💡 O que me motiva"]', '["anjo", "😇 Anjo"]']
+    .every((p) => src.includes(p)));
+
+const blocoJogo = src.slice(src.indexOf("function analisarAssiduidade"), src.indexOf("const RITUAIS = ["));
+t("mural e elogios do time nao entram na conta de ponto nem do premio",
+  !/rit\.conquistas|rit\.elogios|conquistasBaixar|elogiosBaixar|"conquistas"|"elogios"/.test(blocoJogo));
+const blocoTelasJogo = src.slice(src.indexOf("function TelaGame"), src.indexOf("function TelaFeedback"));
+t("as telas de gamificacao e premio nao recebem o mural nem os elogios",
+  !/\brit\.|conquistasNoBanco|elogiosNoBanco/.test(blocoTelasJogo));
+t("o premio continua recebendo so registro e falta",
+  src.includes("<TelaPremio user={user} registros={registros} faltas={faltas} />"));
+
+const paresAnjo = m.sortearAnjos(["a", "b", "c", "d", "e"]);
+t("ninguem tira a si mesmo no sorteio do anjo",
+  paresAnjo.length === 5 && paresAnjo.every((p) => p.anjo !== p.protegido));
+t("cada pessoa e anjo uma vez e e cuidada uma vez",
+  new Set(paresAnjo.map((p) => p.anjo)).size === 5 &&
+  new Set(paresAnjo.map((p) => p.protegido)).size === 5);
+let anjoSempreOk = true;
+for (let i = 0; i < 300; i++) {
+  const p = m.sortearAnjos(["a", "b", "c", "d"]);
+  if (p.length !== 4 || p.some((x) => x.anjo === x.protegido)) anjoSempreOk = false;
+}
+t("300 sorteios seguidos e ninguem cuida de si mesmo", anjoSempreOk);
+t("sorteio com menos de duas pessoas devolve vazio",
+  m.sortearAnjos(["so-eu"]).length === 0 && m.sortearAnjos([]).length === 0 && m.sortearAnjos().length === 0);
+t("o sorteio ignora repetido, nulo e vazio", m.sortearAnjos(["a", "a", "b", null, ""]).length === 2);
+t("a rodada padrao do anjo dura duas semanas",
+  m.ANJO_DIAS_PADRAO === 14 &&
+  m.anjoPeriodoPadrao(new Date(2026, 7, 10)).inicio === "2026-08-10" &&
+  m.anjoPeriodoPadrao(new Date(2026, 7, 10)).fim === "2026-08-23");
+t("o README explica os rituais novos",
+  leia("README.md").includes("### Mural, elogios, o que me motiva e a dinamica do anjo") &&
+  leia("README.md").includes("anjo_par"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
