@@ -1656,46 +1656,46 @@ function legendaLembretes(status, instalado) {
    inteiro e uma diferente amanha. Com Math.random() a frase ficaria
    piscando a cada tique do relogio, que roda de segundo em segundo. */
 const FRASES_CHEGADA = [
-  "Comece pelo mais facil — o resto engrena depois.",
-  "Chegou, ja e meio caminho: o dia rende mais quando comeca sem correria.",
-  "Um dia de cada vez, e hoje e este.",
+  "Comece pelo mais fácil — o resto engrena depois.",
+  "Chegou, já é meio caminho: o dia rende mais quando começa sem correria.",
+  "Um dia de cada vez, e hoje é este.",
   "Antes de tudo, respire fundo uma vez. Agora sim.",
-  "Feito e melhor que perfeito.",
+  "Feito é melhor que perfeito.",
   "Time que chega junto entrega junto.",
   "Comece devagar que o ritmo vem sozinho.",
-  "O que sai daqui vira o servico de alguem la fora.",
-  "Hoje tambem da pra aprender alguma coisa nova.",
-  "Sua presenca conta mais do que parece por aqui.",
+  "O que sai daqui vira o serviço de alguém lá fora.",
+  "Hoje também dá pra aprender alguma coisa nova.",
+  "Sua presença conta mais do que parece por aqui.",
 ];
 const FRASES_SAIDA = [
-  "Encerrado. O que ficou pra amanha pode esperar — descanse.",
-  "Bom descanso. Amanha o assunto continua.",
+  "Encerrado. O que ficou pra amanhã pode esperar — descanse.",
+  "Bom descanso. Amanhã o assunto continua.",
   "Fechou o dia. Desligue de verdade: o expediente acabou.",
-  "Obrigado pelo dia de hoje. Va com calma na volta.",
-  "O trabalho fica, voce vai.",
-  "Dia cumprido. Aproveite o resto dele com quem voce gosta.",
-  "Ponto batido, consciencia tranquila. Ate amanha!",
-  "Descansar tambem e parte do trabalho.",
-  "Fim de expediente: guarde energia pra amanha.",
-  "Va bem. E chegue bem.",
+  "Obrigado pelo dia de hoje. Vá com calma na volta.",
+  "O trabalho fica, você vai.",
+  "Dia cumprido. Aproveite o resto dele com quem você gosta.",
+  "Ponto batido, consciência tranquila. Até amanhã!",
+  "Descansar também é parte do trabalho.",
+  "Fim de expediente: guarde energia pra amanhã.",
+  "Vá bem. E chegue bem.",
 ];
 const FRASES_BOAS_VINDAS = [
-  "Que bom ter voce aqui. Pergunte tudo o que precisar — ninguem nasce sabendo o caminho da casa.",
-  "Bem-vindo(a) ao time. Comece no seu ritmo: os primeiros dias sao pra entender, nao pra correr.",
-  "Sua chegada fecha uma lacuna no servico e abre uma cadeira na equipe. Seja bem-vindo(a)!",
-  "A partir de hoje voce faz parte disso. Conte com a gente.",
-  "Aqui o ponto e simples: registre a jornada e o resto a gente combina conversando.",
-  "Feliz comeco. Que este seja um lugar onde voce cresca.",
+  "Que bom ter você aqui. Pergunte tudo o que precisar — ninguém nasce sabendo o caminho da casa.",
+  "Bem-vindo(a) ao time. Comece no seu ritmo: os primeiros dias são pra entender, não pra correr.",
+  "Sua chegada fecha uma lacuna no serviço e abre uma cadeira na equipe. Seja bem-vindo(a)!",
+  "A partir de hoje você faz parte disso. Conte com a gente.",
+  "Aqui o ponto é simples: registre a jornada e o resto a gente combina conversando.",
+  "Feliz começo. Que este seja um lugar onde você cresça.",
 ];
 /* Desligamento nao pede frase motivacional — pede respeito e sobriedade.
    Estas linhas sao SUGESTAO pro gestor copiar, nunca envio automatico. */
 const FRASES_DESPEDIDA = [
-  "Obrigado pelo tempo e pelo trabalho dedicados a empresa. Desejamos sucesso no proximo passo.",
+  "Obrigado pelo tempo e pelo trabalho dedicados à empresa. Desejamos sucesso no próximo passo.",
   "O ciclo aqui se encerra e o respeito fica. Boa sorte no que vem.",
   "Agradecemos cada dia trabalhado. As portas seguem abertas pro futuro.",
   "Toda passagem deixa marca. Obrigado pela sua, e sucesso adiante.",
   "Fica o reconhecimento pelo trabalho entregue. Desejamos o melhor daqui pra frente.",
-  "Obrigado por ter feito parte do time. Que o proximo caminho seja bom.",
+  "Obrigado por ter feito parte do time. Que o próximo caminho seja bom.",
 ];
 
 function diaDoAno(dt) {
@@ -1739,9 +1739,9 @@ const AGUA_INTERVALO_MIN = 90;
 const DICAS_PAUSA = [
   "Olhe pra algo distante por 20 segundos — descansa a vista da tela.",
   "Levante e ande um pouco: o corpo cobra caro cada hora sentado.",
-  "Solte os ombros e gire o pescoco devagar, sem forcar.",
-  "Se der, coma algo de verdade no intervalo — cafe nao e almoco.",
-  "Confira a postura: pes no chao, costas apoiadas.",
+  "Solte os ombros e gire o pescoço devagar, sem forçar.",
+  "Se der, coma algo de verdade no intervalo — café não é almoço.",
+  "Confira a postura: pés no chão, costas apoiadas.",
 ];
 function aguaChaveDoDia(userId, dt) {
   const d = dt || new Date();
