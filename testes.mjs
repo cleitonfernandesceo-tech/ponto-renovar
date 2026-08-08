@@ -45,7 +45,9 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   mapResposta, respostasDoDia, respostaVazia, impedimentosDoDia, combinadosNaPauta,
   assuntosDaReuniao, textoAvisoReuniao, acoesAbertas,
   chaveAutorResposta, reuniaoAnteriorDoRitual, ocorrenciaRitualAteHoje, impedimentosTravados,
-  impedimentosComHistorico, acompanhamentoCombinados, RITUAIS, ritualPorId, reunioesDoDia };`;
+  impedimentosComHistorico, acompanhamentoCombinados, RITUAIS, ritualPorId, reunioesDoDia,
+  SALAS_RITUAIS, PRESENCA_MIN, chaveSalaNoBanco, salaDoRitual, salasLer, salasGravar,
+  enderecoSalaSugerido, sortearSementeSala, mapPresenca, presencaAtiva, textoPresenca };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -837,6 +839,78 @@ t("o comentario do armazenamento local deixou de mentir",
   src.includes("A nota de ânimo continua fora do banco de propósito"));
 t("o README explica o pedido de ajuda que se repete",
   leia("README.md").includes("### Pedido de ajuda que se repete"));
+
+secao("Sala de videochamada e quem ja esta nela");
+t("cada ritual pode ter a sua sala",
+  m.salaDoRitual({ geral: "https://a.com/g", semanal: "https://a.com/s" }, "semanal") === "https://a.com/s");
+t("ritual sem sala propria cai no link geral",
+  m.salaDoRitual({ geral: "https://a.com/g", semanal: "https://a.com/s" }, "mensal") === "https://a.com/g");
+t("sem link nenhum o app nao inventa sala",
+  m.salaDoRitual({ geral: "", semanal: "" }, "semanal") === "");
+t("endereco fora do https nao vira sala",
+  m.salaDoRitual({ geral: "http://a.com" }, "semanal") === "" &&
+  m.salaDoRitual({ geral: "javascript:alert(1)" }, "semanal") === "");
+t("cada ritual tem a sua chave no ajuste do time",
+  m.chaveSalaNoBanco("geral") === "sala_video" && m.chaveSalaNoBanco("mensal") === "sala_mensal" &&
+  m.chaveSalaNoBanco("inventado") === "");
+t("os tres rituais tem campo de sala",
+  m.SALAS_RITUAIS.length === 3 && m.SALAS_RITUAIS.every((k) => !!m.ritualPorId(k)));
+
+const sementeSala = "abc123def456ghi789jkl";
+const salaSugerida = m.enderecoSalaSugerido(sementeSala, "semanal");
+t("o endereco sugerido e https e sem caractere estranho", /^https:\/\/[a-z0-9.\/-]+$/.test(salaSugerida));
+t("o endereco sugerido muda de ritual para ritual", salaSugerida !== m.enderecoSalaSugerido(sementeSala, "mensal"));
+t("o mesmo time cai sempre na mesma sala", salaSugerida === m.enderecoSalaSugerido(sementeSala, "semanal"));
+t("semente curta nao vira endereco",
+  m.enderecoSalaSugerido("abc", "semanal") === "" && m.enderecoSalaSugerido("", "semanal") === "");
+t("o nome da sala nao e adivinhavel",
+  m.sortearSementeSala().length === 24 && m.sortearSementeSala() !== m.sortearSementeSala());
+
+const agoraSala = Date.parse("2026-08-10T09:20:00.000Z");
+const bateu = (id, nome, ritual, dia, min) => ({ usuarioId: id, nome, ritualId: ritual, dia,
+  vistoEm: new Date(agoraSala - min * 60000).toISOString() });
+const batidas = [bateu("u1", "Marina", "semanal", "2026-08-10", 2), bateu("u2", "Rafael", "semanal", "2026-08-10", 1),
+  bateu("u3", "Juliana", "semanal", "2026-08-10", 30), bateu("u4", "Cleiton", "mensal", "2026-08-10", 1),
+  bateu("u5", "Outro", "semanal", "2026-08-09", 1)];
+const naSala = m.presencaAtiva(batidas, "semanal", "2026-08-10", agoraSala);
+t("so aparece quem bateu presenca agora", naSala.length === 2);
+t("quem chegou primeiro aparece primeiro", naSala[0].nome === "Marina" && naSala[1].nome === "Rafael");
+t("presenca de outro ritual nao vaza", !naSala.filter((p) => p.nome === "Cleiton").length);
+t("presenca de ontem nao vaza", !naSala.filter((p) => p.nome === "Outro").length);
+t("quem parou de bater some da sala sozinho", !naSala.filter((p) => p.nome === "Juliana").length);
+t("a janela de presenca e curta",
+  m.PRESENCA_MIN <= 10 && m.presencaAtiva(batidas, "semanal", "2026-08-10", agoraSala, 60).length === 3);
+t("a mesma pessoa nunca conta duas vezes",
+  m.presencaAtiva(batidas.concat([bateu("u1", "Marina", "semanal", "2026-08-10", 0)]), "semanal", "2026-08-10", agoraSala).length === 2);
+t("linha sem hora ou sem pessoa e ignorada",
+  m.presencaAtiva([{ usuarioId: "u9", ritualId: "semanal", dia: "2026-08-10" }], "semanal", "2026-08-10", agoraSala).length === 0 &&
+  m.presencaAtiva([bateu("", "x", "semanal", "2026-08-10", 0)], "semanal", "2026-08-10", agoraSala).length === 0);
+t("lista vazia nao quebra a tela", m.presencaAtiva(null, "semanal", "2026-08-10", agoraSala).length === 0);
+
+t("sala vazia fala a verdade", m.textoPresenca([], "u1") === "Ninguém entrou na sala ainda.");
+t("sozinho na sala a pessoa sabe disso", m.textoPresenca([{ usuarioId: "u1", nome: "Eu" }], "u1").includes("única pessoa"));
+t("uma pessoa na sala usa o singular", m.textoPresenca([{ usuarioId: "u2", nome: "Marina" }], "u1") === "Marina já está na sala.");
+t("tres pessoas viram lista legivel",
+  m.textoPresenca([{ usuarioId: "u2", nome: "Marina" }, { usuarioId: "u3", nome: "Rafael" }, { usuarioId: "u4", nome: "Juliana" }], "u1")
+    === "Marina, Rafael e Juliana já estão na sala.");
+t("ninguem se ve na propria lista",
+  m.textoPresenca([{ usuarioId: "u1", nome: "Eu" }, { usuarioId: "u2", nome: "Marina" }], "u1") === "Marina já está na sala.");
+t("presenca do banco vira presenca da tela",
+  m.mapPresenca({ usuario_id: "u1", nome: "Marina", ritual_id: "semanal", dia: "2026-08-10", visto_em: "x" }).usuarioId === "u1");
+t("sem armazenamento local nada quebra",
+  Object.keys(m.salasLer()).length === 4 && m.salasGravar({ quinzenal: "nao-e-url" }).quinzenal === "");
+
+t("o app avisa que nao hospeda a chamada", src.includes("O app não hospeda a chamada"));
+t("a presenca na chamada nao vira controle de frequencia",
+  src.includes("nunca conta quem faltou na chamada"));
+t("a tabela de presenca tem trava de uma linha por pessoa por reuniao",
+  src.includes("unique (usuario_id, dia, ritual_id)"));
+t("a tabela de presenca nasce com RLS ligada",
+  src.includes("alter table public.presenca_chamada enable row level security"));
+t("cada um so bate a propria presenca",
+  src.includes("for insert to authenticated with check (usuario_id = auth.uid())"));
+t("o diagnostico lista a tabela nova", src.includes('nome: "presenca_chamada"'));
+t("o README explica as salas por ritual", leia("README.md").includes("### Sala de videochamada por ritual"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

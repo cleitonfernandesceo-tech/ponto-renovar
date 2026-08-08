@@ -292,8 +292,10 @@ create policy "combinados: dono conclui" on public.combinados
   with check (dono_id = auth.uid() or criado_por = auth.uid()
     or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
 
--- Ajuste do time em chave/valor. Hoje guarda so 'sala_video', o link fixo da
--- videochamada: o gestor grava uma vez e o time inteiro passa a enxergar.
+-- Ajuste do time em chave/valor. Guarda os enderecos das salas de videochamada
+-- ('sala_video' e o geral, 'sala_semanal', 'sala_quinzenal' e 'sala_mensal' sao
+-- por ritual) e 'sala_semente', usada so para sugerir um endereco dificil de
+-- adivinhar. O gestor grava uma vez e o time inteiro passa a enxergar.
 create table if not exists public.config_time (
   chave text primary key,
   valor text,
@@ -499,7 +501,41 @@ create policy "respostas: cada um escreve a sua" on public.respostas
 drop policy if exists "respostas: cada um corrige a sua" on public.respostas;
 create policy "respostas: cada um corrige a sua" on public.respostas
   for update to authenticated
-  using (autor_id = auth.uid()) with check (autor_id = auth.uid());```
+  using (autor_id = auth.uid()) with check (autor_id = auth.uid());
+
+-- Quem esta na sala da chamada agora. Uma linha por pessoa por reuniao por dia,
+-- reescrita a cada batida enquanto a aba do app fica aberta. Isto NAO e controle
+-- de frequencia: linha sem batida recente some da tela sozinha e o app nunca
+-- pergunta quem faltou na chamada. Serve so para ninguem cair em sala vazia.
+create table if not exists public.presenca_chamada (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  nome text,
+  dia date not null,
+  ritual_id text not null,
+  visto_em timestamptz not null default now(),
+  unique (usuario_id, dia, ritual_id)
+);
+create index if not exists presenca_chamada_dia_idx on public.presenca_chamada (dia desc);
+alter table public.presenca_chamada enable row level security;
+
+-- O time inteiro le: a lista so tem utilidade se todo mundo enxergar quem entrou.
+drop policy if exists "presenca: o time le" on public.presenca_chamada;
+create policy "presenca: o time le" on public.presenca_chamada
+  for select to authenticated using (true);
+
+drop policy if exists "presenca: cada um bate a sua" on public.presenca_chamada;
+create policy "presenca: cada um bate a sua" on public.presenca_chamada
+  for insert to authenticated with check (usuario_id = auth.uid());
+
+drop policy if exists "presenca: cada um atualiza a sua" on public.presenca_chamada;
+create policy "presenca: cada um atualiza a sua" on public.presenca_chamada
+  for update to authenticated
+  using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "presenca: cada um apaga a sua" on public.presenca_chamada;
+create policy "presenca: cada um apaga a sua" on public.presenca_chamada
+  for delete to authenticated using (usuario_id = auth.uid());```
 
 ## Push de servidor (lembrete com o app fechado)
 
@@ -609,14 +645,16 @@ Os **combinados** (o que ficou acordado, com dono e prazo) vao pra tabela
 ou do gestor. Enquanto a tabela nao existir o app guarda no proprio aparelho e
 diz isso na tela, sem quebrar nada.
 
-O **link da sala de videochamada** fica em `config_time`, na chave
-`sala_video`: o gestor cola uma vez e o time inteiro passa a ver o mesmo link.
-O app nao hospeda video, so abre o link (Meet, Jitsi, Zoom) em aba nova, porque
-a CSP da pagina usa `frame-src 'none'`.
+Os **enderecos das salas de videochamada** ficam em `config_time`: `sala_video`
+e o link geral e `sala_semanal`, `sala_quinzenal` e `sala_mensal` sao por
+ritual. O gestor grava uma vez e o time inteiro passa a ver os mesmos
+enderecos. O app nao hospeda video, so abre o link (Meet, Jitsi, Zoom) em aba
+nova, porque a CSP da pagina usa `frame-src 'none'`.
 
 O **check-in de energia** (nota de 1 a 10 pro proprio animo) NAO vai pro banco,
 de proposito: e dado sensivel, fica so no aparelho de quem escreveu e nunca
-aparece pro gestor. O mesmo vale pras respostas das tres perguntas.
+aparece pro gestor. As respostas das tres perguntas, essas sim, vao pra tabela
+`respostas` desde a fase anterior, porque a reuniao inteira depende delas.
 
 ### Mural, elogios, o que me motiva e a dinamica do anjo
 
@@ -754,6 +792,36 @@ o proprio time olha junto.
 O bloco tambem manda ler o numero de repetidos antes dos outros, porque e o unico
 numero da tela que aponta para uma decisao do gestor e nao para o esforco de quem
 executa.
+
+### Sala de videochamada por ritual
+
+Cada ritual pode ter a sua sala. `salaDoRitual` procura primeiro o endereco do
+proprio ritual e so depois cai no link geral; endereco que nao comeca com
+`https://` e descartado, pra caixa de texto do gestor nao virar porta de entrada
+pra qualquer coisa colada ali.
+
+Quem nao tem sala nenhuma pode apertar **Sugerir enderecos**. O app sorteia uma
+semente de 24 caracteres uma unica vez, guarda em `config_time.sala_semente` e
+monta um endereco por ritual a partir dela (`enderecoSalaSugerido`). E so uma
+sugestao: o app nao cria nem administra a sala, entao quem aperta o botao
+precisa abrir o endereco uma vez pra conferir se funciona antes de contar com
+ele. Sala com nome obvio e sala onde estranho entra, por isso o nome sorteado.
+
+**Quem ja esta na sala** vem da tabela `presenca_chamada`. Depois de clicar em
+entrar, e enquanto a aba do app continuar aberta, o aparelho regrava a propria
+linha a cada quatro minutos, no maximo por duas horas. Quem para de bater some
+da lista sozinho em `PRESENCA_MIN` minutos (8). Serve pra ninguem entrar numa
+sala vazia achando que se atrasou, e pra quem chegou primeiro saber que nao
+esta falando sozinho.
+
+Isto **nao e controle de frequencia** e nao deve virar um. O app nunca pergunta
+quem faltou na chamada, nao guarda contagem por pessoa e nao mostra essa lista
+pro gestor de um jeito diferente do resto do time. Se alguem pedir um relatorio
+de presenca em reuniao a partir dessa tabela, a resposta honesta e que o dado
+nao foi feito pra isso: ele se apaga em minutos e nao registra ausencia.
+
+Sem a tabela `presenca_chamada` o botao de entrar continua funcionando; o que
+some e so a linha dizendo quem ja chegou.
 
 ### Aviso de reuniao com o app fechado
 
