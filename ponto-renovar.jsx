@@ -1944,6 +1944,81 @@ function acoesAbertas(lista) { return (lista || []).filter((a) => a && !a.feito)
 function acoesAtrasadas(lista, hojeIso) { return acoesAbertas(lista).filter((a) => a.prazo && a.prazo < hojeIso); }
 function acoesConcluidasDesde(lista, iso) { return (lista || []).filter((a) => a && a.feito && a.feitoEm && a.feitoEm >= iso); }
 
+/* ---------- Numeros da retrospectiva do mes --------------------------------
+   Regra de ouro daqui: sai time, nao sai pessoa. Estas funcoes devolvem soma
+   e media do grupo e nunca uma lista de quem chegou tarde ou de quem faltou.
+   Retrospectiva com nome de atrasado no telao deixa de ser retrospectiva e
+   vira tribunal - e no mes seguinte ninguem mais fala a verdade na reuniao.
+   Quando o mes nao tem marcacao nenhuma, `vazio` volta true pra tela poder
+   dizer "ainda nao ha dados" em vez de exibir uma parede de zeros.
+   `compDe` e `compAtual` ja existem la em cima, na parte do holerite: mes de
+   competencia e o mesmo conceito nos dois lugares, entao nao se duplica. */
+function compAnterior(comp) {
+  const p = String(comp || "").split("-");
+  const ano = parseInt(p[0], 10);
+  const mes = parseInt(p[1], 10);
+  if (!ano || !mes || mes < 1 || mes > 12) return "";
+  return compDe(new Date(ano, mes - 2, 15)); // dia 15 evita virada de fuso
+}
+
+const MESES_EXTENSO = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+function compExtenso(comp) {
+  const p = String(comp || "").split("-");
+  const m = parseInt(p[1], 10);
+  return MESES_EXTENSO[m - 1] ? MESES_EXTENSO[m - 1] + " de " + p[0] : String(comp || "");
+}
+
+function numerosDoMes(usuarios, registros, faltas, acoes, comp) {
+  const mes = String(comp || "").slice(0, 7);
+  const ativos = (usuarios || []).filter((u) => u && u.ativo !== false);
+  const regsMes = (registros || []).filter((r) => r && r.ts && dataISO(new Date(r.ts)).slice(0, 7) === mes);
+  const faltasMes = (faltas || []).filter((f) => f && String(f.data || "").slice(0, 7) === mes);
+  let diasTrab = 0, saldoMin = 0, atrasos = 0, faltasN = 0, trabalhadoMin = 0;
+  ativos.forEach((u) => {
+    const a = analisarAssiduidade(u.id, regsMes, faltasMes);
+    diasTrab += a.diasTrab;
+    saldoMin += a.saldoMin;
+    atrasos += a.atrasos;
+    faltasN += a.faltas;
+    const dias = agruparPorDia(regsMes, u.id);
+    Object.keys(dias).forEach((k) => { trabalhadoMin += minutosDia(dias[k]); });
+  });
+  const noMes = (iso) => String(iso || "").slice(0, 7) === mes;
+  const lista = acoes || [];
+  const criados = lista.filter((a) => a && noMes(a.criadoEm)).length;
+  const feitos = lista.filter((a) => a && a.feito && noMes(a.feitoEm)).length;
+  return {
+    mes,
+    pessoas: ativos.length,
+    diasTrab,
+    trabalhadoMin,
+    saldoMin,
+    atrasos,
+    faltas: faltasN,
+    // Pontualidade do grupo, em percentual de dias de expediente sem atraso.
+    pontualidadePct: diasTrab > 0 ? Math.round(((diasTrab - atrasos) / diasTrab) * 100) : 0,
+    combCriados: criados,
+    combFeitos: feitos,
+    combAbertos: acoesAbertas(lista).length,
+    // Quanto do que foi combinado no mes realmente fechou. E o unico numero
+    // aqui que fala de compromisso, e ainda assim fala do time inteiro.
+    combFechamentoPct: criados > 0 ? Math.round((feitos / criados) * 100) : 0,
+    vazio: diasTrab === 0 && criados === 0 && feitos === 0,
+  };
+}
+
+/* Media do proprio check-in de energia no mes. Fica de fora do painel
+   coletivo de proposito: a nota de animo e de quem escreveu. */
+function energiaMediaMes(userId, comp) {
+  const mes = String(comp || "").slice(0, 7);
+  const l = energiaLer(userId).filter((e) => e && String(e.data || "").slice(0, 7) === mes);
+  if (!l.length) return null;
+  const soma = l.reduce((acc, e) => acc + (parseInt(e.nota, 10) || 0), 0);
+  return { media: Math.round((soma / l.length) * 10) / 10, registros: l.length };
+}
+
 /* ---------- combinados no banco (tabela opcional) ----------
    A primeira versao guardava combinado so no aparelho de quem escreveu, e
    por isso o colega nunca via a tarefa que sobrou pra ele. Com a tabela
@@ -2010,6 +2085,7 @@ function ritVazio() {
     elogios: [], elogiosNoBanco: false,
     motivadores: [], motivaNoBanco: false,
     anjo: null, anjoNoBanco: false,
+    atas: [], atasNoBanco: false,
   };
 }
 function conquistaNova(texto, tipo, autor, autorId) {
@@ -2199,6 +2275,86 @@ async function anjoSortear(token, gestorId, pessoas, inicio, fim) {
   })), true); // return=minimal: nem quem sorteia recebe os pares de volta
   return rodada;
 }
+/* ---------- ata automatica da reuniao (tabela opcional) ----------
+   Combinado sem registro morre na semana seguinte: ninguem lembra quem ficou
+   de fazer o que, e a reuniao vira teatro. A ata amarra cada rodada de
+   roteiro a um dia, um ritual e a lista de combinados que nasceram ali.
+   Ela e montada pelo proprio app, sem ninguem digitar resumo.
+   Participante aqui NAO e controle de presenca: o app so olha quem bateu
+   ponto naquele dia pra saber quem estava trabalhando. Nao existe chamada,
+   nao existe falta de reuniao e nada disso encosta em premio ou avaliacao. */
+function ataNova(ritual, diaIso, participantes, combinados, numeros, autor, autorId) {
+  return {
+    id: "t" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+    data: String(diaIso || "").slice(0, 10),
+    ritualId: String((ritual && ritual.id) || "").slice(0, 30),
+    ritualNome: String((ritual && ritual.nome) || "").slice(0, 80),
+    participantes: (participantes || []).slice(0, 40).map((p) => String(p || "").slice(0, 80)),
+    combinados: (combinados || []).slice(0, 40).map((c) => ({
+      texto: String((c && c.texto) || "").slice(0, 280),
+      dono: String((c && c.dono) || "").slice(0, 80),
+      prazo: String((c && c.prazo) || "").slice(0, 10),
+    })),
+    numeros: numeros || null,
+    autor: String(autor || "").trim().slice(0, 80),
+    autorId: autorId || "",
+    criadoEm: new Date().toISOString(),
+  };
+}
+function atasLer(userId) {
+  const l = ritLer("atas_" + (userId || "anon"), []);
+  return Array.isArray(l) ? l : [];
+}
+function atasGravar(userId, lista) {
+  return ritGravar("atas_" + (userId || "anon"), (lista || []).slice(0, 60));
+}
+/* Quem estava trabalhando no dia, pela marcacao de ponto que ja existe.
+   E uma inferencia, nao uma lista de chamada - por isso a tela diz isso. */
+function participantesDoDia(usuarios, registros, diaIso) {
+  const ativos = (usuarios || []).filter((u) => u && u.ativo !== false);
+  const bateram = {};
+  (registros || []).forEach((r) => {
+    if (r && r.ts && dataISO(new Date(r.ts)) === diaIso) bateram[r.userId] = true;
+  });
+  return ativos.filter((u) => bateram[u.id]).map((u) => u.nome);
+}
+/* Os combinados que nasceram naquela reuniao: mesmo dia e mesma origem. */
+function combinadosDaReuniao(acoes, ritualNome, diaIso) {
+  return (acoes || []).filter((a) => a && a.origem === ritualNome
+    && String(a.criadoEm || "").slice(0, 10) === diaIso);
+}
+function mapAta(r) {
+  return {
+    id: r.id,
+    data: r.data || "",
+    ritualId: r.ritual_id || "",
+    ritualNome: r.ritual_nome || "",
+    participantes: Array.isArray(r.participantes) ? r.participantes : [],
+    combinados: Array.isArray(r.combinados) ? r.combinados : [],
+    numeros: r.numeros || null,
+    autor: r.autor_nome || "",
+    autorId: r.autor_id || "",
+    criadoEm: r.criado_em || "",
+  };
+}
+async function atasBaixar(token) {
+  const linhas = await sbSelect(token, "atas", "select=*&order=data.desc&limit=60");
+  return (linhas || []).map(mapAta);
+}
+async function ataInserir(token, autorId, autorNome, ata) {
+  const linhas = await sbInsert(token, "atas", [{
+    data: ata.data,
+    ritual_id: ata.ritualId,
+    ritual_nome: ata.ritualNome,
+    participantes: ata.participantes,
+    combinados: ata.combinados,
+    numeros: ata.numeros,
+    autor_id: autorId,
+    autor_nome: autorNome || null,
+  }]);
+  return mapAta((linhas && linhas[0]) || {});
+}
+
 /* Videochamada: o app não hospeda vídeo. O gestor cola o link da sala
    (Meet, Jitsi, Zoom) e o app apenas abre em aba nova, com o mesmo link
    nos dois avisos. Só aceita https para não virar porta de entrada. */
@@ -3002,6 +3158,16 @@ function AppInterno() {
           mudarRit({ anjo: anjoLer(perfil.id), anjoNoBanco: false });
         }
       })();
+      // Atas das reunioes: tabela opcional (atas). Sem ela a ata do dia fica
+      // no aparelho de quem encerrou a reuniao, e a tela avisa isso.
+      (async () => {
+        try {
+          mudarRit({ atas: await atasBaixar(token), atasNoBanco: true });
+        } catch (e) {
+          console.warn("[atas]", e.message);
+          mudarRit({ atas: atasLer(perfil.id), atasNoBanco: false });
+        }
+      })();
       // Recrutamento e documentos: tabelas opcionais (candidatos, documentos_rh).
       // Sem elas o painel mostra o aviso com o SQL, e o resto do app nao sente.
       (async () => {
@@ -3561,6 +3727,24 @@ function AppInterno() {
     const protegido = rodada ? await anjoProtegidoDaRodada(sessao.token, rodada.id) : "";
     mudarRit({ anjo: rodada ? { inicio: rodada.inicio, fim: rodada.fim, protegido } : null });
     return "Rodada aberta. Cada pessoa enxerga só quem ela cuida.";
+  };
+  /* A ata sai pronta do proprio app: ele ja sabe o ritual, o dia, quem bateu
+     ponto e quais combinados nasceram naquela reuniao. Ninguem digita resumo,
+     porque resumo digitado a mao e a primeira coisa que o time abandona. */
+  const gerarAta = async (ritual, diaIso) => {
+    const participantes = participantesDoDia(usuarios, registros, diaIso);
+    const combinados = combinadosDaReuniao(acoes, ritual.nome, diaIso);
+    const numeros = ritual.id === "mensal"
+      ? numerosDoMes(usuarios, registros, faltas, acoes, compAnterior(compDe(new Date())))
+      : null;
+    const nova = ataNova(ritual, diaIso, participantes, combinados, numeros, user.nome, user.id);
+    if (demo || !rit.atasNoBanco) {
+      if (!demo) atasGravar(user.id, [nova].concat(rit.atas || []));
+      mudarRit({ atas: [nova].concat(rit.atas || []) });
+      return;
+    }
+    const gravada = await ataInserir(sessao.token, user.id, user.nome, nova);
+    mudarRit({ atas: [gravada].concat((rit.atas || []).filter((a) => a.id !== gravada.id)) });
   };
   /* ---------- banco de horas → folga ---------- */
   const solicitarFolga = async (horas, dataFolga) => {
@@ -4213,7 +4397,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
-          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -5147,7 +5331,7 @@ function mmss(seg) {
 /* Roteiro cronometrado: o app conduz a reunião bloco a bloco para o horário
    não escorregar. Avisa quando faltam 2 minutos e nunca pula sozinho — quem
    decide avançar é quem está conduzindo. */
-function Roteiro({ ritual, children }) {
+function Roteiro({ ritual, rodape, children }) {
   const [idx, setIdx] = useState(0);
   const [rodando, setRodando] = useState(false);
   const [restam, setRestam] = useState(ritual.blocos[0].min * 60);
@@ -5195,6 +5379,7 @@ function Roteiro({ ritual, children }) {
         <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => irPara(idx + 1)} disabled={idx === ritual.blocos.length - 1}>Próximo bloco</button>
       </div>
       {children ? <div style={{ marginTop: 16, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>{children(bloco)}</div> : null}
+      {rodape ? <div style={{ marginTop: 14, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>{rodape(bloco, idx === ritual.blocos.length - 1)}</div> : null}
     </div>
   );
 }
@@ -5356,7 +5541,8 @@ function ListaCombinados({ acoes, onAlternar, hojeIso, compacta }) {
    Nesta primeira versão tudo mora no aparelho — nenhuma tabela nova no
    Supabase, nenhum dado saindo do navegador de quem escreveu. */
 function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala,
-  rit = { conquistas: [], elogios: [], motivadores: [], anjo: null }, onConquista, onElogio, onMotivadores, onSortearAnjo }) {
+  registros = [], faltas = [], onGerarAta,
+  rit = { conquistas: [], elogios: [], motivadores: [], anjo: null, atas: [] }, onConquista, onElogio, onMotivadores, onSortearAnjo }) {
   const agora = new Date();
   const hojeIso = dataISO(agora);
   const [aba, setAba] = useState("roteiro");
@@ -5382,7 +5568,7 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
   const ehGestor = user.papel === "gestor";
   const prox = proximasReunioes(agora, 21);
   const hist = energiaLer(user.id).slice(-12);
-  const abas = [["roteiro", "🗓️ Roteiro"], ["combinados", "✅ Combinados"], ["mural", "🏆 Mural"],
+  const abas = [["roteiro", "🗓️ Roteiro"], ["combinados", "✅ Combinados"], ["atas", "📄 Atas"], ["mural", "🏆 Mural"],
     ["motiva", "💡 O que me motiva"], ["anjo", "😇 Anjo"], ["energia", "🔋 Meu check-in"]];
   return (
     <div>
@@ -5423,11 +5609,17 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
             ))}
           </div>
           <p style={{ fontSize: 12.5, color: C.cinza, margin: "0 0 12px", lineHeight: 1.6 }}>{ritual.quando + " · início " + ritual.inicio + " · " + ritual.duracaoMin + " min · " + ritual.resumo}</p>
-          <Roteiro ritual={ritual}>
+          <Roteiro ritual={ritual} rodape={(bloco, ultimo) => (
+            <EncerrarReuniao user={user} usuarios={usuarios} registros={registros} acoes={acoes}
+              ritual={ritual} hojeIso={hojeIso} atas={rit.atas || []} atasNoBanco={!!rit.atasNoBanco}
+              ultimo={ultimo} onGerarAta={onGerarAta} />
+          )}>
             {(bloco) => (
               bloco.tipo === "energia" ? <FormEnergia user={user} hojeIso={hojeIso} />
                 : bloco.tipo === "metas" ? <FormPerguntas user={user} hojeIso={hojeIso} acoes={acoes} />
-                  : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
+                  : bloco.tipo === "numeros" ? <PainelNumerosMes user={user} usuarios={usuarios} registros={registros} faltas={faltas} acoes={acoes} />
+                    : bloco.tipo === "elogios" ? <FormElogioReuniao user={user} usuarios={usuarios} origem={ritual.nome} onElogio={onElogio} />
+                      : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} onCriar={onCriar} />
             )}
           </Roteiro>
         </div>
@@ -5460,6 +5652,16 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
           <div style={{ marginTop: 18, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>
             <FormEnergia user={user} hojeIso={hojeIso} />
           </div>
+        </div>
+      )}
+      {aba === "atas" && (
+        <div style={{ ...S.card, padding: 16 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.branco, marginBottom: 6 }}>Atas das reuniões</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "0 0 14px", lineHeight: 1.6 }}>
+            {rit.atasNoBanco ? "O app monta a ata sozinho quando a reunião é encerrada no roteiro. Todo o time enxerga." : "Guardado só neste aparelho: a tabela atas ainda não existe no banco."}
+          </p>
+          {(rit.atas || []).length ? (rit.atas || []).map((a) => <CartaoAta key={a.id} ata={a} />)
+            : <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>Nenhuma ata ainda. Ela nasce quando alguém encerra a reunião no último bloco do roteiro.</p>}
         </div>
       )}
       {aba === "mural" && (
@@ -5716,6 +5918,195 @@ function AbaAnjo({ user, usuarios, anjo, anjoNoBanco, onSortear }) {
     </div>
   );
 }
+/* Cartao seco de numero: rotulo em cima, numero grande, uma linha de
+   contexto embaixo. Numero sem contexto vira briga na reuniao. */
+function CartaoNumero({ rotulo, valor, nota, cor }) {
+  return (
+    <div className="pr-relevo" style={{ ...S.card, padding: 14, flex: "1 1 148px", minWidth: 148 }}>
+      <div style={{ fontSize: 11, color: C.cinza, letterSpacing: 0.7, textTransform: "uppercase" }}>{rotulo}</div>
+      <div style={{ ...S.display, fontSize: 26, color: cor || C.branco, marginTop: 6 }}>{valor}</div>
+      {nota ? <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 5, lineHeight: 1.5 }}>{nota}</div> : null}
+    </div>
+  );
+}
+
+/* Painel da "analise fria dos numeros". Existe pra retrospectiva nao comecar
+   com a tela em branco e virar conversa de sensacao. Tudo aqui e numero do
+   time: nao tem nome de quem atrasou, nao tem quem faltou e nao tem ranking.
+   Comparar pessoa a pessoa na frente do grupo nao melhora numero nenhum -
+   so ensina o time a esconder problema na reuniao seguinte. */
+function PainelNumerosMes({ user, usuarios, registros, faltas, acoes }) {
+  const [comp, setComp] = useState(() => compAnterior(compDe(new Date())));
+  const n = useMemo(() => numerosDoMes(usuarios, registros, faltas, acoes, comp),
+    [usuarios, registros, faltas, acoes, comp]);
+  const minha = energiaMediaMes(user.id, comp);
+  const opcoes = [];
+  let passo = compDe(new Date());
+  for (let i = 0; i < 12; i++) { opcoes.push(passo); passo = compAnterior(passo); }
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 12.5, color: C.cinza }}>Mês analisado</span>
+        <select value={comp} onChange={(e) => setComp(e.target.value)} style={{ ...S.input, width: "auto", padding: "8px 12px", fontSize: 13 }}>
+          {opcoes.map((c) => <option key={c} value={c}>{compExtenso(c)}</option>)}
+        </select>
+      </div>
+      {n.vazio ? (
+        <p style={{ fontSize: 13, color: C.cinza, lineHeight: 1.6, margin: 0 }}>
+          Ainda não há marcação de ponto nem combinado registrado em {compExtenso(comp)}. Melhor abrir a reunião assumindo isso do que discutir número que não existe.
+        </p>
+      ) : (
+        <div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <CartaoNumero rotulo="Pessoas ativas" valor={n.pessoas} nota={n.diasTrab + " dias de expediente somados"} />
+            <CartaoNumero rotulo="Horas trabalhadas" valor={hmm(n.trabalhadoMin)} nota="soma do time no mês" />
+            <CartaoNumero rotulo="Saldo do banco" valor={hmm(n.saldoMin)} cor={n.saldoMin < 0 ? C.vermelho : C.verde}
+              nota={n.saldoMin < 0 ? "o time fechou o mês devendo horas" : "horas a mais que o time entregou"} />
+            <CartaoNumero rotulo="Pontualidade" valor={n.pontualidadePct + "%"} cor={n.pontualidadePct >= 90 ? C.verde : n.pontualidadePct >= 75 ? C.amarelo : C.vermelho}
+              nota="dias de expediente sem atraso, somando o time" />
+            <CartaoNumero rotulo="Combinados fechados" valor={n.combFeitos + " de " + n.combCriados} cor={n.combFechamentoPct >= 70 ? C.verde : C.amarelo}
+              nota={n.combCriados > 0 ? n.combFechamentoPct + "% do que foi combinado no mês" : "nada foi combinado neste mês"} />
+            <CartaoNumero rotulo="Ainda em aberto" valor={n.combAbertos} nota="combinados sem conclusão até hoje" />
+          </div>
+          <p style={{ fontSize: 12, color: C.cinza, marginTop: 14, lineHeight: 1.65 }}>
+            Estes números são do time inteiro, de propósito. O app não mostra aqui quem atrasou nem quem faltou: retrospectiva com nome no telão vira tribunal, e no mês seguinte ninguém fala a verdade. Caso individual é conversa reservada, não pauta de grupo.
+          </p>
+          {minha ? (
+            <p style={{ fontSize: 12, color: C.cinza, marginTop: 8, lineHeight: 1.65 }}>
+              🔋 Sua média de energia em {compExtenso(comp)} foi <b style={{ color: corEnergia(minha.media) }}>{String(minha.media).replace(".", ",")}</b> em {minha.registros} check-in{minha.registros > 1 ? "s" : ""}. Só você vê esta linha.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Elogio dentro da propria retrospectiva: a metade do tempo que o time
+   combinou dedicar a reconhecimento. Cai no mesmo circulo do mural. */
+function FormElogioReuniao({ user, usuarios, origem, onElogio }) {
+  const [texto, setTexto] = useState("");
+  const [para, setPara] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ok, setOk] = useState("");
+  const colegas = (usuarios || []).filter((u) => u && u.id !== user.id && u.ativo !== false);
+  useEffect(() => { if (!para && colegas.length) setPara(colegas[0].id); }, [usuarios]);
+  async function enviar() {
+    if (!texto.trim() || !para || salvando) return;
+    setSalvando(true);
+    setErro("");
+    setOk("");
+    try {
+      const alvo = colegas.filter((u) => u.id === para)[0];
+      await onElogio(texto, alvo, origem);
+      setTexto("");
+      setOk("Elogio registrado. Ele aparece no mural do time.");
+    } catch (e) { setErro(mensagemAmigavel(e, "ao registrar o elogio")); }
+    finally { setSalvando(false); }
+  }
+  if (!colegas.length) return <p style={{ fontSize: 12.5, color: C.cinza, margin: 0 }}>Ainda não há colegas ativos pra elogiar.</p>;
+  return (
+    <div>
+      <div style={{ ...S.display, fontSize: 14, color: C.branco, marginBottom: 8 }}>Reconhecer um colega</div>
+      <select value={para} onChange={(e) => setPara(e.target.value)} style={{ ...S.input, marginBottom: 8 }}>
+        {colegas.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+      </select>
+      <textarea value={texto} onChange={(e) => setTexto(e.target.value.slice(0, 300))} rows={3}
+        placeholder="Por algo concreto: resolveu o problema X e salvou o prazo"
+        style={{ ...S.input, resize: "vertical", marginBottom: 8 }} />
+      <button style={{ ...S.btn, padding: "9px 18px", fontSize: 13 }} onClick={enviar} disabled={salvando || !texto.trim()}>
+        {salvando ? "Enviando…" : "Enviar elogio"}
+      </button>
+      {ok ? <p style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>{ok}</p> : null}
+      {erro ? <p style={{ fontSize: 12.5, color: C.vermelho, marginTop: 8 }}>{erro}</p> : null}
+      <p style={{ fontSize: 11.5, color: C.cinza, marginTop: 10, lineHeight: 1.6 }}>
+        Elogio não vale ponto no prêmio nem na gamificação. Reconhecimento que vira nota deixa de ser reconhecimento.
+      </p>
+    </div>
+  );
+}
+
+/* Ata: o app monta sozinho ao encerrar o roteiro. Ninguem digita resumo. */
+function CartaoAta({ ata }) {
+  return (
+    <div style={{ ...S.card, padding: 14, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ ...S.display, fontSize: 14, color: C.branco }}>{ata.ritualNome}</div>
+        <div style={{ fontSize: 12, color: C.cinza }}>{fmtData(ata.data)}</div>
+      </div>
+      {ata.participantes.length ? (
+        <div style={{ fontSize: 12, color: C.cinza, marginTop: 6, lineHeight: 1.6 }}>
+          Trabalhando no dia: {ata.participantes.join(", ")}
+        </div>
+      ) : null}
+      {ata.combinados.length ? (
+        <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 12.5, color: C.branco, lineHeight: 1.7 }}>
+          {ata.combinados.map((c, i) => (
+            <li key={i}>{c.texto}{c.dono ? " — " + c.dono : ""}{c.prazo ? " · até " + fmtData(c.prazo) : ""}</li>
+          ))}
+        </ul>
+      ) : (
+        <div style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Nenhum combinado saiu desta reunião.</div>
+      )}
+    </div>
+  );
+}
+
+/* Rodape do roteiro: fecha a reuniao e grava a ata sozinho. So aparece no
+   ultimo bloco, porque encerrar no meio e a forma mais comum de perder o
+   combinado que ainda ia ser escrito. */
+function EncerrarReuniao({ user, usuarios, registros, acoes, ritual, hojeIso, atas, atasNoBanco, ultimo, onGerarAta }) {
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ok, setOk] = useState("");
+  const jaTem = (atas || []).filter((a) => a && a.data === hojeIso && a.ritualId === ritual.id)[0] || null;
+  const daReuniao = combinadosDaReuniao(acoes, ritual.nome, hojeIso);
+  const presentes = participantesDoDia(usuarios, registros, hojeIso);
+  async function gerar() {
+    if (salvando) return;
+    setSalvando(true);
+    setErro("");
+    setOk("");
+    try {
+      await onGerarAta(ritual, hojeIso);
+      setOk("Ata gerada. Ela fica guardada na aba Atas.");
+    } catch (e) { setErro(mensagemAmigavel(e, "ao gerar a ata")); }
+    finally { setSalvando(false); }
+  }
+  if (!ultimo) {
+    return (
+      <p style={{ fontSize: 11.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>
+        No último bloco o app fecha a reunião e monta a ata sozinho, com os combinados que saíram daqui.
+      </p>
+    );
+  }
+  return (
+    <div>
+      <div style={{ ...S.display, fontSize: 14, color: C.branco, marginBottom: 8 }}>Encerrar e gerar a ata</div>
+      <p style={{ fontSize: 12.5, color: C.cinza, margin: "0 0 10px", lineHeight: 1.65 }}>
+        {atasNoBanco ? "A ata fica visível pro time inteiro." : "Guardado só neste aparelho: a tabela atas ainda não existe no banco."}
+      </p>
+      <div style={{ fontSize: 12.5, color: C.cinza, lineHeight: 1.7, marginBottom: 10 }}>
+        <div>📌 {daReuniao.length ? daReuniao.length + " combinado" + (daReuniao.length > 1 ? "s" : "") + " saiu desta reunião" : "Nenhum combinado saiu desta reunião ainda"}</div>
+        <div>👥 {presentes.length ? presentes.join(", ") : "ninguém bateu ponto hoje"}</div>
+      </div>
+      {jaTem ? (
+        <p style={{ fontSize: 12.5, color: C.verde, margin: 0 }}>✅ A ata de hoje já foi gerada.</p>
+      ) : (
+        <button style={{ ...S.btn, padding: "9px 18px", fontSize: 13 }} onClick={gerar} disabled={salvando}>
+          {salvando ? "Gerando…" : "Encerrar e gerar ata"}
+        </button>
+      )}
+      {ok ? <p style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>{ok}</p> : null}
+      {erro ? <p style={{ fontSize: 12.5, color: C.vermelho, marginTop: 8 }}>{erro}</p> : null}
+      <p style={{ fontSize: 11.5, color: C.cinza, marginTop: 10, lineHeight: 1.6 }}>
+        A lista de quem estava trabalhando vem da marcação de ponto do dia. Não é chamada de reunião: aqui não existe falta, e nada disso entra em prêmio, avaliação ou desligamento.
+      </p>
+    </div>
+  );
+}
+
 /* Combinados abertos aparecem no Bater ponto: o que foi acordado na reunião
    encontra a pessoa no lugar em que ela entra todo dia. */
 function CartaoCombinados({ acoes, onAlternar, onAbrirRoteiro }) {
@@ -7179,6 +7570,7 @@ const TABELAS_OPCIONAIS = [
   { nome: "motivadores", para: "o que motiva cada colaborador" },
   { nome: "anjo_rodada", para: "rodadas da dinamica do anjo" },
   { nome: "anjo_par", para: "pares sorteados do anjo" },
+  { nome: "atas", para: "atas automaticas das reunioes" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -7452,7 +7844,45 @@ create policy "anjo par: so o proprio anjo le" on public.anjo_par
 drop policy if exists "anjo par: gestor sorteia" on public.anjo_par;
 create policy "anjo par: gestor sorteia" on public.anjo_par
   for insert to authenticated with check (exists (
-    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
+    select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
+
+-- Ata automatica da reuniao. O app monta sozinho ao encerrar o roteiro:
+-- dia, ritual, quem estava trabalhando e os combinados que nasceram ali.
+-- Nao e controle de presenca e nao existe "falta de reuniao" em lugar nenhum.
+create table if not exists public.atas (
+  id uuid primary key default gen_random_uuid(),
+  data date not null,
+  ritual_id text not null,
+  ritual_nome text,
+  participantes jsonb not null default '[]'::jsonb,
+  combinados jsonb not null default '[]'::jsonb,
+  numeros jsonb,
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  criado_em timestamptz not null default now(),
+  unique (data, ritual_id)
+);
+create index if not exists atas_data_idx on public.atas (data desc);
+alter table public.atas enable row level security;
+
+-- Ata e memoria do time inteiro: todos leem.
+drop policy if exists "atas: o time le" on public.atas;
+create policy "atas: o time le" on public.atas
+  for select to authenticated using (true);
+
+-- Quem esta na reuniao encerra e gera a ata.
+drop policy if exists "atas: o time registra" on public.atas;
+create policy "atas: o time registra" on public.atas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+-- Corrigir a ata do dia e de quem gerou ou do gestor.
+drop policy if exists "atas: autor ou gestor corrige" on public.atas;
+create policy "atas: autor ou gestor corrige" on public.atas
+  for update to authenticated
+  using (autor_id = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (autor_id = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));`;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
    prova que a tabela está lá, então não precisa de sessão pra sondar. */
