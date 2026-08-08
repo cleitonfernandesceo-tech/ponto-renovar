@@ -196,10 +196,49 @@ tbody tr:hover{background:rgba(255,122,26,.06)}
 }
 #root button.pr-copo:not(:disabled):active{transform:translateY(2px) scale(.93)}
 
+/* =====================================================================
+   Texto legal recolhido (<details> nativo).
+   Aviso da CLT, LGPD e natureza do premio nao podem sumir do app: eles
+   protegem a empresa e informam o colaborador. Mas tambem nao precisam
+   ocupar meia tela toda vez que alguem abre o app so pra bater ponto.
+   Ficam a um toque de distancia, com foco de teclado e leitor de tela
+   funcionando de graca porque o elemento e nativo. Na impressao voltam
+   abertos, senao o espelho em papel sairia sem a base legal.
+   ===================================================================== */
+.pr-detalhes{
+  margin-top:12px;border:1px solid rgba(255,255,255,.07);border-radius:14px;
+  background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(0,0,0,.12));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
+  overflow:hidden;
+}
+.pr-detalhes>summary{
+  list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none;
+  padding:11px 14px;display:flex;align-items:center;gap:10px;
+  font-size:11.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#7B8FA9;
+  transition:color .18s ease,background-color .18s ease;
+}
+.pr-detalhes>summary::-webkit-details-marker{display:none}
+.pr-detalhes>summary::before{
+  content:"";width:7px;height:7px;flex:0 0 7px;margin-left:2px;
+  border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(-45deg);transition:transform .2s ease;
+}
+.pr-detalhes[open]>summary::before{transform:rotate(45deg)}
+.pr-detalhes>summary:hover{color:#F5F7FA;background:rgba(255,255,255,.04)}
+.pr-detalhes[open]>summary{color:#F5F7FA;border-bottom:1px solid rgba(255,255,255,.06)}
+.pr-detalhes-corpo{padding:12px 14px 14px;font-size:12.5px;line-height:1.65;color:#A9BCD6}
+.pr-detalhes-corpo p{margin:0 0 8px}
+.pr-detalhes-corpo p:last-child{margin-bottom:0}
+.pr-detalhes-corpo ul{margin:0;padding-left:18px}
+.pr-detalhes-corpo li+li{margin-top:6px}
+
 /* --- impressao de relatorio: papel branco e sem botoes --- */
 @media print{
   body{background:#fff;color:#111}
   button{display:none !important}
+  .pr-detalhes>.pr-detalhes-corpo{display:block !important}
+  .pr-detalhes>summary{color:#111}
+  .pr-detalhes-corpo{color:#333}
 }
 </style>
 <script>
@@ -7223,6 +7262,21 @@ function CartaoMomento({
 
 /* Hidratacao e pausa. Contador do dia guardado SO no aparelho; o aviso do
    celular sai do proprio app e nada disso chega ao gestor nem ao servidor. */
+/* ================= Detalhe recolhido =================
+   Aviso legal e explicacao longa nao podem sumir: protegem a empresa e
+   informam quem quiser ler. Mas nao precisam gritar em toda abertura de
+   tela. Ficam atras de um toque, no <details> nativo do HTML - acessivel,
+   sem estado, funciona com teclado e ate com JS quebrado. */
+function Detalhes({
+  titulo,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("details", {
+    className: "pr-detalhes"
+  }, /*#__PURE__*/React.createElement("summary", null, titulo), /*#__PURE__*/React.createElement("div", {
+    className: "pr-detalhes-corpo"
+  }, children));
+}
 function CartaoBemEstar({
   userId
 }) {
@@ -7249,7 +7303,7 @@ function CartaoBemEstar({
   const esperado = hr <= 8 ? 0 : Math.min(meta, Math.round((hr - 8) / 10 * meta));
   const atrasado = copos < esperado;
   const pct = meta > 0 ? Math.min(100, copos / meta * 100) : 0;
-  const dica = fraseDoDia(DICAS_PAUSA, String(userId) + "|dica", new Date());
+  /* Nada de texto embaixo da barra: o cartao inteiro se explica pelos copos. */
   return /*#__PURE__*/React.createElement("div", {
     className: "pr-relevo",
     style: {
@@ -7259,9 +7313,9 @@ function CartaoBemEstar({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      alignItems: "baseline",
+      alignItems: "center",
       justifyContent: "space-between",
-      gap: 8,
+      gap: 10,
       flexWrap: "wrap"
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -7272,15 +7326,42 @@ function CartaoBemEstar({
     }
   }, "\uD83D\uDCA7 Hidrata\xE7\xE3o de hoje"), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    },
+    title: "Meta de copos por dia"
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "1px 9px",
+      fontSize: 14,
+      lineHeight: 1.5
+    },
+    "aria-label": "Diminuir a meta de copos",
+    onClick: () => setMeta(aguaGravarMeta(userId, meta - 1))
+  }, "\u2212"), /*#__PURE__*/React.createElement("span", {
+    style: {
       fontSize: 11,
-      color: C.cinza
+      color: C.cinza,
+      minWidth: 62,
+      textAlign: "center"
     }
-  }, copos * AGUA_COPO_ML, " ml de ", meta * AGUA_COPO_ML, " ml")), /*#__PURE__*/React.createElement("div", {
+  }, "meta ", meta, " copos"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "1px 9px",
+      fontSize: 14,
+      lineHeight: 1.5
+    },
+    "aria-label": "Aumentar a meta de copos",
+    onClick: () => setMeta(aguaGravarMeta(userId, meta + 1))
+  }, "+"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
-      gap: 6,
+      gap: 7,
       flexWrap: "wrap",
-      marginTop: 10
+      marginTop: 14
     }
   }, Array.from({
     length: meta
@@ -7301,10 +7382,17 @@ function CartaoBemEstar({
     }
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
+      textAlign: "right",
+      fontSize: 11,
+      color: atrasado ? C.agua : C.cinza,
+      marginTop: 12
+    }
+  }, copos * AGUA_COPO_ML, " / ", meta * AGUA_COPO_ML, " ml"), /*#__PURE__*/React.createElement("div", {
+    style: {
       background: "rgba(255,255,255,0.06)",
       borderRadius: 999,
       height: 7,
-      marginTop: 12,
+      marginTop: 6,
       overflow: "hidden",
       boxShadow: "inset 0 1px 3px rgba(0,0,0,0.55)"
     }
@@ -7316,66 +7404,7 @@ function CartaoBemEstar({
       background: "linear-gradient(90deg, #0EA5E9, " + C.agua + ")",
       boxShadow: "0 0 14px rgba(56,189,248,0.65)"
     }
-  })), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 12.5,
-      color: atrasado ? C.agua : C.cinza,
-      margin: "10px 0 0",
-      lineHeight: 1.55
-    }
-  }, copos >= meta ? "Meta do dia fechada. \uD83D\uDC4F" : atrasado ? "Faz um tempo desde o \u00faltimo copo \u2014 bora?" : "No ritmo. Pr\u00f3ximo copo em at\u00e9 " + AGUA_INTERVALO_MIN + " min."), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11.5,
-      color: C.cinza,
-      margin: "8px 0 0",
-      lineHeight: 1.55
-    }
-  }, "\uD83E\uDDD8 ", dica), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      marginTop: 10,
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: C.cinza
-    }
-  }, "Meta"), /*#__PURE__*/React.createElement("button", {
-    style: {
-      ...S.btnGhost,
-      padding: "4px 11px",
-      fontSize: 13
-    },
-    "aria-label": "Diminuir a meta de copos",
-    onClick: () => setMeta(aguaGravarMeta(userId, meta - 1))
-  }, "\u2212"), /*#__PURE__*/React.createElement("b", {
-    style: {
-      fontSize: 13
-    }
-  }, meta), /*#__PURE__*/React.createElement("button", {
-    style: {
-      ...S.btnGhost,
-      padding: "4px 11px",
-      fontSize: 13
-    },
-    "aria-label": "Aumentar a meta de copos",
-    onClick: () => setMeta(aguaGravarMeta(userId, meta + 1))
-  }, "+"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: C.cinza
-    }
-  }, "copos de ", AGUA_COPO_ML, " ml")), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 10.5,
-      color: C.cinza,
-      margin: "8px 0 0",
-      lineHeight: 1.5
-    }
-  }, "Fica s\xF3 neste aparelho: o gestor n\xE3o v\xEA nada disso e nada vai pro servidor. N\xE3o \xE9 orienta\xE7\xE3o m\xE9dica \u2014 quem tem restri\xE7\xE3o de l\xEDquidos segue o pr\xF3prio m\xE9dico."));
+  })));
 }
 
 /* Primeiro contato de quem foi contratado: a tela do convite. */
@@ -7633,13 +7662,13 @@ function TelaPonto({
       fontSize: 12,
       color: C.cinza
     }
-  }, "\uD83D\uDD14 Para receber aviso do celular, adicione o app \xE0 tela de in\xEDcio.")), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDD14 Para receber aviso do celular, adicione o app \xE0 tela de in\xEDcio.")), (notifStatus === "denied" || notifStatus === "unsupported") && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
       margin: "8px 0 0"
     }
-  }, "\u23F0 Lembretes de entrada e almo\xE7o: ", legendaLembretes(notifStatus, appInstalado())), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
+  }, "\u23F0 ", legendaLembretes(notifStatus, appInstalado())), bloqueioGeo && /*#__PURE__*/React.createElement("div", {
     role: "alert",
     style: {
       ...S.card,
@@ -8111,11 +8140,13 @@ function TelaEspelho({
       style: {
         margin: "0 0 6px"
       }
-    }, "Legenda: ", marcas.map(m => m.s + " = " + m.d).join(" · ")), /*#__PURE__*/React.createElement("p", {
+    }, "Legenda: ", marcas.map(m => m.s + " = " + m.d).join(" · ")), /*#__PURE__*/React.createElement(Detalhes, {
+      titulo: "Regras da jornada"
+    }, /*#__PURE__*/React.createElement("p", {
       style: {
         margin: 0
       }
-    }, "Expediente: seg-sex 8:00 \xE0s 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) \xB7 s\xE1bado 8:00 \xE0s 13:00 \xB7 domingos e feriados nacionais fechado. Com um \xFAnico par entrada/sa\xEDda no dia, a 1h de intervalo \xE9 descontada da presen\xE7a. Horas al\xE9m das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 \xA75\xBA) ou s\xE3o pagas como extra com adicional m\xEDnimo de 50%."));
+    }, "Expediente: seg-sex 8:00 \xE0s 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) \xB7 s\xE1bado 8:00 \xE0s 13:00 \xB7 domingos e feriados nacionais fechado. Com um \xFAnico par entrada/sa\xEDda no dia, a 1h de intervalo \xE9 descontada da presen\xE7a. Horas al\xE9m das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 \xA75\xBA) ou s\xE3o pagas como extra com adicional m\xEDnimo de 50%.")));
   })()), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
@@ -8277,14 +8308,13 @@ function ConfereEspelho({
       color: msg.ok ? C.verde : C.vermelho,
       margin: "8px 0 0"
     }
-  }, msg.txt), /*#__PURE__*/React.createElement("p", {
+  }, msg.txt), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "O que significa este aceite"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 11,
-      color: C.cinza,
-      margin: "10px 0 0",
-      lineHeight: 1.6
+      margin: 0
     }
-  }, "O aceite registra apenas a sua ci\xEAncia das marca\xE7\xF5es do m\xEAs: ele n\xE3o convalida erro nem impede corre\xE7\xE3o posterior, administrativa ou judicial (CLT art. 9\xBA). O espelho em PDF sai com a data e o resultado desta confer\xEAncia."));
+  }, "O aceite registra apenas a sua ci\xEAncia das marca\xE7\xF5es do m\xEAs: ele n\xE3o convalida erro nem impede corre\xE7\xE3o posterior, administrativa ou judicial (CLT art. 9\xBA). O espelho em PDF sai com a data e o resultado desta confer\xEAncia.")));
 }
 function TelaJustificar({
   user,
@@ -8603,11 +8633,11 @@ function TelaFerias({
       fontSize: 14,
       color: msg.ok ? C.verde : C.vermelho
     }
-  }, msg.msg), /*#__PURE__*/React.createElement("p", {
+  }, msg.msg), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Regras de f\xE9rias"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 12,
-      color: C.cinza,
-      marginTop: 10
+      margin: 0
     }
   }, "Regras: 12 meses de casa pra liberar (CLT art. 130) + anteced\xEAncia m\xEDnima de ", /*#__PURE__*/React.createElement("b", {
     style: {
@@ -8617,7 +8647,7 @@ function TelaFerias({
     style: {
       color: C.branco
     }
-  }, "Fracionamento validado pelo sistema"), " (CLT art. 134 \xA71\xBA): no m\xE1ximo 3 per\xEDodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando at\xE9 30 dias.")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "Fracionamento validado pelo sistema"), " (CLT art. 134 \xA71\xBA): no m\xE1ximo 3 per\xEDodos por ciclo aquisitivo, um deles com 14+ dias corridos e os demais com 5+ dias cada, somando at\xE9 30 dias."))), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -8752,15 +8782,7 @@ function TelaGame({
         color: C.amarelo
       }
     }, r.pontos, " pts"));
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10,
-      color: C.cinza,
-      marginTop: 10
-    }
-  }, "Todos os colaboradores veem este ranking. \xC9 reconhecimento interno e motivacional \u2014 n\xE3o afeta sal\xE1rio, Pr\xEAmio Performance ou avalia\xE7\xE3o formal.")), /*#__PURE__*/React.createElement("span", {
-    style: S.tag(C.grafite, C.cinza)
-  }, "\uD83C\uDF96 Reconhecimento interno \xB7 sem impacto salarial")), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 16,
@@ -9051,23 +9073,21 @@ function TelaGame({
       background: b.pct >= 0.7 ? C.amarelo : "#555",
       height: "100%"
     }
-  }))))))), /*#__PURE__*/React.createElement("div", {
+  }))))))), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Como pontuar"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      ...S.card,
-      marginTop: 14,
-      fontSize: 12,
-      color: C.cinza,
-      lineHeight: 1.7
+      margin: 0
     }
   }, /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.branco
     }
-  }, "Como pontuar:"), " entrada dentro da toler\xE2ncia vale ", GAME.ptsDiaPontual, " pts/dia; a partir do 3\xBA dia pontual seguido cada dia vale +", GAME.ptsBonusStreak, " de b\xF4nus; marcos de sequ\xEAncia pagam extra (5 dias +30 \xB7 10 dias +75 \xB7 20 dias +200); m\xEAs sem falta injustificada vale +", GAME.ptsMesSemFalta, "; e fechar o m\xEAs dentro da meta de assiduidade (mesmos crit\xE9rios do Pr\xEAmio Performance) vale +", GAME.ptsMetaAssiduidade, ". Atraso ou falta injustificada zera a sequ\xEAncia \u2014 mas nunca desconta pontos j\xE1 ganhos. Faltas justificadas, atestados aceitos e aus\xEAncias legais n\xE3o zeram a sequ\xEAncia nem afetam sua pontua\xE7\xE3o.", /*#__PURE__*/React.createElement("div", {
+  }, "Como pontuar:"), " entrada dentro da toler\xE2ncia vale ", GAME.ptsDiaPontual, " pts/dia; a partir do 3\xBA dia pontual seguido cada dia vale +", GAME.ptsBonusStreak, " de b\xF4nus; marcos de sequ\xEAncia pagam extra (5 dias +30 \xB7 10 dias +75 \xB7 20 dias +200); m\xEAs sem falta injustificada vale +", GAME.ptsMesSemFalta, "; e fechar o m\xEAs dentro da meta de assiduidade (mesmos crit\xE9rios do Pr\xEAmio Performance) vale +", GAME.ptsMetaAssiduidade, ". Atraso ou falta injustificada zera a sequ\xEAncia \u2014 mas nunca desconta pontos j\xE1 ganhos. Faltas justificadas, atestados aceitos e aus\xEAncias legais n\xE3o zeram a sequ\xEAncia nem afetam sua pontua\xE7\xE3o.")), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Natureza da gamifica\xE7\xE3o"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      marginTop: 10,
-      paddingTop: 10,
-      borderTop: "1px solid #1E3450"
+      margin: 0
     }
   }, /*#__PURE__*/React.createElement("b", {
     style: {
@@ -9284,40 +9304,28 @@ function TelaPremio({
   }, e.elegivel ? e.bonusPontualidade ? "Zero atrasos até aqui — você está a caminho do bônus de +10% por pontualidade perfeita. 🏆" : "Mantenha os medidores abaixo dos limites até o fechamento do mês." : "Os critérios de elegibilidade do prêmio deste mês não foram atendidos. O prêmio volta a valer normalmente no próximo mês — nada é descontado do seu salário."))), e.medidores.map(m => /*#__PURE__*/React.createElement(MedidorPremio, {
     key: m.id,
     m: m
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.card,
-      marginTop: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.display,
-      fontSize: 15,
-      color: C.amarelo
-    }
-  }, "Regras de elegibilidade \u2014 resumo"), REGRAS_PREMIO.map(r => /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Regras de elegibilidade"
+  }, REGRAS_PREMIO.map((r, i) => /*#__PURE__*/React.createElement("div", {
     key: r.id,
     style: {
-      borderTop: "1px solid #1E3450",
-      padding: "10px 0"
+      borderTop: i === 0 ? "none" : "1px solid #1E3450",
+      padding: i === 0 ? "0 0 9px" : "9px 0"
     }
   }, /*#__PURE__*/React.createElement("b", {
     style: {
-      fontSize: 14
+      fontSize: 13,
+      color: C.branco
     }
   }, r.corte ? "🎯" : "➕", " ", r.titulo), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 13,
-      color: "#C7D2E4",
-      margin: "4px 0 0"
+      margin: "3px 0 0"
     }
-  }, r.desc)))), /*#__PURE__*/React.createElement("div", {
+  }, r.desc)))), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Natureza jur\xEDdica do pr\xEAmio"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      ...S.card,
-      marginTop: 14,
-      fontSize: 12,
-      color: C.cinza,
-      lineHeight: 1.7
+      margin: 0
     }
   }, /*#__PURE__*/React.createElement("b", {
     style: {
@@ -9327,7 +9335,7 @@ function TelaPremio({
     style: {
       color: C.branco
     }
-  }, "n\xE3o \xE9 desconto salarial"), " (art. 462). Crit\xE9rios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e aus\xEAncias legais do art. 473 da CLT n\xE3o afetam a elegibilidade. Regulamento completo dispon\xEDvel com o RH."));
+  }, "n\xE3o \xE9 desconto salarial"), " (art. 462). Crit\xE9rios objetivos, prospectivos e divulgados antecipadamente neste painel. Faltas justificadas, atestados aceitos e aus\xEAncias legais do art. 473 da CLT n\xE3o afetam a elegibilidade. Regulamento completo dispon\xEDvel com o RH.")));
 }
 function TelaFeedback({
   user,
@@ -9594,25 +9602,23 @@ function SecaoDireitoImagem({
       fontSize: 15,
       color: C.amarelo
     }
-  }, "\uD83D\uDCF8 Termo de imagem e c\xE2meras (CFTV)"), TERMO_IMAGEM.map(t => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCF8 Termo de imagem e c\xE2meras (CFTV)"), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Ler o termo na \xEDntegra"
+  }, TERMO_IMAGEM.map((t, i) => /*#__PURE__*/React.createElement("div", {
     key: t.titulo,
     style: {
-      marginTop: 10
+      marginTop: i === 0 ? 0 : 10
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("b", {
     style: {
       fontSize: 13,
-      fontWeight: 700,
       color: C.branco
     }
   }, t.titulo), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 12.5,
-      color: "#C7D2E4",
-      margin: "4px 0 0",
-      lineHeight: 1.6
+      margin: "3px 0 0"
     }
-  }, t.texto))), /*#__PURE__*/React.createElement("label", {
+  }, t.texto)))), /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "flex-start",
@@ -9813,25 +9819,24 @@ function SecaoCodigoConduta({
       marginTop: 8,
       lineHeight: 1.6
     }
-  }, "Al\xE9m das pol\xEDticas de dados acima, todo colaborador da ", EMPRESA.nome, " deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita \xE0s medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade)."), CODIGO_CONDUTA.map((c, i) => /*#__PURE__*/React.createElement("div", {
+  }, "Al\xE9m das pol\xEDticas de dados acima, todo colaborador da ", EMPRESA.nome, " deve observar as regras de conduta abaixo. O descumprimento pode configurar falta grave, sujeita \xE0s medidas disciplinares previstas na CLT (incluindo art. 482, conforme a gravidade)."), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: `Ler as ${CODIGO_CONDUTA.length} regras na íntegra`
+  }, CODIGO_CONDUTA.map((c, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
-      borderTop: "1px solid #1E3450",
-      padding: "10px 0"
+      borderTop: i === 0 ? "none" : "1px solid #1E3450",
+      padding: i === 0 ? "0 0 9px" : "9px 0"
     }
   }, /*#__PURE__*/React.createElement("b", {
     style: {
-      fontSize: 13.5,
+      fontSize: 13,
       color: C.branco
     }
   }, c.titulo), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 12.5,
-      color: "#C7D2E4",
-      margin: "4px 0 0",
-      lineHeight: 1.6
+      margin: "3px 0 0"
     }
-  }, c.texto))), onAceitar && /*#__PURE__*/React.createElement("div", {
+  }, c.texto)))), onAceitar && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: "1px solid #1E3450",
       paddingTop: 12,
@@ -10038,7 +10043,7 @@ function TelaLGPD({
     style: {
       color: C.branco
     }
-  }, "Termo de consentimento \u2014 tratamento de dados pessoais"), /*#__PURE__*/React.createElement("p", null, "O PONTO RENOVAR coleta, com a finalidade espec\xEDfica de controle de jornada (Portaria MTP 671/2021): ", /*#__PURE__*/React.createElement("b", null, "confirma\xE7\xE3o de identidade pela biometria nativa do seu aparelho"), " (Face ID/digital \u2014 processada ", /*#__PURE__*/React.createElement("b", null, "localmente pelo celular"), "; a empresa ", /*#__PURE__*/React.createElement("b", null, "n\xE3o recebe nem armazena"), " imagem facial ou impress\xE3o digital, apenas o identificador p\xFAblico da credencial e a confirma\xE7\xE3o da autentica\xE7\xE3o); ", /*#__PURE__*/React.createElement("b", null, "geolocaliza\xE7\xE3o"), " da marca\xE7\xE3o; e registros de hor\xE1rios. Os dados s\xE3o usados exclusivamente pra valida\xE7\xE3o de identidade, apura\xE7\xE3o de jornada e obriga\xE7\xF5es legais trabalhistas. Reten\xE7\xE3o: registros de ponto por no m\xEDnimo 5 anos; credenciais biom\xE9tricas enquanto durar o v\xEDnculo ou at\xE9 voc\xEA remov\xEA-las. Voc\xEA pode solicitar acesso, corre\xE7\xE3o ou exclus\xE3o (quando n\xE3o houver obriga\xE7\xE3o legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br."), /*#__PURE__*/React.createElement("label", {
+  }, "Termo de consentimento \u2014 tratamento de dados pessoais"), /*#__PURE__*/React.createElement("p", null, "O PONTO RENOVAR coleta, com a finalidade espec\xEDfica de controle de jornada (Portaria MTP 671/2021): ", /*#__PURE__*/React.createElement("b", null, "confirma\xE7\xE3o de identidade pela biometria nativa do seu aparelho"), " (Face ID/digital \u2014 processada ", /*#__PURE__*/React.createElement("b", null, "localmente pelo celular"), "; a empresa ", /*#__PURE__*/React.createElement("b", null, "n\xE3o recebe nem armazena"), " imagem facial ou impress\xE3o digital, apenas o identificador p\xFAblico da credencial e a confirma\xE7\xE3o da autentica\xE7\xE3o); ", /*#__PURE__*/React.createElement("b", null, "geolocaliza\xE7\xE3o"), " da marca\xE7\xE3o; e registros de hor\xE1rios. Os dados s\xE3o usados exclusivamente pra valida\xE7\xE3o de identidade, apura\xE7\xE3o de jornada e obriga\xE7\xF5es legais trabalhistas. Reten\xE7\xE3o: registros de ponto por no m\xEDnimo 5 anos; credenciais biom\xE9tricas enquanto durar o v\xEDnculo ou at\xE9 voc\xEA remov\xEA-las. Voc\xEA pode solicitar acesso, corre\xE7\xE3o ou exclus\xE3o (quando n\xE3o houver obriga\xE7\xE3o legal de guarda) ao encarregado de dados (DPO): dpo@renovartech.com.br."), /*#__PURE__*/React.createElement("p", null, "Contador de \xE1gua: fica s\xF3 no seu aparelho (armazenamento local do navegador). N\xE3o vai pro servidor, o gestor n\xE3o v\xEA e n\xE3o \xE9 orienta\xE7\xE3o m\xE9dica \u2014 quem tem restri\xE7\xE3o de l\xEDquidos segue o pr\xF3prio m\xE9dico."), /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       gap: 10,
@@ -10579,13 +10584,13 @@ function SecaoEquipe({
       },
       onClick: () => copiar(linkDe(c.token))
     }, "\uD83D\uDCCB Link")));
-  })), /*#__PURE__*/React.createElement("p", {
+  })), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Sobre desativar e convidar"
+  }, /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 11,
-      color: C.cinza,
-      marginTop: 10
+      margin: 0
     }
-  }, "Desativar bloqueia o login (o app checa ativo=false), mas a conta de autentica\xE7\xE3o permanece \u2014 exclus\xE3o definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e s\xE3o de uso \xFAnico (resgate at\xF4mico via function no banco)."));
+  }, "Desativar bloqueia o login (o app checa ativo=false), mas a conta de autentica\xE7\xE3o permanece \u2014 exclus\xE3o definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e s\xE3o de uso \xFAnico (resgate at\xF4mico via function no banco).")));
 }
 function SecaoFolgas({
   folgas,
@@ -14190,20 +14195,9 @@ function TelaGestor({
         lineHeight: 1.5
       }
     }, "S\xF3 entram nesta conta os dias em que o colaborador registrou ", /*#__PURE__*/React.createElement("b", null, "sa\xEDda e volta do almo\xE7o"), " (4 marca\xE7\xF5es). Em dias com um \xFAnico par de marca\xE7\xF5es o resultado \xE9 o mesmo nas duas regras \u2014 a corre\xE7\xE3o do intervalo e a da jornada se anulam."));
-  })(), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.card,
-      marginTop: 14,
-      borderLeft: `4px solid ${C.amarelo}`,
-      padding: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.display,
-      fontSize: 14,
-      color: C.amarelo
-    }
-  }, "\u26A0\uFE0F Limites e transpar\xEAncia do sistema"), /*#__PURE__*/React.createElement("ul", {
+  })(), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "\u26A0\uFE0F Limites e transpar\xEAncia do sistema"
+  }, /*#__PURE__*/React.createElement("ul", {
     style: {
       fontSize: 12.5,
       color: C.branco,
@@ -14242,7 +14236,7 @@ function TelaGestor({
       fontSize: 11,
       color: C.cinza
     }
-  }, "\uD83C\uDF96 reconhecimento interno \xB7 somente leitura \xB7 sem impacto salarial, no Pr\xEAmio Performance ou em avalia\xE7\xE3o formal")), ranking.map((r, i) => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83C\uDF96 somente leitura \xB7 sem impacto salarial")), ranking.map((r, i) => /*#__PURE__*/React.createElement("div", {
     key: r.u.id,
     style: {
       display: "flex",
