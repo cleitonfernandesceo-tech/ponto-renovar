@@ -2067,9 +2067,10 @@ function combinadoMarcar(token, id, feito) {
   return sbUpdate(token, "combinados", "id=eq." + encodeURIComponent(id), patch);
 }
 
-/* Ajuste do time (hoje so o link da sala) mora numa tabela chave/valor: o
-   gestor grava uma vez e todo mundo enxerga o mesmo link. Antes isso ficava
-   no localStorage do gestor, ou seja, ninguem mais via. */
+/* Ajuste do time mora numa tabela chave/valor: o gestor grava uma vez e todo
+   mundo enxerga o mesmo. Hoje guarda os enderecos das salas (geral e um por
+   ritual) e a semente usada para sugerir endereco. Antes isso ficava no
+   localStorage do gestor, ou seja, ninguem mais via. */
 async function configBaixar(token) {
   const linhas = await sbSelect(token, "config_time", "select=chave,valor");
   const o = {};
@@ -2376,9 +2377,9 @@ async function ataInserir(token, autorId, autorNome, ata) {
   return mapAta((linhas && linhas[0]) || {});
 }
 
-/* Videochamada: o app não hospeda vídeo. O gestor cola o link da sala
-   (Meet, Jitsi, Zoom) e o app apenas abre em aba nova, com o mesmo link
-   nos dois avisos. Só aceita https para não virar porta de entrada. */
+/* Videochamada: o app nao hospeda video. Ele guarda o endereco da sala, abre
+   em aba nova e mostra quem ja entrou. So aceita https para nao virar porta
+   de entrada para qualquer endereco que alguem cole aqui. */
 function salaValida(url) {
   try { return new URL(String(url || "")).protocol === "https:"; } catch { return false; }
 }
@@ -2390,6 +2391,131 @@ function salaGravar(url) {
 function abrirSala(url) {
   if (!salaValida(url)) return false;
   try { window.open(url, "_blank", "noopener,noreferrer"); return true; } catch { return false; }
+}
+
+/* Uma sala por ritual. Planejamento da semana e retrospectiva do mes quase
+   sempre acontecem em salas diferentes, e obrigar o time a lembrar qual link
+   vale hoje e o jeito mais barato de fazer alguem entrar no lugar errado.
+   Ritual sem sala propria cai no link geral, que era o comportamento antigo. */
+const SALAS_RITUAIS = ["semanal", "quinzenal", "mensal"];
+const SALA_CHAVE_BANCO = { geral: "sala_video", semanal: "sala_semanal", quinzenal: "sala_quinzenal", mensal: "sala_mensal" };
+/* Sem batida nova nesse tempo a pessoa sumiu da sala. Curto de proposito:
+   presenca velha na tela e pior que presenca nenhuma. */
+const PRESENCA_MIN = 8;
+
+function chaveSalaNoBanco(qual) {
+  return SALA_CHAVE_BANCO[String(qual || "")] || "";
+}
+function salaDoRitual(salas, ritualId) {
+  const s = salas || {};
+  const propria = String(s[String(ritualId || "")] || "").trim();
+  if (salaValida(propria)) return propria;
+  const geral = String(s.geral || "").trim();
+  return salaValida(geral) ? geral : "";
+}
+function salasLer() {
+  const guardado = ritLer("salas", null);
+  const o = guardado && typeof guardado === "object" ? guardado : {};
+  const saida = { geral: salaLer() };
+  SALAS_RITUAIS.forEach((k) => {
+    const v = String(o[k] || "").trim();
+    saida[k] = salaValida(v) ? v : "";
+  });
+  return saida;
+}
+function salasGravar(mapa) {
+  const o = mapa || {};
+  const limpo = {};
+  SALAS_RITUAIS.forEach((k) => {
+    const v = String(o[k] || "").trim();
+    limpo[k] = salaValida(v) ? v : "";
+  });
+  ritGravar("salas", limpo);
+  if (Object.prototype.hasOwnProperty.call(o, "geral")) salaGravar(o.geral);
+  return salasLer();
+}
+
+/* O app nao cria a sala: ele monta um endereco dificil de adivinhar a partir
+   de uma semente sorteada uma unica vez e guardada no ajuste do time. Sala com
+   nome obvio e sala onde estranho entra. Se o gestor preferir Meet ou Zoom,
+   e so colar o link e ignorar a sugestao. */
+function enderecoSalaSugerido(semente, ritualId) {
+  const s = String(semente || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (s.length < 10) return "";
+  const r = String(ritualId || "").replace(/[^a-z0-9]/gi, "").toLowerCase() || "time";
+  return "https://meet.jit.si/renovar-" + r + "-" + s.slice(0, 18);
+}
+function sortearSementeSala() {
+  const letras = "abcdefghijkmnopqrstuvwxyz23456789";
+  let s = "";
+  try {
+    const c = typeof crypto !== "undefined" ? crypto : null;
+    if (c && c.getRandomValues) {
+      const b = new Uint8Array(24);
+      c.getRandomValues(b);
+      for (let i = 0; i < b.length; i++) s += letras[b[i] % letras.length];
+    }
+  } catch { s = ""; }
+  while (s.length < 24) s += letras[Math.floor(Math.random() * letras.length)];
+  return s.slice(0, 24);
+}
+
+/* Presenca na chamada. Cada aparelho bate a propria presenca de tempos em
+   tempos enquanto a sala esta aberta, e o cartao mostra quem ja entrou. Serve
+   para ninguem cair numa sala vazia achando que se atrasou. Nada disso vira
+   ficha de frequencia: linha sem batida recente some sozinha da tela e o app
+   nunca conta quem faltou na chamada. */
+function mapPresenca(r) {
+  return {
+    usuarioId: r.usuario_id || "",
+    nome: r.nome || "",
+    ritualId: r.ritual_id || "",
+    dia: r.dia || "",
+    vistoEm: r.visto_em || "",
+  };
+}
+async function presencaBaixar(token, diaIso) {
+  const linhas = await sbSelect(token, "presenca_chamada",
+    "select=*&dia=eq." + String(diaIso || "").slice(0, 10) + "&order=visto_em.asc&limit=80");
+  return (linhas || []).map(mapPresenca);
+}
+function presencaBater(token, userId, nome, diaIso, ritualId) {
+  return sbUpsert(token, "presenca_chamada", [{
+    usuario_id: userId,
+    nome: String(nome || "").slice(0, 80) || null,
+    dia: String(diaIso || "").slice(0, 10),
+    ritual_id: String(ritualId || "").slice(0, 30),
+    visto_em: new Date().toISOString(),
+  }], "usuario_id,dia,ritual_id");
+}
+/* Quem esta na sala agora, do mais antigo para o mais novo: quem chegou
+   primeiro aparece primeiro, que e a ordem que a pessoa espera ver. */
+function presencaAtiva(linhas, ritualId, diaIso, agoraMs, minutos) {
+  const limite = (minutos || PRESENCA_MIN) * 60000;
+  const t = typeof agoraMs === "number" && isFinite(agoraMs) ? agoraMs : Date.now();
+  const visto = {};
+  (linhas || []).forEach((l) => {
+    if (!l) return;
+    if (String(l.dia || "") !== String(diaIso || "")) return;
+    if (String(l.ritualId || "") !== String(ritualId || "")) return;
+    const q = Date.parse(String(l.vistoEm || ""));
+    if (!isFinite(q) || t - q > limite) return;
+    const id = String(l.usuarioId || "");
+    if (!id) return;
+    if (!visto[id] || q > visto[id].vistoEm) visto[id] = { usuarioId: id, nome: String(l.nome || ""), vistoEm: q };
+  });
+  return Object.keys(visto).map((k) => visto[k]).sort((a, b) => a.vistoEm - b.vistoEm);
+}
+function textoPresenca(presentes, meuId) {
+  const lista = (presentes || []).filter(Boolean);
+  const outros = lista.filter((p) => String(p.usuarioId) !== String(meuId || ""))
+    .map((p) => String(p.nome || "").trim() || "alguém do time");
+  const euDentro = lista.filter((p) => String(p.usuarioId) === String(meuId || "")).length > 0;
+  if (!outros.length) return euDentro ? "Você é a única pessoa na sala agora." : "Ninguém entrou na sala ainda.";
+  const nomes = outros.length > 1
+    ? outros.slice(0, -1).join(", ") + " e " + outros[outros.length - 1]
+    : outros[0];
+  return nomes + (outros.length > 1 ? " já estão na sala." : " já está na sala.");
 }
 
 /* Trava de aviso: uma notificação por pessoa, por reunião e por etapa —
@@ -3120,7 +3246,13 @@ function AppInterno() {
      no banco, acoesNoBanco fica falso e tudo continua no localStorage. */
   const [acoes, setAcoes] = useState([]);
   const [acoesNoBanco, setAcoesNoBanco] = useState(false);
-  const [sala, setSala] = useState(() => salaLer());
+  const [salas, setSalas] = useState(() => salasLer());
+  const [semente, setSemente] = useState("");
+  /* Presenca na chamada: tabela opcional. Sem ela o botao de entrar continua
+     funcionando, so nao aparece quem ja esta la dentro. */
+  const [presencas, setPresencas] = useState([]);
+  const [presencaNoBanco, setPresencaNoBanco] = useState(false);
+  const batidaSala = useRef(null);
   /* Mural, elogios, motivadores e anjo tambem moram em tabelas opcionais. Um
      objeto so guarda a lista e o "isto esta no banco?" de cada ritual, entao
      nenhuma tela precisa perguntar de onde o dado veio. */
@@ -3321,7 +3453,13 @@ function AppInterno() {
       (async () => {
         try {
           const cfg = await configBaixar(token);
-          if (cfg.sala_video) setSala(salaGravar(cfg.sala_video));
+          const temSala = !!cfg.sala_video || SALAS_RITUAIS.filter((k) => cfg[chaveSalaNoBanco(k)]).length > 0;
+          if (temSala) {
+            const mapa = { geral: cfg.sala_video || "" };
+            SALAS_RITUAIS.forEach((k) => { mapa[k] = cfg[chaveSalaNoBanco(k)] || ""; });
+            setSalas(salasGravar(mapa));
+          }
+          if (cfg.sala_semente) setSemente(String(cfg.sala_semente));
         } catch (e) { console.warn("[config do time]", e.message); }
       })();
       // Mural, elogios, motivadores e anjo: tabelas opcionais tambem. Cada uma
@@ -3860,17 +3998,91 @@ function AppInterno() {
   };
   /* Sala de videochamada: o gestor grava e a frase de volta diz, sem enfeite,
      se o time inteiro passou a enxergar ou se ficou so neste aparelho. */
-  const salvarSalaVideo = async (url) => {
-    const limpo = salaGravar(url);
-    setSala(limpo);
-    if (!limpo && String(url || "").trim()) return "Endereço inválido: nada foi salvo.";
+  /* Quem esta na sala agora. Tabela opcional (presenca_chamada): se ela nao
+     existir o app so deixa de mostrar a lista, e o botao de entrar continua
+     igual. So pergunta em dia de reuniao, para nao bater no banco a toa. */
+  useEffect(() => {
+    if (demo || !sessao || !sessao.token || !user) return;
+    if (!reunioesDoDia(new Date()).length) return;
+    let vivo = true;
+    let timer = null;
+    let avisou = false;
+    const puxar = async () => {
+      try {
+        const lista = await presencaBaixar(sessao.token, dataISO(new Date()));
+        if (!vivo) return;
+        setPresencas(lista);
+        setPresencaNoBanco(true);
+      } catch (e) {
+        if (!vivo) return;
+        if (!avisou) { avisou = true; console.warn("[presenca]", e.message); }
+        setPresencaNoBanco(false);
+        if (timer) { clearInterval(timer); timer = null; }
+      }
+    };
+    puxar();
+    timer = setInterval(puxar, 60000);
+    return () => { vivo = false; if (timer) clearInterval(timer); };
+  }, [demo, sessao && sessao.token, user && user.id]);
+
+  /* Salas de videochamada. Cada ritual pode ter a sua; o campo geral e a
+     reserva de quem nao tem. A frase de volta diz, sem enfeite, se o time
+     inteiro passou a enxergar ou se ficou so neste aparelho. */
+  const salvarSalas = async (mapa, sementeNova) => {
+    const antes = mapa || {};
+    const invalidos = Object.keys(antes)
+      .filter((k) => String(antes[k] || "").trim() && !salaValida(String(antes[k]).trim()));
+    const limpo = salasGravar(antes);
+    setSalas(limpo);
+    if (invalidos.length) return "Endereço inválido: " + invalidos.length + " campo(s) não foram salvos.";
     if (demo) return "Demonstração: nada é gravado de verdade.";
     try {
-      await configGravar(sessao.token, user.id, "sala_video", limpo);
-      return limpo ? "Link salvo — o time inteiro passa a ver esta sala." : "Link removido.";
+      await configGravar(sessao.token, user.id, "sala_video", limpo.geral || "");
+      for (const k of SALAS_RITUAIS) {
+        await configGravar(sessao.token, user.id, chaveSalaNoBanco(k), limpo[k] || "");
+      }
+      if (sementeNova) {
+        await configGravar(sessao.token, user.id, "sala_semente", sementeNova);
+        setSemente(sementeNova);
+      }
+      return "Salas salvas — o time inteiro passa a ver os mesmos endereços.";
     } catch (e) {
-      return "Salvo só neste aparelho: " + mensagemAmigavel(e, "ao gravar no banco");
+      return "Salvo só neste aparelho. " + mensagemAmigavel(e, "ao gravar no banco");
     }
+  };
+
+  /* Entrar na sala: abre a chamada e passa a bater a propria presenca a cada
+     quatro minutos enquanto esta aba continuar aberta, no maximo por duas
+     horas. Fechou a aba, a batida para, e em oito minutos a pessoa some da
+     lista sozinha. Isto e para o time saber quem ja chegou, nunca para virar
+     controle de frequencia: o app nao guarda quem faltou na chamada. */
+  const entrarNaSala = (ritualId, url) => {
+    const abriu = abrirSala(url);
+    if (demo || !sessao || !sessao.token || !user) return abriu;
+    const diaIso = dataISO(new Date());
+    let restam = 30;
+    const parar = () => {
+      if (batidaSala.current) { clearInterval(batidaSala.current); batidaSala.current = null; }
+    };
+    const bater = async () => {
+      try {
+        await presencaBater(sessao.token, user.id, user.nome, diaIso, ritualId);
+        setPresencaNoBanco(true);
+        setPresencas((lista) => (lista || [])
+          .filter((x) => !(String(x.usuarioId) === String(user.id) && x.ritualId === ritualId && x.dia === diaIso))
+          .concat([{ usuarioId: user.id, nome: user.nome, ritualId, dia: diaIso, vistoEm: new Date().toISOString() }]));
+      } catch (e) {
+        console.warn("[presenca]", e.message);
+        setPresencaNoBanco(false);
+        parar();
+        return;
+      }
+      if (--restam <= 0) parar();
+    };
+    parar();
+    bater();
+    batidaSala.current = setInterval(bater, 240000);
+    return abriu;
   };
 
   /* ---------- rituais do time: mural, elogios, motivadores e anjo ----------
@@ -4634,7 +4846,7 @@ function AppInterno() {
             <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao, respostas: rit.respostas || [] }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao, respostas: rit.respostas || [], salas, presencas, presencaNoBanco, onEntrarSala: entrarNaSala }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -4643,7 +4855,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
-          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} sala={sala} onSalvarSala={salvarSalaVideo} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} onResponder={responderPerguntas} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} salas={salas} onSalvarSalas={salvarSalas} semente={semente} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} onResponder={responderPerguntas} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -5072,7 +5284,8 @@ function RelogioVivo() {
   );
 }
 
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro, acoes, onAlternarCombinado, respostas = [] }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro, acoes, onAlternarCombinado, respostas = [],
+  salas = {}, presencas = [], presencaNoBanco = false, onEntrarSala }) {
   // Trava anti-duplicidade: 60s de espera após uma batida (evita duplo toque e registro repetido)
   const ultima = registros.filter(r => r.userId === user.id).reduce((m, r) => Math.max(m, new Date(r.ts).getTime()), 0);
   const [batidaRecente, setBatidaRecente] = useState(0);
@@ -5097,7 +5310,8 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
       <CartaoMomento nome={user.nome} doDia={doDia} />
-      <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} acoes={acoes} respostas={respostas} />
+      <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} acoes={acoes} respostas={respostas}
+        salas={salas} presencas={presencas} presencaNoBanco={presencaNoBanco} onEntrarSala={onEntrarSala} />
       {!temLocais && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
       )}
@@ -5501,10 +5715,13 @@ function faseDoDia(doDia) {
 /* O aviso da reunião. Aparece duas vezes: ao encerrar o expediente, falando
    do próximo dia com reunião, e ao chegar, falando da reunião do dia. Além
    do cartão dispara um aviso do celular, uma única vez por etapa. */
-function CartaoReuniao({ user, doDia, onAbrirRoteiro, acoes = [], respostas = [] }) {
+function CartaoReuniao({ user, doDia, onAbrirRoteiro, acoes = [], respostas = [],
+  salas = null, presencas = [], presencaNoBanco = false, onEntrarSala = null }) {
   const agora = new Date();
   const fase = faseDoDia(doDia);
-  const sala = salaLer();
+  /* O time inteiro ve as salas do banco; sem banco, vale o que este aparelho
+     guardou da ultima vez. */
+  const salasDoTime = salas && Object.keys(salas).length ? salas : salasLer();
   let alvo = null;
   let etapa = "";
   if (fase === "saida") {
@@ -5567,13 +5784,26 @@ function CartaoReuniao({ user, doDia, onAbrirRoteiro, acoes = [], respostas = []
               Pediram ajuda: {impedimentosDoDia(respostas, diaIso, r.id).map((x) => x.autor).join(", ")}.
             </div>
           ) : null}
+          {(() => {
+            const urlSala = salaDoRitual(salasDoTime, r.id);
+            if (!urlSala) return null;
+            const naSala = presencaAtiva(presencas, r.id, diaIso, agora.getTime());
+            return (
+              <div style={{ marginTop: 10 }}>
+                <button style={{ ...S.btnGhost, padding: "8px 16px", fontSize: 13 }}
+                  onClick={() => (onEntrarSala ? onEntrarSala(r.id, urlSala) : abrirSala(urlSala))}>🎥 Entrar na chamada</button>
+                {presencaNoBanco ? (
+                  <div style={{ fontSize: 12, color: naSala.length ? C.verde : C.cinza, marginTop: 6 }}>
+                    {textoPresenca(naSala, user && user.id)}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
         </div>
       ))}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
         <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={onAbrirRoteiro}>Abrir o roteiro</button>
-        {sala && (
-          <button style={{ ...S.btnGhost, padding: "8px 16px", fontSize: 13 }} onClick={() => abrirSala(sala)}>🎥 Entrar na chamada</button>
-        )}
       </div>
     </div>
   );
@@ -5968,27 +6198,44 @@ function ListaCombinados({ acoes, onAlternar, hojeIso, compacta }) {
 /* Tela Nosso time: o roteiro das reuniões, os combinados e o check-in.
    Nesta primeira versão tudo mora no aparelho — nenhuma tabela nova no
    Supabase, nenhum dado saindo do navegador de quem escreveu. */
-function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sala, onSalvarSala,
+function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, salas, onSalvarSalas, semente,
   registros = [], faltas = [], onGerarAta,
   rit = { conquistas: [], elogios: [], motivadores: [], anjo: null, atas: [], respostas: [] },
   onConquista, onElogio, onMotivadores, onSortearAnjo, onResponder }) {
   const agora = new Date();
   const hojeIso = dataISO(agora);
   const [aba, setAba] = useState("roteiro");
-  const [salaTxt, setSalaTxt] = useState(sala || "");
+  /* Um campo por ritual mais o campo geral, que e a reserva de quem ficou vazio. */
+  const [salaTxt, setSalaTxt] = useState(() => ({ geral: (salas && salas.geral) || "", semanal: (salas && salas.semanal) || "", quinzenal: (salas && salas.quinzenal) || "", mensal: (salas && salas.mensal) || "" }));
+  const [sementeTxt, setSementeTxt] = useState("");
   const [salvandoSala, setSalvandoSala] = useState(false);
   const [avisoSala, setAvisoSala] = useState("");
   /* Rascunho de combinado nascido de um pedido de ajuda. Fica aqui, e nao
      dentro do formulario, porque quem aperta o botao e o painel de cima. */
   const [rascunhoComb, setRascunhoComb] = useState(null);
-  /* O gestor pode abrir a tela antes de o link chegar do banco. */
-  useEffect(() => { setSalaTxt(sala || ""); }, [sala]);
+  /* O gestor pode abrir a tela antes de os links chegarem do banco. */
+  useEffect(() => {
+    setSalaTxt({ geral: (salas && salas.geral) || "", semanal: (salas && salas.semanal) || "",
+      quinzenal: (salas && salas.quinzenal) || "", mensal: (salas && salas.mensal) || "" });
+  }, [salas && salas.geral, salas && salas.semanal, salas && salas.quinzenal, salas && salas.mensal]);
   async function salvarSala() {
     setSalvandoSala(true);
     setAvisoSala("");
-    try { setAvisoSala(await onSalvarSala(salaTxt)); }
-    catch (e) { setAvisoSala(mensagemAmigavel(e, "ao salvar o link da sala")); }
+    try { setAvisoSala(await onSalvarSalas(salaTxt, sementeTxt || "")); }
+    catch (e) { setAvisoSala(mensagemAmigavel(e, "ao salvar os links das salas")); }
     finally { setSalvandoSala(false); }
+  }
+  /* Preenche so o que estiver vazio: link colado pelo gestor manda mais que
+     sugestao do app. A semente e sorteada uma unica vez e vai junto no salvar. */
+  function sugerirSalas() {
+    const sem = String(semente || sementeTxt || "").trim() || sortearSementeSala();
+    setSementeTxt(sem);
+    setSalaTxt((v) => {
+      const novo = { ...v };
+      SALAS_RITUAIS.forEach((k) => { if (!String(novo[k] || "").trim()) novo[k] = enderecoSalaSugerido(sem, k); });
+      return novo;
+    });
+    setAvisoSala("Endereços sugeridos. Confira se a sala abre e depois salve.");
   }
   const [ritualId, setRitualId] = useState(() => {
     const d = reunioesDoDia(new Date());
@@ -6015,13 +6262,13 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
             <div key={r.id} style={{ fontSize: 14, color: C.branco, marginTop: 6 }}>
               {r.icone} <b>{r.nome}</b>
               <span style={{ color: C.cinza }}>{" · " + rotuloDiaReuniao(prox.data, agora) + " às " + r.inicio + " · " + r.duracaoMin + " min"}</span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                {salaDoRitual(salas, r.id)
+                  ? <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={() => abrirSala(salaDoRitual(salas, r.id))}>🎥 Entrar na chamada</button>
+                  : <span style={{ fontSize: 12, color: C.cinza }}>Sem sala de vídeo configurada para este ritual.</span>}
+              </div>
             </div>
           ))}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-            {sala
-              ? <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={() => abrirSala(sala)}>🎥 Entrar na chamada</button>
-              : <span style={{ fontSize: 12, color: C.cinza }}>Sem sala de vídeo configurada.</span>}
-          </div>
         </div>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "18px 0 14px" }}>
@@ -6118,15 +6365,35 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
       )}
       {ehGestor && (
         <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
-          <div style={{ ...S.display, fontSize: 14, color: C.branco }}>🎥 Sala de videochamada</div>
+          <div style={{ ...S.display, fontSize: 14, color: C.branco }}>🎥 Salas de videochamada</div>
           <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
-            O app não hospeda a chamada: cole aqui o link fixo da sala (Meet, Jitsi, Zoom) e ele passa a aparecer nos dois avisos e no topo desta tela. Só aceita endereço https.
+            O app não hospeda a chamada: ele guarda o endereço e mostra quem já entrou. Cada ritual pode ter a sua sala; o que ficar em branco usa o link geral. Só aceita endereço https.
           </p>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input style={{ ...S.input, flex: "1 1 240px" }} value={salaTxt} onChange={(e) => setSalaTxt(e.target.value)} placeholder="https://meet.google.com/xxx-xxxx-xxx" />
-            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvarSala} disabled={salvandoSala}>{salvandoSala ? "Salvando..." : "Salvar"}</button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[{ id: "geral", nome: "Link geral do time", dica: "vale para o ritual que não tiver sala própria" }]
+              .concat(SALAS_RITUAIS.map((k) => {
+                const r = ritualPorId(k);
+                return { id: k, nome: r ? r.icone + " " + r.nome : k, dica: "opcional" };
+              }))
+              .map((campo) => (
+                <div key={campo.id}>
+                  <div style={{ fontSize: 12, color: C.cinza, marginBottom: 4 }}>{campo.nome + " · " + campo.dica}</div>
+                  <input style={{ ...S.input, width: "100%" }} value={salaTxt[campo.id] || ""}
+                    onChange={(e) => setSalaTxt((v) => ({ ...v, [campo.id]: e.target.value }))}
+                    placeholder="https://meet.google.com/xxx-xxxx-xxx" />
+                  {salaTxt[campo.id] && !salaValida(salaTxt[campo.id]) && (
+                    <p style={{ fontSize: 12, color: C.vermelho, margin: "4px 0 0" }}>Endereço inválido — precisa começar com https://</p>
+                  )}
+                </div>
+              ))}
           </div>
-          {salaTxt && !salaValida(salaTxt) && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0" }}>Endereço inválido — precisa começar com https://</p>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvarSala} disabled={salvandoSala}>{salvandoSala ? "Salvando..." : "Salvar"}</button>
+            <button style={{ ...S.btnGhost, padding: "8px 18px", fontSize: 13 }} onClick={sugerirSalas} disabled={salvandoSala}>Sugerir endereços</button>
+          </div>
+          <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
+            Sugerir endereços só preenche o que estiver vazio, com um nome de sala sorteado, difícil de alguém de fora adivinhar. O app não cria nem administra a sala: abra o endereço uma vez para conferir se funciona antes de contar com ele.
+          </p>
           {avisoSala && <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>{avisoSala}</p>}
         </div>
       )}
@@ -8019,7 +8286,7 @@ const TABELAS_OPCIONAIS = [
   { nome: "candidatos", para: "recrutamento e currículos" },
   { nome: "documentos_rh", para: "documentos do colaborador" },
   { nome: "combinados", para: "combinados das reunioes do time" },
-  { nome: "config_time", para: "link da sala de videochamada" },
+  { nome: "config_time", para: "endereços das salas de videochamada" },
   { nome: "conquistas", para: "mural de conquistas do time" },
   { nome: "elogios", para: "circulo de elogios e gratidao" },
   { nome: "motivadores", para: "o que motiva cada colaborador" },
@@ -8027,6 +8294,7 @@ const TABELAS_OPCIONAIS = [
   { nome: "anjo_par", para: "pares sorteados do anjo" },
   { nome: "atas", para: "atas automaticas das reunioes" },
   { nome: "respostas", para: "as tres perguntas do planejamento" },
+  { nome: "presenca_chamada", para: "quem esta na sala da reuniao agora" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -8168,8 +8436,10 @@ create policy "combinados: dono conclui" on public.combinados
   with check (dono_id = auth.uid() or criado_por = auth.uid()
     or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
 
--- Ajuste do time em chave/valor. Hoje guarda so 'sala_video', o link fixo da
--- videochamada: o gestor grava uma vez e o time inteiro passa a enxergar.
+-- Ajuste do time em chave/valor. Guarda os enderecos das salas de videochamada
+-- ('sala_video' e o geral, 'sala_semanal', 'sala_quinzenal' e 'sala_mensal' sao
+-- por ritual) e 'sala_semente', usada so para sugerir um endereco dificil de
+-- adivinhar. O gestor grava uma vez e o time inteiro passa a enxergar.
 create table if not exists public.config_time (
   chave text primary key,
   valor text,
@@ -8376,6 +8646,40 @@ drop policy if exists "respostas: cada um corrige a sua" on public.respostas;
 create policy "respostas: cada um corrige a sua" on public.respostas
   for update to authenticated
   using (autor_id = auth.uid()) with check (autor_id = auth.uid());
+
+-- Quem esta na sala da chamada agora. Uma linha por pessoa por reuniao por dia,
+-- reescrita a cada batida enquanto a aba do app fica aberta. Isto NAO e controle
+-- de frequencia: linha sem batida recente some da tela sozinha e o app nunca
+-- pergunta quem faltou na chamada. Serve so para ninguem cair em sala vazia.
+create table if not exists public.presenca_chamada (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  nome text,
+  dia date not null,
+  ritual_id text not null,
+  visto_em timestamptz not null default now(),
+  unique (usuario_id, dia, ritual_id)
+);
+create index if not exists presenca_chamada_dia_idx on public.presenca_chamada (dia desc);
+alter table public.presenca_chamada enable row level security;
+
+-- O time inteiro le: a lista so tem utilidade se todo mundo enxergar quem entrou.
+drop policy if exists "presenca: o time le" on public.presenca_chamada;
+create policy "presenca: o time le" on public.presenca_chamada
+  for select to authenticated using (true);
+
+drop policy if exists "presenca: cada um bate a sua" on public.presenca_chamada;
+create policy "presenca: cada um bate a sua" on public.presenca_chamada
+  for insert to authenticated with check (usuario_id = auth.uid());
+
+drop policy if exists "presenca: cada um atualiza a sua" on public.presenca_chamada;
+create policy "presenca: cada um atualiza a sua" on public.presenca_chamada
+  for update to authenticated
+  using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "presenca: cada um apaga a sua" on public.presenca_chamada;
+create policy "presenca: cada um apaga a sua" on public.presenca_chamada
+  for delete to authenticated using (usuario_id = auth.uid());
 `;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
