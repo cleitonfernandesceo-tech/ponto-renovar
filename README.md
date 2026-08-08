@@ -425,7 +425,44 @@ drop policy if exists "anjo par: gestor sorteia" on public.anjo_par;
 create policy "anjo par: gestor sorteia" on public.anjo_par
   for insert to authenticated with check (exists (
     select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));
-```
+
+-- Ata automatica da reuniao. O app monta sozinho ao encerrar o roteiro:
+-- dia, ritual, quem estava trabalhando e os combinados que nasceram ali.
+-- Nao e controle de presenca e nao existe "falta de reuniao" em lugar nenhum.
+create table if not exists public.atas (
+  id uuid primary key default gen_random_uuid(),
+  data date not null,
+  ritual_id text not null,
+  ritual_nome text,
+  participantes jsonb not null default '[]'::jsonb,
+  combinados jsonb not null default '[]'::jsonb,
+  numeros jsonb,
+  autor_id uuid not null references public.usuarios (id) on delete cascade,
+  autor_nome text,
+  criado_em timestamptz not null default now(),
+  unique (data, ritual_id)
+);
+create index if not exists atas_data_idx on public.atas (data desc);
+alter table public.atas enable row level security;
+
+-- Ata e memoria do time inteiro: todos leem.
+drop policy if exists "atas: o time le" on public.atas;
+create policy "atas: o time le" on public.atas
+  for select to authenticated using (true);
+
+-- Quem esta na reuniao encerra e gera a ata.
+drop policy if exists "atas: o time registra" on public.atas;
+create policy "atas: o time registra" on public.atas
+  for insert to authenticated with check (autor_id = auth.uid());
+
+-- Corrigir a ata do dia e de quem gerou ou do gestor.
+drop policy if exists "atas: autor ou gestor corrige" on public.atas;
+create policy "atas: autor ou gestor corrige" on public.atas
+  for update to authenticated
+  using (autor_id = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'))
+  with check (autor_id = auth.uid()
+    or exists (select 1 from public.usuarios u where u.id = auth.uid() and u.tipo = 'gestor'));```
 
 ## Push de servidor (lembrete com o app fechado)
 
@@ -576,6 +613,36 @@ consultar a tabela, e a tela fala isso na cara do usuario.
 Nada disso vira ponto: conquista e elogio **nao entram** na gamificacao nem no
 premio de assiduidade. Reconhecimento que vale nota deixa de ser reconhecimento
 e vira meta - e ai as pessoas escrevem pra pontuar, nao pra agradecer.
+
+### Numeros da retrospectiva e ata automatica
+
+O roteiro da reuniao mensal tinha dois blocos que eram so texto ~  a *analise fria
+dos numeros* e a *troca de elogios*. Agora os dois tem tela de verdade.
+
+No bloco de numeros o app monta o painel do mes com o que ele ja tem ~  horas
+trabalhadas, saldo do banco, pontualidade e quantos combinados fecharam. Da pra
+escolher qualquer um dos ultimos doze meses, e por padrao ele abre no mes
+anterior, que e o assunto da retrospectiva.
+
+Uma decisao que vale explicar ~  **sai time, nao sai pessoa**. O painel nunca
+mostra quem atrasou nem quem faltou, so o numero somado do grupo. Retrospectiva
+com nome de atrasado no telao vira tribunal, e no mes seguinte ninguem fala a
+verdade na reuniao. Caso individual continua sendo conversa reservada, e o
+gestor tem o painel dele pra isso. A funcao `numerosDoMes` devolve so numero ~ 
+nao existe campo de lista la dentro, e o teste garante que continue assim.
+
+A media do proprio check-in de energia aparece numa linha separada, visivel so
+pra quem escreveu - ela nao entra na conta coletiva.
+
+No ultimo bloco de qualquer ritual aparece **Encerrar e gerar ata**. O app monta
+a ata sozinho ~  dia, ritual, quem estava trabalhando (pela marcacao de ponto do
+dia) e a lista de combinados que nasceram naquela reuniao. Ninguem digita resumo,
+porque resumo digitado a mao e a primeira coisa que o time abandona.
+
+A lista de participantes **nao e controle de presenca**. Nao existe falta de
+reuniao no app e nada disso encosta em premio, avaliacao ou desligamento - a tela
+diz isso embaixo do botao. Sem a tabela `atas` no banco, a ata cai pro aparelho
+de quem encerrou e a tela avisa, igual aos outros rituais.
 
 ### Aviso de reuniao com o app fechado
 
