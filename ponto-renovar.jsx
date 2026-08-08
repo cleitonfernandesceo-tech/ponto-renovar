@@ -1772,6 +1772,220 @@ function aguaGravarMeta(userId, meta) {
   return v;
 }
 
+/* ---------- Rituais do time: reuniões, pauta e combinados ----------
+   O calendário é determinístico: a mesma data devolve sempre as mesmas
+   reuniões, sem sorteio e sem consultar o banco. Assim o aviso funciona
+   offline e todo mundo vê exatamente o mesmo horário e a mesma pauta. */
+const RITUAL_QUINZENAL_PARIDADE = 0; // semanas ISO pares levam a quinzenal
+
+const RITUAIS = [
+  {
+    id: "semanal",
+    icone: "🗓️",
+    nome: "Planejamento da semana",
+    quando: "toda segunda-feira",
+    inicio: "09:15",
+    duracaoMin: 45,
+    resumo: "Começa pelas pessoas e só depois pelas tarefas: energia, metas e dependências.",
+    blocos: [
+      { min: 10, tipo: "energia", titulo: "Check-in de energia",
+        detalhe: "Cada um dá uma nota de 1 a 10 para o próprio ânimo e explica o motivo em uma frase. Os outros pensam em como aliviar a carga desse colega na semana." },
+      { min: 25, tipo: "metas", titulo: "Metas da semana",
+        detalhe: "Definição das metas e divisão exata das tarefas no gerenciador que a equipe usa (Trello, Notion e afins). Aqui se responde: o que entreguei na semana passada e no que vou focar agora." },
+      { min: 10, tipo: "acoes", titulo: "Dependências",
+        detalhe: "O que eu preciso que você me entregue para conseguir avançar? Cada dependência vira um combinado com dono e prazo." },
+    ],
+  },
+  {
+    id: "quinzenal",
+    icone: "🧩",
+    nome: "Resolução de problemas · 3 Pilares",
+    quando: "uma segunda sim, outra não",
+    inicio: "14:00",
+    duracaoMin: 60,
+    resumo: "O time escolhe o maior gargalo dos últimos 15 dias e ataca ele por três ângulos.",
+    blocos: [
+      { min: 10, tipo: "gargalo", titulo: "Escolher o gargalo",
+        detalhe: "Qual foi o maior travamento operacional dos últimos 15 dias? Escolham um só, o que mais doeu." },
+      { min: 15, tipo: "criativo", titulo: "Pilar Criativo",
+        detalhe: "Quem assume este papel propõe saídas sem filtro, inclusive as improváveis. Ninguém critica nesta etapa." },
+      { min: 15, tipo: "pratico", titulo: "Pilar Prático",
+        detalhe: "Quem assume este papel traduz as ideias em passos possíveis: quem faz, com o quê e em quanto tempo." },
+      { min: 10, tipo: "critico", titulo: "Pilar Crítico",
+        detalhe: "Quem assume este papel procura onde o plano quebra: risco, custo, efeito colateral, o que já falhou antes." },
+      { min: 10, tipo: "acoes", titulo: "Decisão definitiva",
+        detalhe: "A solução escolhida vira combinados com dono e prazo. Sem dono e sem data, não foi decidido." },
+    ],
+  },
+  {
+    id: "mensal",
+    icone: "📊",
+    nome: "Retrospectiva do mês",
+    quando: "última sexta-feira do mês",
+    inicio: "15:00",
+    duracaoMin: 60,
+    resumo: "Metade do tempo nos números, metade no reconhecimento de quem fez os números acontecerem.",
+    blocos: [
+      { min: 30, tipo: "numeros", titulo: "Análise fria dos números",
+        detalhe: "Resultados coletivos do mês que passou, sem justificativa e sem defesa: o que os dados mostram." },
+      { min: 30, tipo: "elogios", titulo: "Elogios profissionais direcionados",
+        detalhe: "Cada um reconhece um colega por algo concreto: quero reconhecer fulano por ter resolvido o problema X, isso salvou nosso prazo." },
+    ],
+  },
+];
+
+/* Semana ISO: é ela que sustenta a regra "uma segunda sim, outra não". */
+function semanaISO(dt) {
+  const a = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+  const dia = a.getUTCDay() || 7;
+  a.setUTCDate(a.getUTCDate() + 4 - dia);
+  const ini = new Date(Date.UTC(a.getUTCFullYear(), 0, 1));
+  return Math.ceil(((a - ini) / 86400000 + 1) / 7);
+}
+
+function ultimaSextaDoMes(dt) {
+  const d = new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
+  while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+  return d;
+}
+
+function ritualPorId(id) { return RITUAIS.filter((r) => r.id === id)[0] || null; }
+
+/* Reuniões de uma data. Dia sem expediente (domingo ou feriado) não tem
+   reunião: o app não chama ninguém para trabalhar em dia de folga. */
+function reunioesDoDia(dt) {
+  const out = [];
+  try {
+    const exp = expedienteDoDia(dt);
+    if (!exp || !exp.jornadaMin) return out;
+  } catch { return out; }
+  if (dt.getDay() === 1) {
+    out.push(ritualPorId("semanal"));
+    if (semanaISO(dt) % 2 === RITUAL_QUINZENAL_PARIDADE) out.push(ritualPorId("quinzenal"));
+  }
+  const us = ultimaSextaDoMes(dt);
+  if (us.getMonth() === dt.getMonth() && us.getDate() === dt.getDate()) out.push(ritualPorId("mensal"));
+  return out.filter(Boolean);
+}
+
+/* Primeira data com reunião a partir de "base". Olhando 21 dias para frente
+   o aviso de sexta já enxerga a segunda, sem depender de feriado nenhum. */
+function proximasReunioes(base, dias) {
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const limite = dias || 21;
+  for (let i = 0; i < limite; i++) {
+    const lista = reunioesDoDia(d);
+    if (lista.length) return { data: new Date(d), reunioes: lista };
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+}
+
+function inicioEmMinutos(hhmm) {
+  const p = String(hhmm || "").split(":");
+  return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0);
+}
+
+const DIAS_POR_EXTENSO = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+
+/* Rótulo honesto: na sexta o aviso diz "segunda-feira, 10/08", não "amanhã". */
+function rotuloDiaReuniao(alvo, base) {
+  const a = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const b = new Date(alvo.getFullYear(), alvo.getMonth(), alvo.getDate());
+  const dif = Math.round((b - a) / 86400000);
+  if (dif === 0) return "hoje";
+  if (dif === 1) return "amanhã";
+  return DIAS_POR_EXTENSO[b.getDay()] + ", " + String(b.getDate()).padStart(2, "0") + "/" + String(b.getMonth() + 1).padStart(2, "0");
+}
+
+function textoAvisoReuniao(ritual, rotulo) {
+  return ritual.nome + " " + rotulo + " às " + ritual.inicio + " (" + ritual.duracaoMin + " min). Pauta: " + ritual.blocos.map((b) => b.titulo).join(" · ") + ".";
+}
+
+/* Combinados, respostas e check-in ficam só neste aparelho (localStorage),
+   como a hidratação. Nesta primeira versão nada disso vai para o banco:
+   é um caderno pessoal, o gestor não lê a nota de ânimo de ninguém. */
+const RIT_PREFIXO = "pr_ritual_";
+function ritLer(chave, padrao) {
+  try {
+    const v = localStorage.getItem(RIT_PREFIXO + chave);
+    if (v === null || v === undefined) return padrao;
+    const o = JSON.parse(v);
+    return o === null || o === undefined ? padrao : o;
+  } catch { return padrao; }
+}
+function ritGravar(chave, valor) {
+  try { localStorage.setItem(RIT_PREFIXO + chave, JSON.stringify(valor)); } catch {}
+  return valor;
+}
+
+/* Combinados: o que foi acordado vira tarefa com dono e prazo. Sem dono e
+   sem data não é combinado, é conversa. */
+function acoesLer(userId) {
+  const l = ritLer("acoes_" + (userId || "anon"), []);
+  return Array.isArray(l) ? l : [];
+}
+function acoesGravar(userId, lista) {
+  return ritGravar("acoes_" + (userId || "anon"), (lista || []).slice(0, 200));
+}
+function acaoNova(texto, dono, prazo, origem) {
+  return {
+    id: "a" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+    texto: String(texto || "").trim().slice(0, 280),
+    dono: String(dono || "").trim().slice(0, 80),
+    prazo: String(prazo || "").slice(0, 10),
+    origem: String(origem || "").slice(0, 40),
+    criadoEm: new Date().toISOString(),
+    feito: false,
+    feitoEm: "",
+  };
+}
+function acoesAbertas(lista) { return (lista || []).filter((a) => a && !a.feito); }
+function acoesAtrasadas(lista, hojeIso) { return acoesAbertas(lista).filter((a) => a.prazo && a.prazo < hojeIso); }
+function acoesConcluidasDesde(lista, iso) { return (lista || []).filter((a) => a && a.feito && a.feitoEm && a.feitoEm >= iso); }
+
+/* Videochamada: o app não hospeda vídeo. O gestor cola o link da sala
+   (Meet, Jitsi, Zoom) e o app apenas abre em aba nova, com o mesmo link
+   nos dois avisos. Só aceita https para não virar porta de entrada. */
+function salaValida(url) {
+  try { return new URL(String(url || "")).protocol === "https:"; } catch { return false; }
+}
+function salaLer() { const v = ritLer("sala", ""); return typeof v === "string" && salaValida(v) ? v : ""; }
+function salaGravar(url) {
+  const v = String(url || "").trim();
+  return ritGravar("sala", salaValida(v) ? v : "");
+}
+function abrirSala(url) {
+  if (!salaValida(url)) return false;
+  try { window.open(url, "_blank", "noopener,noreferrer"); return true; } catch { return false; }
+}
+
+/* Trava de aviso: uma notificação por pessoa, por reunião e por etapa —
+   a mesma ideia do push_lembretes_log que o servidor já usa. */
+function avisoJaDado(userId, diaIso, ritualId, etapa) {
+  return ritLer("aviso_" + (userId || "anon") + "_" + diaIso + "_" + ritualId + "_" + etapa, false) === true;
+}
+function marcarAviso(userId, diaIso, ritualId, etapa) {
+  return ritGravar("aviso_" + (userId || "anon") + "_" + diaIso + "_" + ritualId + "_" + etapa, true);
+}
+
+/* Check-in de energia: nota de 1 a 10 do próprio ânimo, com motivo opcional. */
+function energiaLer(userId) {
+  const l = ritLer("energia_" + (userId || "anon"), []);
+  return Array.isArray(l) ? l : [];
+}
+function energiaGravar(userId, diaIso, nota, motivo, ajuda) {
+  const l = energiaLer(userId).filter((e) => e && e.data !== diaIso);
+  l.push({ data: diaIso, nota: Math.max(1, Math.min(10, parseInt(nota, 10) || 0)), motivo: String(motivo || "").trim().slice(0, 280), ajuda: String(ajuda || "").trim().slice(0, 280) });
+  l.sort((a, b) => String(a.data).localeCompare(String(b.data)));
+  return ritGravar("energia_" + (userId || "anon"), l.slice(-26));
+}
+function corEnergia(n) { return n >= 8 ? C.verde : n >= 5 ? C.amarelo : C.vermelho; }
+
+/* As três perguntas do planejamento, uma resposta por semana. */
+function respostasLer(userId, diaIso) { const o = ritLer("resp_" + (userId || "anon") + "_" + diaIso, null); return o && typeof o === "object" ? o : { entreguei: "", foco: "", impedimento: "" }; }
+function respostasGravar(userId, diaIso, o) { return ritGravar("resp_" + (userId || "anon") + "_" + diaIso, { entreguei: String(o.entreguei || "").slice(0, 500), foco: String(o.foco || "").slice(0, 500), impedimento: String(o.impedimento || "").slice(0, 500) }); }
+
 /* ---------- push de servidor: o aviso chega com o app FECHADO ----------
    A chave publica VAPID abaixo diz ao navegador QUEM pode mandar aviso pra
    este aparelho; a privada mora so nos segredos do Supabase. A inscricao do
@@ -3426,7 +3640,8 @@ function AppInterno() {
 
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["time", "🤝 Nosso time"],
+            ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
 
@@ -3560,7 +3775,7 @@ function AppInterno() {
             <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
-          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
+          {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
@@ -3569,6 +3784,7 @@ function AppInterno() {
           {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
+          {tela === "time" && <TelaTime user={user} usuarios={usuarios} />}
           {tela === "feedback" && <TelaFeedback user={user} registros={registros} faltas={faltas} />}
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
@@ -3997,7 +4213,7 @@ function RelogioVivo() {
   );
 }
 
-function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao }) {
+function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif, credenciais = [], onIrConfigurar, token, demo, onRegistrarSemLocalizacao, onAbrirRoteiro }) {
   // Trava anti-duplicidade: 60s de espera após uma batida (evita duplo toque e registro repetido)
   const ultima = registros.filter(r => r.userId === user.id).reduce((m, r) => Math.max(m, new Date(r.ts).getTime()), 0);
   const [batidaRecente, setBatidaRecente] = useState(0);
@@ -4022,6 +4238,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
       <CartaoMomento nome={user.nome} doDia={doDia} />
+      <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} />
       {!temLocais && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>📍 Local de trabalho ainda não configurado pelo gestor — batida liberada sem verificação de raio.</p>
       )}
@@ -4157,6 +4374,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
             <div style={{ fontSize: 13, color: C.cinza }}>{a.atrasos} atraso(s) · {a.faltas} falta(s)</div>
           </div>
           <CartaoBemEstar userId={user.id} />
+      <CartaoCombinados user={user} onAbrirRoteiro={onAbrirRoteiro} />
         </div>
       </div>
     </div>
@@ -4412,6 +4630,414 @@ function TelaFerias({ user, ferias, agendarFerias }) {
   );
 }
 
+/* Fase do dia a partir das marcações: quem ainda não bateu está chegando,
+   quem bateu entrada está em jornada, o resto já encerrou. Mesma regra do
+   CartaoMomento — é ela que decide qual dos dois avisos aparece. */
+function faseDoDia(doDia) {
+  const lista = doDia || [];
+  const ult = lista.reduce((m, r) => (!m || new Date(r.ts).getTime() > new Date(m.ts).getTime() ? r : m), null);
+  return !ult ? "chegada" : (ult.tipo === "entrada" ? "jornada" : "saida");
+}
+
+/* O aviso da reunião. Aparece duas vezes: ao encerrar o expediente, falando
+   do próximo dia com reunião, e ao chegar, falando da reunião do dia. Além
+   do cartão dispara um aviso do celular, uma única vez por etapa. */
+function CartaoReuniao({ user, doDia, onAbrirRoteiro }) {
+  const agora = new Date();
+  const fase = faseDoDia(doDia);
+  const sala = salaLer();
+  let alvo = null;
+  let etapa = "";
+  if (fase === "saida") {
+    const amanha = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() + 1);
+    alvo = proximasReunioes(amanha, 21);
+    etapa = "vespera";
+  } else {
+    const hoje = reunioesDoDia(agora);
+    const minAgora = agora.getHours() * 60 + agora.getMinutes();
+    const restantes = hoje.filter((r) => minAgora < inicioEmMinutos(r.inicio) + r.duracaoMin);
+    if (restantes.length) { alvo = { data: new Date(agora), reunioes: restantes }; etapa = "dia"; }
+  }
+  const diaIso = alvo ? dataISO(alvo.data) : "";
+  const idsAlvo = alvo ? alvo.reunioes.map((r) => r.id).join(",") : "";
+  useEffect(() => {
+    if (!alvo) return;
+    const rot = rotuloDiaReuniao(alvo.data, new Date());
+    alvo.reunioes.forEach((r) => {
+      if (avisoJaDado(user && user.id, diaIso, r.id, etapa)) return;
+      marcarAviso(user && user.id, diaIso, r.id, etapa);
+      notificarAparelho("Ponto Renovar · " + r.nome, textoAvisoReuniao(r, rot), "reuniao-" + r.id + "-" + diaIso + "-" + etapa);
+    });
+  }, [diaIso, idsAlvo, etapa]);
+  if (!alvo) return null;
+  const rotulo = rotuloDiaReuniao(alvo.data, agora);
+  return (
+    <div className="pr-relevo" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: "4px solid " + C.amarelo }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.amarelo }}>
+        {fase === "saida" ? "📌 Antes de ir: reunião " + rotulo : "📌 Reunião " + rotulo}
+      </div>
+      {alvo.reunioes.map((r) => (
+        <div key={r.id} style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 14, color: C.branco }}>
+            {r.icone} <b>{r.nome}</b>
+            <span style={{ color: C.cinza }}>{" · " + r.inicio + " · " + r.duracaoMin + " min"}</span>
+          </div>
+          <p style={{ fontSize: 12.5, color: C.cinza, margin: "4px 0 8px", lineHeight: 1.6 }}>{r.resumo}</p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {r.blocos.map((b, i) => (
+              <span key={i} style={{ ...S.tag, fontSize: 11 }}>{b.min + " min · " + b.titulo}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+        <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={onAbrirRoteiro}>Abrir o roteiro</button>
+        {sala && (
+          <button style={{ ...S.btnGhost, padding: "8px 16px", fontSize: 13 }} onClick={() => abrirSala(sala)}>🎥 Entrar na chamada</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function reuniaoAnterior(base) {
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() - 1);
+  for (let i = 0; i < 21; i++) {
+    const l = reunioesDoDia(d);
+    if (l.length) return { data: new Date(d), reunioes: l };
+    d.setDate(d.getDate() - 1);
+  }
+  return null;
+}
+
+function mmss(seg) {
+  const s = Math.max(0, Math.floor(seg));
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+
+/* Roteiro cronometrado: o app conduz a reunião bloco a bloco para o horário
+   não escorregar. Avisa quando faltam 2 minutos e nunca pula sozinho — quem
+   decide avançar é quem está conduzindo. */
+function Roteiro({ ritual, children }) {
+  const [idx, setIdx] = useState(0);
+  const [rodando, setRodando] = useState(false);
+  const [restam, setRestam] = useState(ritual.blocos[0].min * 60);
+  useEffect(() => { setIdx(0); setRodando(false); setRestam(ritual.blocos[0].min * 60); }, [ritual.id]);
+  useEffect(() => {
+    if (!rodando) return;
+    const tick = setInterval(() => setRestam((s) => (s > 0 ? s - 1 : 0)), 1000);
+    return () => clearInterval(tick);
+  }, [rodando, idx, ritual.id]);
+  const bloco = ritual.blocos[idx];
+  useEffect(() => {
+    if (rodando && restam === 120) notificarAparelho("Faltam 2 minutos", bloco.titulo + " · " + ritual.nome, "roteiro-bloco");
+  }, [restam, rodando]);
+  const total = bloco.min * 60;
+  const pct = total ? Math.max(0, Math.min(100, ((total - restam) / total) * 100)) : 0;
+  const estourou = restam === 0;
+  function irPara(n) {
+    const i = Math.max(0, Math.min(ritual.blocos.length - 1, n));
+    setIdx(i);
+    setRestam(ritual.blocos[i].min * 60);
+  }
+  return (
+    <div className="pr-relevo" style={{ ...S.card, padding: 16 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {ritual.blocos.map((b, i) => (
+          <button key={i} onClick={() => irPara(i)}
+            style={{ ...S.tag, fontSize: 11, cursor: "pointer", border: "1px solid " + (i === idx ? C.amarelo : C.borda), color: i === idx ? C.amarelo : C.cinza, background: "transparent" }}>
+            {(i + 1) + ". " + b.titulo}
+          </button>
+        ))}
+      </div>
+      <div style={{ ...S.display, fontSize: 17, color: C.branco }}>{bloco.titulo}</div>
+      <p style={{ fontSize: 13, color: C.cinza, margin: "6px 0 14px", lineHeight: 1.65 }}>{bloco.detalhe}</p>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ ...S.display, fontSize: 34, color: estourou ? C.vermelho : C.amarelo, letterSpacing: 1 }}>{mmss(restam)}</div>
+        <div style={{ fontSize: 11.5, color: C.cinza }}>{"bloco de " + bloco.min + " min"}</div>
+      </div>
+      <div style={{ height: 8, borderRadius: 99, background: C.vidro, overflow: "hidden", marginTop: 8 }}>
+        <div style={{ height: "100%", width: pct + "%", borderRadius: 99, background: estourou ? C.vermelho : C.amarelo, transition: "width .4s ease" }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={() => setRodando(!rodando)}>{rodando ? "⏸ Pausar" : "▶ Iniciar"}</button>
+        <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => setRestam((s) => s + 60)}>+1 min</button>
+        <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => irPara(idx - 1)} disabled={idx === 0}>Anterior</button>
+        <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13 }} onClick={() => irPara(idx + 1)} disabled={idx === ritual.blocos.length - 1}>Próximo bloco</button>
+      </div>
+      {children ? <div style={{ marginTop: 16, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>{children(bloco)}</div> : null}
+    </div>
+  );
+}
+
+/* Check-in de energia. A nota fica só neste aparelho: ninguém do RH lê, e
+   ela não entra em prêmio, avaliação nem desligamento. O motivo é opcional. */
+function FormEnergia({ user, hojeIso }) {
+  const atual = energiaLer(user.id).filter((e) => e.data === hojeIso)[0] || null;
+  const [nota, setNota] = useState(atual ? atual.nota : 0);
+  const [motivo, setMotivo] = useState(atual ? atual.motivo : "");
+  const [ajuda, setAjuda] = useState(atual ? atual.ajuda : "");
+  const [salvo, setSalvo] = useState(false);
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: C.branco, marginBottom: 8 }}>Sua nota de ânimo hoje</div>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+          <button key={n} onClick={() => { setNota(n); setSalvo(false); }}
+            style={{ width: 38, height: 38, borderRadius: 10, cursor: "pointer", fontWeight: 700, border: "1px solid " + (nota === n ? corEnergia(n) : C.borda), color: nota === n ? C.preto : C.cinza, background: nota === n ? corEnergia(n) : "transparent" }}>{n}</button>
+        ))}
+      </div>
+      <textarea style={{ ...S.input, marginTop: 10, minHeight: 60 }} maxLength={280} value={motivo}
+        onChange={(e) => { setMotivo(e.target.value); setSalvo(false); }} placeholder="Motivo da nota (opcional)" />
+      <textarea style={{ ...S.input, marginTop: 8, minHeight: 60 }} maxLength={280} value={ajuda}
+        onChange={(e) => { setAjuda(e.target.value); setSalvo(false); }} placeholder="Como o time pode aliviar sua carga nesta semana? (opcional)" />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} disabled={!nota}
+          onClick={() => { energiaGravar(user.id, hojeIso, nota, motivo, ajuda); setSalvo(true); }}>Guardar check-in</button>
+        {salvo && <span style={{ fontSize: 12, color: C.verde }}>guardado neste aparelho ✔</span>}
+      </div>
+      <p style={{ fontSize: 11.5, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>
+        Fica só no seu navegador, como a hidratação. O gestor não enxerga sua nota.
+      </p>
+    </div>
+  );
+}
+
+/* As três perguntas do planejamento. "O que entreguei" já vem preenchido com
+   os combinados que você fechou desde a última reunião. */
+function FormPerguntas({ user, hojeIso, acoes }) {
+  const ant = reuniaoAnterior(new Date());
+  const desde = ant ? dataISO(ant.data) : "";
+  const feitas = desde ? acoesConcluidasDesde(acoes, desde) : [];
+  const [r, setR] = useState(() => respostasLer(user.id, hojeIso));
+  const [salvo, setSalvo] = useState(false);
+  useEffect(() => {
+    if (!r.entreguei && feitas.length) setR((o) => ({ ...o, entreguei: feitas.map((a) => "• " + a.texto).join("\n") }));
+  }, [feitas.length]);
+  function campo(chave, rotulo, dica) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 12.5, color: C.branco }}>{rotulo}</div>
+        <textarea style={{ ...S.input, marginTop: 6, minHeight: 66 }} maxLength={500} value={r[chave]}
+          onChange={(e) => { setR({ ...r, [chave]: e.target.value }); setSalvo(false); }} placeholder={dica} />
+      </div>
+    );
+  }
+  return (
+    <div>
+      {campo("entreguei", "O que eu entreguei desde a última reunião?", "puxado dos seus combinados concluídos")}
+      {campo("foco", "No que eu vou focar nesta semana?", "no máximo três frentes")}
+      {campo("impedimento", "Tenho algum impedimento ou preciso de ajuda?", "diga cedo, não no fim do prazo")}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }}
+          onClick={() => { respostasGravar(user.id, hojeIso, r); setSalvo(true); }}>Guardar respostas</button>
+        {salvo && <span style={{ fontSize: 12, color: C.verde }}>guardado ✔</span>}
+      </div>
+    </div>
+  );
+}
+
+/* Combinado = o que foi acordado na reunião, com dono e prazo. É isto que
+   fecha o ciclo: vira lembrete no Bater ponto e volta preenchido na
+   pergunta "o que eu entreguei" da reunião seguinte. */
+function FormCombinado({ user, usuarios, origem, acoes, onMudar }) {
+  const [texto, setTexto] = useState("");
+  const [dono, setDono] = useState(user.nome || "");
+  const [prazo, setPrazo] = useState("");
+  const nomes = (usuarios || []).filter((u) => u && u.nome && u.ativo !== false).map((u) => u.nome);
+  const opcoes = nomes.length ? nomes : [user.nome || "eu"];
+  function salvar() {
+    if (!texto.trim()) return;
+    const lista = (acoes || []).concat([acaoNova(texto, dono, prazo, origem)]);
+    acoesGravar(user.id, lista);
+    onMudar(lista);
+    setTexto(""); setPrazo("");
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 13, color: C.branco, marginBottom: 8 }}>Registrar um combinado desta etapa</div>
+      <textarea style={{ ...S.input, minHeight: 60 }} maxLength={280} value={texto}
+        onChange={(e) => setTexto(e.target.value)} placeholder="O que ficou acordado, em uma frase" />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <select style={{ ...S.input, flex: "1 1 150px" }} value={dono} onChange={(e) => setDono(e.target.value)}>
+          {opcoes.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <input type="date" style={{ ...S.input, flex: "1 1 150px" }} value={prazo} onChange={(e) => setPrazo(e.target.value)} />
+        <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={salvar} disabled={!texto.trim()}>Combinar</button>
+      </div>
+    </div>
+  );
+}
+
+function ListaCombinados({ user, acoes, onMudar, hojeIso, compacta }) {
+  const abertas = acoesAbertas(acoes);
+  const atrasadas = acoesAtrasadas(acoes, hojeIso);
+  function alternar(id) {
+    const lista = (acoes || []).map((a) => (a.id === id ? { ...a, feito: !a.feito, feitoEm: !a.feito ? new Date().toISOString() : "" } : a));
+    acoesGravar(user.id, lista);
+    onMudar(lista);
+  }
+  const mostrar = compacta ? abertas.slice(0, 4) : (acoes || []).slice().sort((a, b) => Number(a.feito) - Number(b.feito) || String(a.prazo || "9").localeCompare(String(b.prazo || "9")));
+  if (!mostrar.length) {
+    return <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>Nenhum combinado por aqui ainda. Eles nascem nas etapas de decisão das reuniões.</p>;
+  }
+  return (
+    <div>
+      {!compacta && atrasadas.length > 0 && (
+        <p style={{ fontSize: 12.5, color: C.vermelho, margin: "0 0 10px" }}>{atrasadas.length === 1 ? "1 combinado passou do prazo." : atrasadas.length + " combinados passaram do prazo."}</p>
+      )}
+      {mostrar.map((a) => {
+        const atrasado = !a.feito && a.prazo && a.prazo < hojeIso;
+        return (
+          <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderTop: "1px solid " + C.borda }}>
+            <button onClick={() => alternar(a.id)} aria-label={a.feito ? "reabrir" : "concluir"}
+              style={{ width: 22, height: 22, marginTop: 2, flex: "0 0 auto", borderRadius: 6, cursor: "pointer", border: "1px solid " + (a.feito ? C.verde : C.bordaForte), background: a.feito ? C.verde : "transparent", color: C.preto, fontSize: 13, lineHeight: 1 }}>{a.feito ? "✓" : ""}</button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: a.feito ? C.cinza : C.branco, textDecoration: a.feito ? "line-through" : "none", lineHeight: 1.5 }}>{a.texto}</div>
+              <div style={{ fontSize: 11.5, color: atrasado ? C.vermelho : C.cinza, marginTop: 3 }}>
+                {(a.dono ? a.dono : "sem dono") + (a.prazo ? " · até " + a.prazo.split("-").reverse().join("/") : " · sem prazo") + (a.origem ? " · " + a.origem : "")}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {compacta && abertas.length > 4 && (
+        <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0" }}>{"e mais " + (abertas.length - 4) + " em Nosso time."}</p>
+      )}
+    </div>
+  );
+}
+
+/* Tela Nosso time: o roteiro das reuniões, os combinados e o check-in.
+   Nesta primeira versão tudo mora no aparelho — nenhuma tabela nova no
+   Supabase, nenhum dado saindo do navegador de quem escreveu. */
+function TelaTime({ user, usuarios }) {
+  const agora = new Date();
+  const hojeIso = dataISO(agora);
+  const [aba, setAba] = useState("roteiro");
+  const [acoes, setAcoes] = useState(() => acoesLer(user.id));
+  const [sala, setSala] = useState(() => salaLer());
+  const [salaTxt, setSalaTxt] = useState(() => salaLer());
+  const [ritualId, setRitualId] = useState(() => {
+    const d = reunioesDoDia(new Date());
+    if (d.length) return d[0].id;
+    const p = proximasReunioes(new Date(), 21);
+    return p && p.reunioes[0] ? p.reunioes[0].id : "semanal";
+  });
+  const ritual = ritualPorId(ritualId) || RITUAIS[0];
+  const ehGestor = user.papel === "gestor";
+  const prox = proximasReunioes(agora, 21);
+  const hist = energiaLer(user.id).slice(-12);
+  const abas = [["roteiro", "🗓️ Roteiro"], ["combinados", "✅ Combinados"], ["energia", "🔋 Meu check-in"]];
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Nosso time</h1>
+      {prox && (
+        <div className="pr-relevo" style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: "4px solid " + C.amarelo }}>
+          <div style={{ ...S.display, fontSize: 14, color: C.amarelo }}>PRÓXIMA REUNIÃO</div>
+          {prox.reunioes.map((r) => (
+            <div key={r.id} style={{ fontSize: 14, color: C.branco, marginTop: 6 }}>
+              {r.icone} <b>{r.nome}</b>
+              <span style={{ color: C.cinza }}>{" · " + rotuloDiaReuniao(prox.data, agora) + " às " + r.inicio + " · " + r.duracaoMin + " min"}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {sala
+              ? <button style={{ ...S.btn, padding: "8px 16px", fontSize: 13 }} onClick={() => abrirSala(sala)}>🎥 Entrar na chamada</button>
+              : <span style={{ fontSize: 12, color: C.cinza }}>Sem sala de vídeo configurada.</span>}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "18px 0 14px" }}>
+        {abas.map(([k, rot]) => (
+          <button key={k} onClick={() => setAba(k)}
+            style={{ ...(aba === k ? S.btn : S.btnGhost), padding: "8px 16px", fontSize: 13 }}>{rot}</button>
+        ))}
+      </div>
+      {aba === "roteiro" && (
+        <div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            {RITUAIS.map((r) => (
+              <button key={r.id} onClick={() => setRitualId(r.id)}
+                style={{ ...S.tag, cursor: "pointer", fontSize: 12, background: "transparent", border: "1px solid " + (r.id === ritualId ? C.amarelo : C.borda), color: r.id === ritualId ? C.amarelo : C.cinza }}>
+                {r.icone + " " + r.nome}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 12.5, color: C.cinza, margin: "0 0 12px", lineHeight: 1.6 }}>{ritual.quando + " · início " + ritual.inicio + " · " + ritual.duracaoMin + " min · " + ritual.resumo}</p>
+          <Roteiro ritual={ritual}>
+            {(bloco) => (
+              bloco.tipo === "energia" ? <FormEnergia user={user} hojeIso={hojeIso} />
+                : bloco.tipo === "metas" ? <FormPerguntas user={user} hojeIso={hojeIso} acoes={acoes} />
+                  : <FormCombinado user={user} usuarios={usuarios} origem={ritual.nome} acoes={acoes} onMudar={setAcoes} />
+            )}
+          </Roteiro>
+        </div>
+      )}
+      {aba === "combinados" && (
+        <div style={{ ...S.card, padding: 16 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.branco, marginBottom: 12 }}>Combinados do time</div>
+          <FormCombinado user={user} usuarios={usuarios} origem="avulso" acoes={acoes} onMudar={setAcoes} />
+          <div style={{ marginTop: 16 }}>
+            <ListaCombinados user={user} acoes={acoes} onMudar={setAcoes} hojeIso={hojeIso} />
+          </div>
+        </div>
+      )}
+      {aba === "energia" && (
+        <div style={{ ...S.card, padding: 16 }}>
+          <div style={{ ...S.display, fontSize: 15, color: C.branco }}>Seu ânimo nas últimas semanas</div>
+          {hist.length ? (
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 120, marginTop: 16 }}>
+              {hist.map((e) => (
+                <div key={e.data} style={{ flex: 1, textAlign: "center" }} title={e.motivo || ""}>
+                  <div style={{ height: (e.nota * 9) + "px", borderRadius: "6px 6px 0 0", background: corEnergia(e.nota) }} />
+                  <div style={{ fontSize: 10, color: C.cinza, marginTop: 5 }}>{e.data.slice(8) + "/" + e.data.slice(5, 7)}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ fontSize: 12.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>Nada registrado ainda. O check-in abre no primeiro bloco do planejamento de segunda.</p>
+          )}
+          <div style={{ marginTop: 18, borderTop: "1px solid " + C.borda, paddingTop: 14 }}>
+            <FormEnergia user={user} hojeIso={hojeIso} />
+          </div>
+        </div>
+      )}
+      {ehGestor && (
+        <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
+          <div style={{ ...S.display, fontSize: 14, color: C.branco }}>🎥 Sala de videochamada</div>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
+            O app não hospeda a chamada: cole aqui o link fixo da sala (Meet, Jitsi, Zoom) e ele passa a aparecer nos dois avisos e no topo desta tela. Só aceita endereço https.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: "1 1 240px" }} value={salaTxt} onChange={(e) => setSalaTxt(e.target.value)} placeholder="https://meet.google.com/xxx-xxxx-xxx" />
+            <button style={{ ...S.btn, padding: "8px 18px", fontSize: 13 }} onClick={() => setSala(salaGravar(salaTxt))}>Salvar</button>
+          </div>
+          {salaTxt && !salaValida(salaTxt) && <p style={{ fontSize: 12, color: C.vermelho, margin: "8px 0 0" }}>Endereço inválido — precisa começar com https://</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Combinados abertos aparecem no Bater ponto: o que foi acordado na reunião
+   encontra a pessoa no lugar em que ela entra todo dia. */
+function CartaoCombinados({ user, onAbrirRoteiro }) {
+  const [acoes, setAcoes] = useState(() => acoesLer(user.id));
+  const hojeIso = dataISO(new Date());
+  if (!acoesAbertas(acoes).length) return null;
+  return (
+    <div className="pr-relevo" style={{ ...S.card, marginTop: 14, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ ...S.display, fontSize: 14, color: C.branco }}>✅ Combinados da reunião</div>
+        <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={onAbrirRoteiro}>Ver todos</button>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <ListaCombinados user={user} acoes={acoes} onMudar={setAcoes} hojeIso={hojeIso} compacta />
+      </div>
+    </div>
+  );
+}
 function TelaGame({ user, registros, faltas, rankingUsuarios = [] }) {
   const g = useMemo(() => calcularGamificacao(user.id, registros, faltas), [user, registros, faltas]);
   const badges = useMemo(() => calcularBadges(g), [g]);
