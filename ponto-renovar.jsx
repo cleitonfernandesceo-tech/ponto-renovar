@@ -172,6 +172,10 @@ const REGRAS_ERRO = [
   [/pwned|leaked|compromised/i, "Esta senha aparece em vazamentos públicos e não pode ser usada. Escolha outra."],
   [/for security purposes|rate limit|too many requests|429/i, "Muitas tentativas seguidas. Aguarde alguns instantes e tente de novo."],
   [/sess(ã|a)o (inv(á|a)lida|expirou|expirada)|jwt (expired|invalid)|token.*expired/i, "Sua sessão expirou. Entre novamente pra continuar."],
+  // Falha de ENVIO de e-mail no servidor de auth: o Supabase devolve 500/unexpected_failure,
+  // a conta NAO e criada e a msg vem em ingles. Antes caia na mensagem generica e a pessoa
+  // achava que era erro dela. Agora diz o que houve e quem resolve: o remetente SMTP do projeto.
+  [/error sending|could not send email|gomail|smtp|verify a domain/i, "A conta não pôde ser criada porque o servidor não conseguiu enviar o e-mail de confirmação. Não é erro seu: avise o gestor pra conferir o remetente de e-mail SMTP do projeto no Supabase."],
   // --- permissão e integridade (PostgREST) ---
   [/row-level security|42501|permission denied|insufficient_privilege/i, "Você não tem permissão pra fazer isso. Se acredita que deveria ter, fale com o gestor."],
   [/duplicate key|23505|already exists/i, "Este registro já existe — provavelmente já foi salvo. Atualize a tela pra conferir."],
@@ -395,7 +399,7 @@ async function sbSignUp(email, password) {
     method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
   });
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error_description || j.msg || "Falha no cadastro");
+  if (!r.ok) throw new Error(j.error_description || j.msg || j.error || `Falha no cadastro (HTTP ${r.status})`);
   return j; // com confirmação de e-mail desativada: { access_token, user }; ativada: só { user }
 }
 // Chamada às Edge Functions do Supabase (rodam no servidor; service_role fica lá, nunca aqui)
