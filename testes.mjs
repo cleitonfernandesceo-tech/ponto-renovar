@@ -268,7 +268,9 @@ t('o SQL cria as duas tabelas opcionais',
 t('o SQL tem todas as colunas que os mapeadores leem',
   ['usuario_id', 'cftv_ciente', 'imagem_autorizada', 'atualizado_em', 'tipo', 'referencia', 'status', 'observacao', 'criado_em']
     .every((c) => sqlBloco.includes(c)));
-t('o SQL liga RLS em todas as tabelas que ele cria', (sqlBloco.match(/enable row level security/g) || []).length === 4);
+t('o SQL liga RLS em todas as tabelas que ele cria',
+  (sqlBloco.match(/enable row level security/g) || []).length ===
+  (sqlBloco.match(/create table if not exists/g) || []).length);
 t('o SQL tem a chave única usada no upsert de aceites', sqlBloco.includes('unique (usuario_id, tipo, referencia)'));
 const blocoDiag = src.slice(src.indexOf('function SecaoDiagnostico'), src.indexOf('function SecaoAceites'));
 t('o diagnóstico é só leitura (não grava nem altera nada)', !/sbInsert|sbUpsert|sbDelete|sbUpdate/.test(blocoDiag));
@@ -485,6 +487,46 @@ t("a tela avisa que o app nao paga guia nem emite codigo de barras",
   /o app n(ã|a)o paga guia (e n(ã|a)o|nem) emite c(ó|o)digo de barras/i.test(src));
 t("o resumo pro contador sai em arquivo separado", /contabilidade-" \+ alvo/.test(src) && /Resumo pro contador/.test(src));
 t("a versao nova esta nos dois arquivos", htmlPub.includes("2026.07.26-3") && swTxt.includes("2026.07.26-3"));
+
+// ══════════════════════════════════════════════════════════════
+secao("Rituais do time: reunioes, combinados e sala");
+const blocoRit = src.slice(src.indexOf("const RITUAIS = ["), src.indexOf("/* ---------- push de servidor"));
+t("os tres rituais trazem id, horario e duracao",
+  ['id: "semanal"', 'inicio: "09:15"', "duracaoMin: 45",
+   'id: "quinzenal"', 'inicio: "14:00"',
+   'id: "mensal"', 'inicio: "15:00"'].every((p) => blocoRit.includes(p)));
+t("a quinzenal segue a paridade da semana ISO",
+  src.includes("const RITUAL_QUINZENAL_PARIDADE = 0") &&
+  blocoRit.includes("semanaISO(dt) % 2 === RITUAL_QUINZENAL_PARIDADE"));
+t("nao marca reuniao em dia sem expediente", /function reunioesDoDia[\s\S]*?expedienteDoDia/.test(blocoRit));
+t("o rotulo do dia nao mente (na sexta diz o dia, nao 'amanha')",
+  blocoRit.includes('if (dif === 1) return "amanhã";') && blocoRit.includes("DIAS_POR_EXTENSO[b.getDay()]"));
+t("ha trava pra nao repetir o mesmo aviso",
+  blocoRit.includes("function avisoJaDado") && blocoRit.includes("function marcarAviso"));
+t("o check-in de energia nao vai pro banco (dado sensivel)",
+  !/sbInsert|sbUpsert|sbUpdate/.test(src.slice(src.indexOf("function energiaLer"), src.indexOf("/* As três perguntas"))));
+t("as tabelas novas entram no diagnostico",
+  /\{ nome: "combinados"/.test(src) && /\{ nome: "config_time"/.test(src));
+t("o SQL cria combinados e config_time",
+  /create table if not exists public\.combinados/.test(sqlBloco) &&
+  /create table if not exists public\.config_time/.test(sqlBloco));
+t("so o dono, quem registrou ou o gestor conclui um combinado",
+  /for update to authenticated[\s\S]*?dono_id = auth\.uid\(\) or criado_por = auth\.uid\(\)/.test(sqlBloco));
+t("sem a tabela o combinado cai pro aparelho em vez de quebrar a tela",
+  src.includes("setAcoesNoBanco(true)") && src.includes("setAcoesNoBanco(false)") && src.includes("acoesLer(perfil.id)"));
+t("o link da sala vem do banco, nao do aparelho do gestor",
+  src.includes("cfg.sala_video") && src.includes('configGravar(sessao.token, user.id, "sala_video"'));
+
+const fnPush = leia("supabase/functions/lembretes-push/index.ts");
+t("a Edge Function do push esta versionada no repositorio", fnPush.length > 2000);
+t("a Edge Function repete o mesmo calendario do app",
+  ['"09:15"', '"14:00"', '"15:00"', "QUINZENAL_PARIDADE = 0", "getUTCDay() === 1"].every((p) => fnPush.includes(p)));
+t("a Edge Function manda os dois avisos, com pauta",
+  fnPush.includes("reuniao_saida") && fnPush.includes("reuniao_chegada") && fnPush.includes("pauta"));
+t("o aviso de reuniao usa a trava de um por pessoa/dia/etapa",
+  fnPush.includes("push_lembretes_log?on_conflict=usuario_id,dia,etapa"));
+t("o README explica o agendamento dos dois avisos",
+  leia("README.md").includes("reuniao-push-saida") && leia("README.md").includes("reuniao-push-chegada"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
