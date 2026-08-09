@@ -2725,6 +2725,127 @@ function acompanhamentoCombinados(acoes, respostas, hojeIso) {
   };
 }
 
+/* ---------- resumo da semana do gestor ----------
+   Junta num lugar so o que estava espalhado por quatro telas: quais rituais
+   aconteceram nos ultimos sete dias, quantas pessoas escreveram as tres
+   perguntas, qual reuniao ficou sem ata e o que os combinados estao dizendo.
+   A nota do check-in de energia fica de fora DE PROPOSITO. A tela de quem
+   responde promete que o gestor nao le a nota de animo, e time de tres pessoas
+   nao tem media anonima: qualquer numero ali entregaria a pessoa. Resumo que
+   quebra promessa feita ao colaborador nao e resumo, e vigilancia. */
+const RESUMO_JANELA_DIAS = 7;
+
+/* Ocorrencias de ritual dentro da janela que termina em hojeIso, da mais
+   recente para a mais antiga. Dia sem expediente nao gera reuniao, entao
+   feriado nao vira "reuniao que o time faltou". */
+function rituaisDaJanela(hojeIso, dias) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(hojeIso || ""))) return [];
+  const fim = dataLocal(hojeIso);
+  const janela = dias > 0 ? dias : RESUMO_JANELA_DIAS;
+  const out = [];
+  for (let i = 0; i < janela; i++) {
+    const d = new Date(fim.getFullYear(), fim.getMonth(), fim.getDate() - i);
+    reunioesDoDia(d).forEach((r) => { if (r) out.push({ ritual: r, data: dataISO(d) }); });
+  }
+  return out;
+}
+
+/* Quantas PESSOAS escreveram alguma das tres perguntas naquele dia. Conta
+   gente, e nao linha: a mesma pessoa respondendo duas vezes continua sendo um. */
+function autoresQueResponderam(respostas, diaIso, ritualId) {
+  const vistos = {};
+  respostasDoDia(respostas, diaIso, ritualId)
+    .filter((r) => !respostaVazia(r))
+    .forEach((r) => { vistos[chaveAutorResposta(r)] = true; });
+  return Object.keys(vistos).length;
+}
+
+/* Ata daquele dia. Ata antiga pode nao ter ritualId gravado; nesse caso a data
+   sozinha ja vale, para versao velha nao aparecer como reuniao sem ata. */
+function temAtaDaReuniao(atas, diaIso, ritualId) {
+  return (atas || []).some((a) => a
+    && String(a.data || "").slice(0, 10) === diaIso
+    && (!a.ritualId || !ritualId || a.ritualId === ritualId));
+}
+
+/* Uma frase so, a mais urgente. Painel que acende cinco alarmes de uma vez
+   vira papel de parede e o gestor para de olhar; por isso aqui sai no maximo
+   um "comece por aqui", na ordem que respeita quem pediu ajuda primeiro. */
+function prioridadeDaSemana(r) {
+  const c = (r && r.combinados) || {};
+  if (c.travados > 0) return {
+    chave: "travado",
+    titulo: "Comece pelo pedido de ajuda que voltou",
+    texto: "Alguém levantou a mesma dificuldade em duas reuniões seguidas e nada mudou no meio. Antes de cobrar prazo, pergunte o que travou.",
+  };
+  if (r.semRegistro > 0) return {
+    chave: "sem-registro",
+    titulo: "Teve reunião sem nada escrito",
+    texto: "O ritual aconteceu na agenda, mas ninguém registrou entrega, foco ou impedimento. Ou a reunião não rolou, ou rolou e não virou combinado nenhum.",
+  };
+  if (c.atrasados > 0) return {
+    chave: "atrasado",
+    titulo: "Tem prazo estourado esperando conversa",
+    texto: "Combinado vencido costuma ser sinal de escopo maior do que o tempo, e não de desleixo. Vale renegociar a data em vez de repetir a cobrança.",
+  };
+  if (c.semDono + c.semPrazo > 0) return {
+    chave: "sem-dono",
+    titulo: "Tem combinado sem dono ou sem data",
+    texto: "Combinado que não diz quem faz e até quando some sozinho. Fechar isso na próxima reunião custa dois minutos.",
+  };
+  if (r.semAta > 0) return {
+    chave: "sem-ata",
+    titulo: "Teve reunião que ninguém encerrou no app",
+    texto: "A ata sai pronta quando alguém clica em encerrar. Sem esse clique, o que foi combinado fica só na memória de quem estava na sala.",
+  };
+  if (r.encontros === 0) return {
+    chave: "sem-encontro",
+    titulo: "Nenhum ritual caiu nesta janela",
+    texto: "Não houve reunião prevista nos últimos dias. Nada a fazer aqui.",
+  };
+  return null;
+}
+
+/* O resumo em si. Devolve numero e frase juntos para a tela nao ter que
+   reinterpretar nada, e devolve a lista de rituais para o gestor ver dia a dia. */
+function resumoDaSemana(acoes, respostas, atas, usuarios, hojeIso, dias) {
+  const time = (usuarios || []).filter((u) => u && u.papel !== "gestor").length;
+  const janela = dias > 0 ? dias : RESUMO_JANELA_DIAS;
+  const rituais = rituaisDaJanela(hojeIso, janela).map((o) => {
+    const responderam = autoresQueResponderam(respostas, o.data, o.ritual.id);
+    return {
+      id: o.ritual.id,
+      icone: o.ritual.icone,
+      nome: o.ritual.nome,
+      data: o.data,
+      responderam,
+      time,
+      semRegistro: responderam === 0,
+      semAta: !temAtaDaReuniao(atas, o.data, o.ritual.id),
+    };
+  });
+  const valido = /^\d{4}-\d{2}-\d{2}$/.test(String(hojeIso || ""));
+  let inicio = "";
+  if (valido) {
+    const f = dataLocal(hojeIso);
+    inicio = dataISO(new Date(f.getFullYear(), f.getMonth(), f.getDate() - (janela - 1)));
+  }
+  const combinados = acompanhamentoCombinados(acoes, respostas, hojeIso);
+  const base = {
+    inicio,
+    fim: valido ? hojeIso : "",
+    dias: janela,
+    rituais,
+    encontros: rituais.length,
+    semRegistro: rituais.filter((r) => r.semRegistro).length,
+    semAta: rituais.filter((r) => !r.semRegistro && r.semAta).length,
+    combinados,
+  };
+  base.vazio = base.encontros === 0 && combinados.vazio;
+  base.prioridade = prioridadeDaSemana(base);
+  return base;
+}
+
 /* ---------- push de servidor: o aviso chega com o app FECHADO ----------
    A chave publica VAPID abaixo diz ao navegador QUEM pode mandar aviso pra
    este aparelho; a privada mora so nos segredos do Supabase. A inscricao do
@@ -4860,7 +4981,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ acoes, respostas: rit.respostas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, demo }} />
+            <TelaGestor {...{ acoes, respostas: rit.respostas || [], atas: rit.atas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, demo }} />
           )}
         </main>
       </div>
@@ -8925,7 +9046,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ acoes = [], respostas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, demo }) {
+function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, demo }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -8971,6 +9092,54 @@ function TelaGestor({ acoes = [], respostas = [], usuarios, registros, faltas, j
             <p style={{ fontSize: 11, color: C.cinza, marginTop: 10, lineHeight: 1.5 }}>
               Só entram nesta conta os dias em que o colaborador registrou <b>saída e volta do almoço</b> (4 marcações). Em dias com um único par de marcações o resultado é o mesmo nas duas regras — a correção do intervalo e a da jornada se anulam.
             </p>
+          </div>
+        );
+      })()}
+      {(() => {
+        /* Resumo da semana. Fica antes do painel de combinados porque serve
+           de porta de entrada: uma frase dizendo por onde comecar, e so
+           depois os numeros. Sem nota de energia aqui, de proposito. */
+        const hojeR = dataISO(new Date());
+        const rs = resumoDaSemana(acoes, respostas, atas, usuarios, hojeR);
+        const corBorda = !rs.prioridade ? C.verde
+          : (rs.prioridade.chave === "travado" || rs.prioridade.chave === "atrasado") ? C.vermelho
+          : rs.prioridade.chave === "sem-encontro" ? C.borda : C.amarelo;
+        return (
+          <div style={{ ...S.card, marginTop: 14, padding: 16, borderLeft: "4px solid " + corBorda }}>
+            <div style={{ ...S.display, fontSize: 15, color: C.branco }}>🗒️ Resumo da semana</div>
+            <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 12px", lineHeight: 1.6 }}>
+              Os últimos {rs.dias} dias do time num lugar só, para você não precisar abrir quatro telas. A nota do check-in de energia não entra aqui: quem responde recebeu a promessa de que você não lê, e time de três pessoas não tem média anônima.
+            </p>
+            {rs.prioridade ? (
+              <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid " + C.borda, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: C.branco, fontWeight: 700 }}>{rs.prioridade.titulo}</div>
+                <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 4, lineHeight: 1.6 }}>{rs.prioridade.texto}</div>
+              </div>
+            ) : (
+              <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid " + C.borda, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: C.branco, fontWeight: 700 }}>Nada pedindo sua atenção nesta janela</div>
+                <div style={{ fontSize: 12.5, color: C.cinza, marginTop: 4, lineHeight: 1.6 }}>Os rituais aconteceram, ficaram registrados e os combinados estão dentro do prazo. Semana assim também merece ser dita em voz alta na próxima reunião.</div>
+              </div>
+            )}
+            {rs.encontros === 0 ? (
+              <p style={{ fontSize: 12.5, color: C.cinza, margin: 0, lineHeight: 1.6 }}>
+                Nenhum ritual estava previsto nos últimos {rs.dias} dias úteis. O calendário volta sozinho na próxima segunda.
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {rs.rituais.map((r) => (
+                  <div key={r.id + r.data} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid " + C.borda, paddingTop: 8 }}>
+                    <span style={{ fontSize: 15 }}>{r.icone}</span>
+                    <span style={{ fontSize: 13, color: C.branco }}>{r.nome}</span>
+                    <span style={{ fontSize: 12, color: C.cinza }}>{fmtData(r.data)}</span>
+                    <span style={S.tag(r.semRegistro ? C.amarelo : C.verde, "#101822")}>
+                      {r.semRegistro ? "ninguém escreveu" : r.responderam + " de " + r.time + " escreveram"}
+                    </span>
+                    {!r.semRegistro && r.semAta ? <span style={S.tag(C.cinza, "#101822")}>sem ata</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}

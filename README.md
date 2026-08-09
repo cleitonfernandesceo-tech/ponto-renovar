@@ -823,6 +823,30 @@ nao foi feito pra isso: ele se apaga em minutos e nao registra ausencia.
 Sem a tabela `presenca_chamada` o botao de entrar continua funcionando; o que
 some e so a linha dizendo quem ja chegou.
 
+### Resumo da semana do gestor
+
+O painel do gestor abre com um bloco que junta os ultimos sete dias num lugar
+so: quais rituais cairam na agenda, quantas pessoas escreveram as tres
+perguntas em cada um, qual reuniao ficou sem ata e o que os combinados estao
+dizendo. Antes dos numeros vem **uma frase so**, o "comece por aqui"
+(`prioridadeDaSemana`). A ordem e proposital: pedido de ajuda que se repetiu
+ganha de prazo estourado, e prazo estourado ganha de combinado sem dono. Quem
+levantou a mao duas vezes esta esperando ha mais tempo do que qualquer data.
+
+Painel que acende cinco alarmes de uma vez vira papel de parede, e o gestor
+para de olhar. Por isso sai no maximo um aviso por vez, e quando nao ha nada a
+apontar o bloco diz isso com todas as letras em vez de inventar urgencia.
+
+**A nota do check-in de energia nao entra aqui, de proposito.** A tela de quem
+responde promete que o gestor nao le a nota de animo, e essa promessa vale mais
+do que o grafico bonito que sairia dela. Num time de tres pessoas nao existe
+media anonima: qualquer numero exibido entregaria quem escreveu. Se um dia
+alguem quiser esse dado, o caminho honesto e pedir para o time, e nao ligar no
+painel sem avisar.
+
+O bloco tambem nao mostra nome, ranking nem contagem por pessoa. "Ninguem
+escreveu" e um recado sobre a reuniao, nao sobre um colaborador.
+
 ### Aviso de reuniao com o app fechado
 
 O codigo da funcao mora em `supabase/functions/lembretes-push/index.ts` - e a
