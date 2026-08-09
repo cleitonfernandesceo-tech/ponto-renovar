@@ -4841,16 +4841,75 @@ function AppInterno() {
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
         @media print { .no-print { display:none!important } body { background:#fff } }
-        /* ---- Responsivo: o celular é o aparelho principal (batida com biometria é no telefone) ---- */
+        /* ---- Toques de app: sem realce cinza ao tocar e sem atraso de 300ms ---- */
+        html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+        button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        /* ---- Responsivo: o celular e o aparelho principal (batida com biometria e no telefone) ---- */
         @media (max-width: 820px) {
-          .layout { flex-direction: column !important; }
-          .sidebar { width: 100% !important; border-right: none !important; border-bottom: 1px solid #1E3450; padding: 14px !important; }
-          .sidebar .menu { flex-direction: row !important; flex-wrap: wrap !important; gap: 8px !important; }
-          .sidebar .menu button { flex: 1 1 auto; min-width: 42%; font-size: 13px !important; }
+          .layout { flex-direction: column !important; min-height: 100dvh; }
+          /* barra do app: fica grudada no topo, com vidro fosco */
+          .sidebar {
+            box-sizing: border-box;
+            position: sticky; top: 0; z-index: 60;
+            width: 100% !important; border-right: none !important;
+            border-bottom: 1px solid rgba(255,255,255,.09) !important;
+            padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 0 !important;
+            background: rgba(16,26,40,.86);
+            -webkit-backdrop-filter: saturate(180%) blur(14px);
+            backdrop-filter: saturate(180%) blur(14px);
+            box-shadow: 0 10px 26px -16px rgba(0,0,0,.95);
+            display: grid !important;
+            grid-template-columns: auto 1fr auto;
+            grid-template-areas: "logo status perfil" "menu menu menu";
+            align-items: center; column-gap: 10px;
+          }
+          .sidebar > * { min-width: 0; }
+          .topo-logo { grid-area: logo; font-size: 17px !important; line-height: 1.05 !important; }
+          .topo-logo br { display: none; }
+          .topo-logo span { margin-left: 4px; }
+          .topo-empresa { display: none !important; }
+          .topo-status { grid-area: status; margin-top: 0 !important; overflow: hidden; text-align: center; }
+          .topo-status span { font-size: 10px !important; white-space: nowrap; }
+          .perfil { grid-area: perfil; margin-top: 0 !important; border-top: none !important; padding-top: 0 !important; display: flex; align-items: center; gap: 8px; }
+          .perfil > div:first-child > div:last-child { display: none; }
+          .perfil > div:first-child > div:first-child { width: 32px !important; height: 32px !important; font-size: 12px; }
+          .perfil > button { width: auto !important; min-height: 38px !important; padding: 0 12px !important; font-size: 12px !important; }
+          /* o menu vira uma fita de atalhos que rola de lado, em vez de ocupar a tela toda */
+          .sidebar .menu {
+            grid-area: menu; flex-direction: row !important; flex-wrap: nowrap !important;
+            overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity;
+            -webkit-overflow-scrolling: touch;
+            gap: 8px !important; margin: 10px -12px 0 !important; padding: 2px 12px 10px !important;
+            scrollbar-width: none;
+            -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 26px), transparent 100%);
+            mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 26px), transparent 100%);
+          }
+          .sidebar .menu::-webkit-scrollbar { display: none; }
+          .sidebar .menu button {
+            flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
+            white-space: nowrap; padding: 0 14px !important; min-height: 42px !important;
+            font-size: 13px !important; border-radius: 999px !important;
+            scroll-snap-align: center; text-align: center !important;
+          }
           .sidebar .rodape-empresa { display: none; }
-          .conteudo { padding: 16px !important; max-width: 100% !important; }
-          .conteudo h1 { font-size: 21px !important; }
+          .conteudo { padding: 14px 12px calc(24px + env(safe-area-inset-bottom, 0px)) !important; max-width: 100% !important; overflow-wrap: anywhere; }
+          .conteudo * { min-width: 0; }
+          .conteudo h1 { font-size: 20px !important; line-height: 1.15 !important; }
+          .conteudo h2 { font-size: 16px !important; }
+          .conteudo img, .conteudo canvas, .conteudo svg, .conteudo video { max-width: 100%; height: auto; }
+          /* nenhuma grade de duas colunas cabe num celular: viram uma coluna sozinhas */
+          .conteudo div[style*="grid-template-columns"] { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important; }
+          .conteudo div[style*="grid-template-columns"] > * { min-width: 0; }
           table { font-size: 11.5px !important; }
+        }
+        @media (max-width: 380px) {
+          .topo-status { display: none !important; }
+          .topo-logo { font-size: 16px !important; }
+          .sidebar .menu button { font-size: 12.5px !important; padding: 0 12px !important; }
+          .conteudo { padding-left: 10px !important; padding-right: 10px !important; }
+        }
+        @media (max-height: 480px) and (orientation: landscape) {
+          .sidebar { position: static !important; }
         }
         /* tabelas largas (folha, espelho) rolam em vez de estourar a tela */
         .rolagem-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -4870,9 +4929,9 @@ function AppInterno() {
         }`}</style>
       <div className="layout" style={{ display: "flex", minHeight: "100vh" }}>
         <aside className="no-print sidebar" style={{ width: 230, background: C.carvao, borderRight: "1px solid #1E3450", padding: 18, flexShrink: 0 }}>
-          <div style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
-          <div style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
-          <div style={{ marginTop: 8 }}>
+          <div className="topo-logo" style={{ ...S.display, fontSize: 22, color: C.amarelo, lineHeight: 1 }}>PONTO<br /><span style={{ color: C.branco }}>RENOVAR</span></div>
+          <div className="topo-empresa" style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
+          <div className="topo-status" style={{ marginTop: 8 }}>
             {demo
               ? <span style={S.tag(C.grafite, C.amarelo)}>⚡ demonstração (local)</span>
               : <span style={S.tag(C.grafite, C.verde)}>● conectado ao Supabase</span>}
@@ -4882,7 +4941,7 @@ function AppInterno() {
               <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#2A4568" }}>{label}</button>
             ))}
           </div>
-          <div style={{ marginTop: 26, borderTop: "1px solid #1E3450", paddingTop: 14 }}>
+          <div className="perfil" style={{ marginTop: 26, borderTop: "1px solid #1E3450", paddingTop: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: "50%", background: C.amarelo, color: "#111", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{user.avatar}</div>
               <div>
