@@ -597,7 +597,7 @@ const mapAte = (r) => ({ id: r.id, userId: r.usuario_id, data: r.criado_em, nome
 const mapFer = (r) => ({ id: r.id, userId: r.usuario_id, inicio: r.data_inicio, dias: r.dias, status: r.status });
 const mapLog = (r) => ({ ts: r.ts, userId: r.usuario_id || "sistema", acao: r.acao, detalhe: r.detalhe });
 const mapLocal = (r) => ({ id: r.id, nome: r.nome, latitude: r.latitude, longitude: r.longitude, raio: r.raio_metros, ativo: r.ativo });
-const mapConvite = (r) => ({ id: r.id, token: r.token, nome: r.nome, email: r.email, cargo: r.cargo, tipo: r.tipo, usado: r.usado, expiraEm: r.expira_em, dataAdmissao: r.data_admissao });
+const mapConvite = (r) => ({ id: r.id, token: r.token, nome: r.nome, email: r.email, cargo: r.cargo, tipo: r.tipo, usado: r.usado, expiraEm: r.expira_em, dataAdmissao: r.data_admissao, telefone: r.telefone || "" });
 const mapFolga = (r) => ({ id: r.id, userId: r.usuario_id, horas: +r.horas_solicitadas, dataFolga: r.data_folga_pretendida, status: r.status, decididoEm: r.decidido_em });
 /* Saldo do banco de horas: apurado nas marcações − debitado em folgas aprovadas */
 function saldoBanco(userId, registros, faltas, folgas) {
@@ -2325,6 +2325,45 @@ function motivadorGravar(token, userId, nome, fatores) {
    todo mundo e cuidado por alguem, sem precisar sortear de novo ate dar certo
    (que e justamente o que trava quando o time e pequeno). */
 const ANJO_DIAS_PADRAO = 14; // uma a duas semanas: mais que isso o time cansa
+/* ---------- telefone: abrir a conversa certa no WhatsApp ----------
+   O botao de convite abria o WhatsApp sem destinatario e o gestor tinha de
+   procurar a pessoa na mao. Guardando o numero junto do convite, o link ja
+   cai na conversa certa. Numero brasileiro pode ser digitado sem o 55 que a
+   gente completa; numero de fora precisa vir com o DDI inteiro. Devolve ""
+   quando nao da pra confiar no que foi digitado - ai o botao volta a abrir
+   o WhatsApp sem destinatario, como era antes, em vez de errar a pessoa. */
+const DDI_PADRAO = "55";
+function telefoneWhats(bruto) {
+  const txt = String(bruto == null ? "" : bruto).trim();
+  /* "+" ou "00" na frente e a pessoa dizendo que o DDI ja veio junto. Sem isso,
+     11 digitos sao um celular brasileiro sem o 55 - o caso comum aqui dentro. */
+  const jaTemDDI = txt.slice(0, 1) === "+" || txt.slice(0, 2) === "00";
+  const so = txt.replace(/[^0-9]/g, "");
+  if (!so) return "";
+  const n = so.slice(0, 2) === "00" ? so.slice(2) : so;
+  const ehBrasil = n.slice(0, 2) === DDI_PADRAO && (n.length === 12 || n.length === 13);
+  if (jaTemDDI) return ehBrasil ? n : (n.length >= 8 && n.length <= 15 ? n : "");
+  if (n.length === 10 || n.length === 11) return DDI_PADRAO + n;
+  if (ehBrasil) return n;
+  if (n.length >= 12 && n.length <= 15) return n;
+  return "";
+}
+function telefoneBonito(bruto) {
+  const n = telefoneWhats(bruto);
+  if (!n) return "";
+  if (n.slice(0, 2) === DDI_PADRAO && (n.length === 12 || n.length === 13)) {
+    const resto = n.slice(4);
+    const corte = resto.length === 9 ? 5 : 4;
+    return "(" + n.slice(2, 4) + ") " + resto.slice(0, corte) + "-" + resto.slice(corte);
+  }
+  return "+" + n;
+}
+function linkWhats(telefone, texto) {
+  const n = telefoneWhats(telefone);
+  const t = encodeURIComponent(String(texto == null ? "" : texto));
+  return n ? "https://wa.me/" + n + "?text=" + t : "https://wa.me/?text=" + t;
+}
+
 function sortearAnjos(ids, aleatorio) {
   const u = [];
   (ids || []).forEach((x) => { if (x && u.indexOf(x) < 0) u.push(x); });
@@ -3800,16 +3839,23 @@ function AppInterno() {
     const nome = limparTexto(dados.nome, LIMITES.nome);
     const email = limparTexto(dados.email, LIMITES.email).toLowerCase();
     const cargo = limparTexto(dados.cargo, LIMITES.cargo);
+    const telefone = telefoneWhats(dados.telefone);
     if (nome.length < 2) throw new Error("Informe o nome completo do colaborador.");
     if (!emailValido(email)) throw new Error("E-mail inválido.");
     if (!dataValida(dados.dataAdmissao)) throw new Error("Data de admissão inválida.");
     if (!["colaborador", "gestor"].includes(dados.tipo)) throw new Error("Tipo de acesso inválido.");
-    dados = { ...dados, nome, email, cargo };
+    dados = { ...dados, nome, email, cargo, telefone };
     if (demo) {
       const c = { id: Date.now(), token: crypto.randomUUID(), ...dados, dataAdmissao: dados.dataAdmissao, usado: false, expiraEm: iso(d(7)) };
       setConvites(cs => [c, ...cs]); return c;
     }
-    const [row] = await sbInsert(sessao.token, "convites", [{ nome, email, cargo: cargo || null, tipo: dados.tipo, data_admissao: dados.dataAdmissao, criado_por: user.id }]);
+    /* A coluna telefone e opcional: em banco que ainda nao rodou o ALTER o insert
+       volta 400 falando dela. Nesse caso grava o convite sem o numero em vez de
+       deixar o gestor sem conseguir convidar ninguem. */
+    const baseConvite = { nome, email, cargo: cargo || null, tipo: dados.tipo, data_admissao: dados.dataAdmissao, criado_por: user.id };
+    let row;
+    try { [row] = await sbInsert(sessao.token, "convites", [{ ...baseConvite, telefone: telefone || null }]); }
+    catch (e) { if (!/telefone/i.test(e && e.message ? e.message : "")) throw e; [row] = await sbInsert(sessao.token, "convites", [baseConvite]); }
     const c = mapConvite(row);
     setConvites(cs => [c, ...cs]);
     try {
@@ -6807,7 +6853,7 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
         <div style={{ ...S.card, padding: 16, marginTop: 14 }}>
           <div style={{ ...S.display, fontSize: 14, color: C.branco }}>🎥 Salas de videochamada</div>
           <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 10px", lineHeight: 1.6 }}>
-            O app não hospeda a chamada: ele guarda o endereço e mostra quem já entrou. Cada ritual pode ter a sua sala; o que ficar em branco usa o link geral. Só aceita endereço https.
+            O app não hospeda a chamada: ele guarda o endereço e mostra quem já entrou. Serve Meet, Zoom, Jitsi ou a chamada do próprio WhatsApp — no WhatsApp, aba Ligações, toque em "Criar link de chamada", copie e cole aqui. Cada ritual pode ter a sua sala; o que ficar em branco usa o link geral. Só aceita endereço https.
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {[{ id: "geral", nome: "Link geral do time", dica: "vale para o ritual que não tiver sala própria" }]
@@ -6832,7 +6878,7 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
             <button style={{ ...S.btnGhost, padding: "8px 18px", fontSize: 13 }} onClick={sugerirSalas} disabled={salvandoSala}>Sugerir endereços</button>
           </div>
           <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
-            Sugerir endereços só preenche o que estiver vazio, com um nome de sala sorteado, difícil de alguém de fora adivinhar. O app não cria nem administra a sala: abra o endereço uma vez para conferir se funciona antes de contar com ele.
+            Sugerir endereços só preenche o que estiver vazio, com um nome de sala sorteado, difícil de alguém de fora adivinhar. Link de chamada do WhatsApp não dá pra sortear: esse tem que ser criado dentro do WhatsApp e colado aqui. O app não cria nem administra a sala: abra o endereço uma vez para conferir se funciona antes de contar com ele.
           </p>
           {avisoSala && <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>{avisoSala}</p>}
         </div>
@@ -7782,8 +7828,10 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
 }
 
 function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gestorId }) {
-  const [form, setForm] = useState({ nome: "", email: "", cargo: "", tipo: "colaborador", dataAdmissao: "" });
+  const [form, setForm] = useState({ nome: "", email: "", cargo: "", telefone: "", tipo: "colaborador", dataAdmissao: "" });
   const [linkGerado, setLinkGerado] = useState(null);
+  const [geradoNome, setGeradoNome] = useState("");
+  const [geradoTel, setGeradoTel] = useState("");
   const [msg, setMsg] = useState(null);
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
@@ -7792,12 +7840,12 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
     "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" +
     "Abra o link abaixo, escolha uma senha e sua conta fica pronta na hora:\n" + link + "\n\n" +
     "O link é só seu, vale uma única vez e vence em 7 dias.";
-  const abrirWhats = (nome, link) => window.open("https://wa.me/?text=" + encodeURIComponent(msgConvite(nome, link)), "_blank", "noopener");
+  const abrirWhats = (nome, link, telefone) => window.open(linkWhats(telefone, msgConvite(nome, link)), "_blank", "noopener");
   const copiar = async (txt) => { try { await navigator.clipboard.writeText(txt); setMsg({ ok: true, txt: "Link copiado! Compartilhe com o colaborador." }); } catch { setMsg({ ok: false, txt: "Não deu pra copiar automático — selecione o link e copie manual." }); } };
   const criar = async () => {
     if (!form.nome.trim() || !/.+@.+\..+/.test(form.email) || !form.dataAdmissao || criando) { setMsg({ ok: false, txt: "Preencha nome, e-mail válido e a data de admissão (obrigatória)." }); return; }
     setCriando(true); setMsg(null);
-    try { const c = await onCriarConvite(form); setLinkGerado(linkDe(c.token)); setForm({ nome: "", email: "", cargo: "", tipo: "colaborador", dataAdmissao: "" }); }
+    try { const c = await onCriarConvite(form); setLinkGerado(linkDe(c.token)); setGeradoNome(c.nome || form.nome); setGeradoTel(c.telefone || form.telefone); setForm({ nome: "", email: "", cargo: "", telefone: "", tipo: "colaborador", dataAdmissao: "" }); }
     catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
     finally { setCriando(false); }
   };
@@ -7856,11 +7904,12 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
       ))}
 
       <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 16 }}>➕ Convidar novo colaborador</div>
-      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>⚠️ O app <b>não envia e-mail</b>. Ao criar o convite você recebe um link — quem manda para a pessoa é você, pelo WhatsApp ou pelo canal que preferir.</p>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>⚠️ O app <b>não envia e-mail</b>. Ao criar o convite você recebe um link — quem manda para a pessoa é você. Preencha o WhatsApp e o botão já abre a conversa certa, com a mensagem pronta; sem o número ele abre o WhatsApp e você escolhe o contato na mão.</p>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
         <input style={{ ...S.input, width: 170 }} placeholder="Nome completo" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} />
         <input style={{ ...S.input, width: 210 }} placeholder="email@renovartech.com.br" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
         <input style={{ ...S.input, width: 140 }} placeholder="Cargo" value={form.cargo} onChange={e => setForm({ ...form, cargo: e.target.value })} />
+        <input style={{ ...S.input, width: 170 }} placeholder="WhatsApp (31) 99999-9999" value={form.telefone} onChange={e => setForm({ ...form, telefone: e.target.value })} />
         <select style={{ ...S.input, width: 140 }} value={form.tipo} onChange={e => setForm({ ...form, tipo: e.target.value })}>
           <option value="colaborador">Colaborador</option><option value="gestor">Gestor</option>
         </select>
@@ -7872,7 +7921,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
       {linkGerado && (
         <div style={{ background: C.grafite, borderRadius: 10, padding: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <code style={{ fontSize: 12, color: C.amarelo, wordBreak: "break-all", flex: 1 }}>{linkGerado}</code>
-          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(linkGerado)}>📋 Copiar link</button><button style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => abrirWhats(null, linkGerado)}>💬 Enviar no WhatsApp</button>
+          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(linkGerado)}>📋 Copiar link</button><button style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => abrirWhats(geradoNome, linkGerado, geradoTel)}>💬 Enviar no WhatsApp</button>
         </div>
       )}
       {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
@@ -7882,10 +7931,10 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
           const [tx, bg, fg] = statusConvite(c);
           return (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #1E3450", padding: "7px 0", gap: 10 }}>
-              <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo}{c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : ""} · expira {fmtData(c.expiraEm)}</span></div>
+              <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo}{c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : ""} · expira {fmtData(c.expiraEm)}{telefoneWhats(c.telefone) ? ` · 📱 ${telefoneBonito(c.telefone)}` : " · sem WhatsApp cadastrado"}</span></div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <span style={S.tag(bg, fg)}>{tx}</span>
-                {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}{tx === "PENDENTE" && <button style={{ ...S.btn, padding: "5px 10px", fontSize: 12 }} onClick={() => abrirWhats(c.nome, linkDe(c.token))}>💬 WhatsApp</button>}
+                {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}{tx === "PENDENTE" && <button style={{ ...S.btn, padding: "5px 10px", fontSize: 12 }} onClick={() => abrirWhats(c.nome, linkDe(c.token), c.telefone)}>💬 WhatsApp</button>}
               </span>
             </div>
           );
