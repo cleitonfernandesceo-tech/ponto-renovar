@@ -1242,7 +1242,8 @@ const mapConvite = r => ({
   tipo: r.tipo,
   usado: r.usado,
   expiraEm: r.expira_em,
-  dataAdmissao: r.data_admissao
+  dataAdmissao: r.data_admissao,
+  telefone: r.telefone || ""
 });
 const mapFolga = r => ({
   id: r.id,
@@ -3730,6 +3731,44 @@ function motivadorGravar(token, userId, nome, fatores) {
    todo mundo e cuidado por alguem, sem precisar sortear de novo ate dar certo
    (que e justamente o que trava quando o time e pequeno). */
 const ANJO_DIAS_PADRAO = 14; // uma a duas semanas: mais que isso o time cansa
+/* ---------- telefone: abrir a conversa certa no WhatsApp ----------
+   O botao de convite abria o WhatsApp sem destinatario e o gestor tinha de
+   procurar a pessoa na mao. Guardando o numero junto do convite, o link ja
+   cai na conversa certa. Numero brasileiro pode ser digitado sem o 55 que a
+   gente completa; numero de fora precisa vir com o DDI inteiro. Devolve ""
+   quando nao da pra confiar no que foi digitado - ai o botao volta a abrir
+   o WhatsApp sem destinatario, como era antes, em vez de errar a pessoa. */
+const DDI_PADRAO = "55";
+function telefoneWhats(bruto) {
+  const txt = String(bruto == null ? "" : bruto).trim();
+  /* "+" ou "00" na frente e a pessoa dizendo que o DDI ja veio junto. Sem isso,
+     11 digitos sao um celular brasileiro sem o 55 - o caso comum aqui dentro. */
+  const jaTemDDI = txt.slice(0, 1) === "+" || txt.slice(0, 2) === "00";
+  const so = txt.replace(/[^0-9]/g, "");
+  if (!so) return "";
+  const n = so.slice(0, 2) === "00" ? so.slice(2) : so;
+  const ehBrasil = n.slice(0, 2) === DDI_PADRAO && (n.length === 12 || n.length === 13);
+  if (jaTemDDI) return ehBrasil ? n : n.length >= 8 && n.length <= 15 ? n : "";
+  if (n.length === 10 || n.length === 11) return DDI_PADRAO + n;
+  if (ehBrasil) return n;
+  if (n.length >= 12 && n.length <= 15) return n;
+  return "";
+}
+function telefoneBonito(bruto) {
+  const n = telefoneWhats(bruto);
+  if (!n) return "";
+  if (n.slice(0, 2) === DDI_PADRAO && (n.length === 12 || n.length === 13)) {
+    const resto = n.slice(4);
+    const corte = resto.length === 9 ? 5 : 4;
+    return "(" + n.slice(2, 4) + ") " + resto.slice(0, corte) + "-" + resto.slice(corte);
+  }
+  return "+" + n;
+}
+function linkWhats(telefone, texto) {
+  const n = telefoneWhats(telefone);
+  const t = encodeURIComponent(String(texto == null ? "" : texto));
+  return n ? "https://wa.me/" + n + "?text=" + t : "https://wa.me/?text=" + t;
+}
 function sortearAnjos(ids, aleatorio) {
   const u = [];
   (ids || []).forEach(x => {
@@ -5785,6 +5824,7 @@ function AppInterno() {
     const nome = limparTexto(dados.nome, LIMITES.nome);
     const email = limparTexto(dados.email, LIMITES.email).toLowerCase();
     const cargo = limparTexto(dados.cargo, LIMITES.cargo);
+    const telefone = telefoneWhats(dados.telefone);
     if (nome.length < 2) throw new Error("Informe o nome completo do colaborador.");
     if (!emailValido(email)) throw new Error("E-mail inválido.");
     if (!dataValida(dados.dataAdmissao)) throw new Error("Data de admissão inválida.");
@@ -5793,7 +5833,8 @@ function AppInterno() {
       ...dados,
       nome,
       email,
-      cargo
+      cargo,
+      telefone
     };
     if (demo) {
       const c = {
@@ -5807,14 +5848,27 @@ function AppInterno() {
       setConvites(cs => [c, ...cs]);
       return c;
     }
-    const [row] = await sbInsert(sessao.token, "convites", [{
+    /* A coluna telefone e opcional: em banco que ainda nao rodou o ALTER o insert
+       volta 400 falando dela. Nesse caso grava o convite sem o numero em vez de
+       deixar o gestor sem conseguir convidar ninguem. */
+    const baseConvite = {
       nome,
       email,
       cargo: cargo || null,
       tipo: dados.tipo,
       data_admissao: dados.dataAdmissao,
       criado_por: user.id
-    }]);
+    };
+    let row;
+    try {
+      [row] = await sbInsert(sessao.token, "convites", [{
+        ...baseConvite,
+        telefone: telefone || null
+      }]);
+    } catch (e) {
+      if (!/telefone/i.test(e && e.message ? e.message : "")) throw e;
+      [row] = await sbInsert(sessao.token, "convites", [baseConvite]);
+    }
     const c = mapConvite(row);
     setConvites(cs => [c, ...cs]);
     try {
@@ -12281,7 +12335,7 @@ function TelaTime({
       margin: "6px 0 10px",
       lineHeight: 1.6
     }
-  }, "O app n\xE3o hospeda a chamada: ele guarda o endere\xE7o e mostra quem j\xE1 entrou. Cada ritual pode ter a sua sala; o que ficar em branco usa o link geral. S\xF3 aceita endere\xE7o https."), /*#__PURE__*/React.createElement("div", {
+  }, "O app n\xE3o hospeda a chamada: ele guarda o endere\xE7o e mostra quem j\xE1 entrou. Serve Meet, Zoom, Jitsi ou a chamada do pr\xF3prio WhatsApp \u2014 no WhatsApp, aba Liga\xE7\xF5es, toque em \"Criar link de chamada\", copie e cole aqui. Cada ritual pode ter a sua sala; o que ficar em branco usa o link geral. S\xF3 aceita endere\xE7o https."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -12353,7 +12407,7 @@ function TelaTime({
       margin: "8px 0 0",
       lineHeight: 1.5
     }
-  }, "Sugerir endere\xE7os s\xF3 preenche o que estiver vazio, com um nome de sala sorteado, dif\xEDcil de algu\xE9m de fora adivinhar. O app n\xE3o cria nem administra a sala: abra o endere\xE7o uma vez para conferir se funciona antes de contar com ele."), avisoSala && /*#__PURE__*/React.createElement("p", {
+  }, "Sugerir endere\xE7os s\xF3 preenche o que estiver vazio, com um nome de sala sorteado, dif\xEDcil de algu\xE9m de fora adivinhar. Link de chamada do WhatsApp n\xE3o d\xE1 pra sortear: esse tem que ser criado dentro do WhatsApp e colado aqui. O app n\xE3o cria nem administra a sala: abra o endere\xE7o uma vez para conferir se funciona antes de contar com ele."), avisoSala && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.cinza,
@@ -14844,16 +14898,19 @@ function SecaoEquipe({
     nome: "",
     email: "",
     cargo: "",
+    telefone: "",
     tipo: "colaborador",
     dataAdmissao: ""
   });
   const [linkGerado, setLinkGerado] = useState(null);
+  const [geradoNome, setGeradoNome] = useState("");
+  const [geradoTel, setGeradoTel] = useState("");
   const [msg, setMsg] = useState(null);
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
   const linkDe = tk => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
   const msgConvite = (nome, link) => "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" + "Abra o link abaixo, escolha uma senha e sua conta fica pronta na hora:\n" + link + "\n\n" + "O link é só seu, vale uma única vez e vence em 7 dias.";
-  const abrirWhats = (nome, link) => window.open("https://wa.me/?text=" + encodeURIComponent(msgConvite(nome, link)), "_blank", "noopener");
+  const abrirWhats = (nome, link, telefone) => window.open(linkWhats(telefone, msgConvite(nome, link)), "_blank", "noopener");
   const copiar = async txt => {
     try {
       await navigator.clipboard.writeText(txt);
@@ -14881,10 +14938,13 @@ function SecaoEquipe({
     try {
       const c = await onCriarConvite(form);
       setLinkGerado(linkDe(c.token));
+      setGeradoNome(c.nome || form.nome);
+      setGeradoTel(c.telefone || form.telefone);
       setForm({
         nome: "",
         email: "",
         cargo: "",
+        telefone: "",
         tipo: "colaborador",
         dataAdmissao: ""
       });
@@ -15177,7 +15237,7 @@ function SecaoEquipe({
       margin: "6px 0 0",
       lineHeight: 1.6
     }
-  }, "\u26A0\uFE0F O app ", /*#__PURE__*/React.createElement("b", null, "n\xE3o envia e-mail"), ". Ao criar o convite voc\xEA recebe um link \u2014 quem manda para a pessoa \xE9 voc\xEA, pelo WhatsApp ou pelo canal que preferir."), /*#__PURE__*/React.createElement("div", {
+  }, "\u26A0\uFE0F O app ", /*#__PURE__*/React.createElement("b", null, "n\xE3o envia e-mail"), ". Ao criar o convite voc\xEA recebe um link \u2014 quem manda para a pessoa \xE9 voc\xEA. Preencha o WhatsApp e o bot\xE3o j\xE1 abre a conversa certa, com a mensagem pronta; sem o n\xFAmero ele abre o WhatsApp e voc\xEA escolhe o contato na m\xE3o."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -15216,6 +15276,17 @@ function SecaoEquipe({
     onChange: e => setForm({
       ...form,
       cargo: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 170
+    },
+    placeholder: "WhatsApp (31) 99999-9999",
+    value: form.telefone,
+    onChange: e => setForm({
+      ...form,
+      telefone: e.target.value
     })
   }), /*#__PURE__*/React.createElement("select", {
     style: {
@@ -15288,7 +15359,7 @@ function SecaoEquipe({
       padding: "6px 12px",
       fontSize: 12
     },
-    onClick: () => abrirWhats(null, linkGerado)
+    onClick: () => abrirWhats(geradoNome, linkGerado, geradoTel)
   }, "\uD83D\uDCAC Enviar no WhatsApp")), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
@@ -15323,7 +15394,7 @@ function SecaoEquipe({
         color: C.cinza,
         fontSize: 12
       }
-    }, "\xB7 ", c.email, " \xB7 ", c.tipo, c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : "", " \xB7 expira ", fmtData(c.expiraEm))), /*#__PURE__*/React.createElement("span", {
+    }, "\xB7 ", c.email, " \xB7 ", c.tipo, c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : "", " \xB7 expira ", fmtData(c.expiraEm), telefoneWhats(c.telefone) ? ` · 📱 ${telefoneBonito(c.telefone)}` : " · sem WhatsApp cadastrado")), /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         gap: 8,
@@ -15345,7 +15416,7 @@ function SecaoEquipe({
         padding: "5px 10px",
         fontSize: 12
       },
-      onClick: () => abrirWhats(c.nome, linkDe(c.token))
+      onClick: () => abrirWhats(c.nome, linkDe(c.token), c.telefone)
     }, "\uD83D\uDCAC WhatsApp")));
   })), /*#__PURE__*/React.createElement(Detalhes, {
     titulo: "Sobre desativar e convidar"

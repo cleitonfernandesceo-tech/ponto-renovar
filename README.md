@@ -613,6 +613,43 @@ com 2 batidas (almoco so de segunda a sexta). Domingo e feriado nacional nao
 geram aviso. Aparelho que desinstalou o app devolve 404/410 e a inscricao e
 apagada sozinha.
 
+### WhatsApp do convite
+
+O app nao envia e-mail: quem manda o convite pra pessoa e o gestor. O botao
+**WhatsApp** existia desde a versao anterior, mas abria o WhatsApp *sem
+destinatario* - o gestor ainda tinha de achar o contato na mao, e num time em
+que varias pessoas se chamam parecido isso e pedido pra mandar o link pra
+pessoa errada. Um convite e de uso unico: se cair na conversa errada, quem
+recebeu cria a conta no lugar do colega.
+
+Por isso o formulario de convite agora tem o campo **WhatsApp**. Com o numero
+salvo, o botao abre direto a conversa daquela pessoa com a mensagem pronta. O
+campo e opcional: sem numero o botao volta a se comportar como antes, abrindo
+o WhatsApp pra voce escolher o contato - e a lista de convites mostra `sem
+WhatsApp cadastrado` pra voce saber de quais convites esperar esse trabalho a
+mais.
+
+O numero e normalizado por `telefoneWhats`: numero brasileiro pode ser digitado
+como a gente escreve no dia a dia (`(31) 99999-8888`) que o `55` entra sozinho;
+numero de fora precisa vir com o DDI. O que nao der pra confiar vira string
+vazia, e o botao prefere abrir sem destinatario a abrir na conversa errada.
+
+A coluna e opcional no banco - sem ela o convite continua sendo criado, so
+nunca guarda numero nenhum:
+
+```sql
+-- WhatsApp do convite
+alter table public.convites add column if not exists telefone text;
+```
+
+### Chamada de video pelo WhatsApp
+
+O campo de sala aceita qualquer endereco `https`, entao a chamada do WhatsApp
+funciona sem nenhuma mudanca de codigo: no WhatsApp, aba **Ligacoes**, toque em
+**Criar link de chamada**, copie e cole em **Nosso time > Salas de
+videochamada**. Esse link e o unico que o botao **Sugerir enderecos** nao
+consegue sortear, porque so o WhatsApp pode cria-lo.
+
 ### Segredos (Edge Functions > Secrets)
 
 - `VAPID_PUBLIC_KEY` - a mesma chave que esta em `VAPID_PUBLICA` no app (publica).

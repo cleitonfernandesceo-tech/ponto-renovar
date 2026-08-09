@@ -50,7 +50,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   enderecoSalaSugerido, sortearSementeSala, mapPresenca, presencaAtiva, textoPresenca,
   RESUMO_JANELA_DIAS, rituaisDaJanela, autoresQueResponderam, temAtaDaReuniao,
   prioridadeDaSemana, resumoDaSemana,
-  aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES };`;
+  aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES,
+  telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1051,6 +1052,42 @@ t("o SQL da tabela vem junto no botao Copiar SQL",
 t("so o gestor pode aprovar (RLS)", src.includes("ajustes: so o gestor decide"));
 t("o README explica a correcao de ponto",
   leia("README.md").includes("### Corrigir uma marcacao"));
+
+// ══════════════════════════════════════════════════════════════
+secao("WhatsApp do convite");
+t("celular com DDD ganha o 55 na frente", m.telefoneWhats("(31) 99999-8888") === "5531999998888");
+t("aceita o numero digitado so com digitos", m.telefoneWhats("31999998888") === "5531999998888");
+t("fixo de 10 digitos tambem vale", m.telefoneWhats("3132223333") === "553132223333");
+t("numero que ja veio com 55 nao ganha outro", m.telefoneWhats("5531999998888") === "5531999998888");
+t("55 duplicado nao acontece", m.telefoneWhats("+55 (31) 99999-8888") === "5531999998888");
+t("zero zero internacional some", m.telefoneWhats("005531999998888") === "5531999998888");
+t("numero de fora passa inteiro", m.telefoneWhats("+1 415 555 2671") === "14155552671");
+t("numero curto demais e recusado", m.telefoneWhats("99998888") === "");
+t("numero comprido demais e recusado", m.telefoneWhats("1234567890123456") === "");
+t("campo vazio devolve vazio", m.telefoneWhats("") === "" && m.telefoneWhats(null) === "" && m.telefoneWhats(undefined) === "");
+t("letra no meio nao derruba", m.telefoneWhats("31 9 9999-8888 (casa)") === "5531999998888");
+t("o DDI padrao e o do Brasil", m.DDI_PADRAO === "55");
+
+t("celular aparece formatado pro gestor conferir", m.telefoneBonito("31999998888") === "(31) 99999-8888");
+t("fixo aparece com quatro digitos no meio", m.telefoneBonito("3132223333") === "(31) 3222-3333");
+t("numero de fora aparece com o mais", m.telefoneBonito("+1 415 555 2671") === "+14155552671");
+t("numero invalido nao vira texto bonito", m.telefoneBonito("123") === "");
+
+t("com numero o link cai na conversa certa", m.linkWhats("31999998888", "oi").startsWith("https://wa.me/5531999998888?text="));
+t("sem numero o link so abre o WhatsApp", m.linkWhats("", "oi") === "https://wa.me/?text=oi");
+t("numero invalido nao inventa destinatario", m.linkWhats("123", "oi") === "https://wa.me/?text=oi");
+t("o texto vai codificado", m.linkWhats("", "a b&c") === "https://wa.me/?text=a%20b%26c");
+t("link nunca sai sem https", m.linkWhats("31999998888", "x").startsWith("https://"));
+
+t("o formulario de convite pede o WhatsApp", src.includes("WhatsApp (31) 99999-9999"));
+t("o telefone viaja junto do convite pro banco", src.includes("telefone: telefone || null"));
+t("o convite lido do banco traz o telefone", src.includes("telefone: r.telefone"));
+t("o botao do convite usa o numero cadastrado", src.includes("abrirWhats(c.nome, linkDe(c.token), c.telefone)"));
+t("o botao do convite recem-criado tambem", src.includes("abrirWhats(geradoNome, linkGerado, geradoTel)"));
+t("a lista avisa quando falta o numero", src.includes("sem WhatsApp cadastrado"));
+t("convite nao quebra em banco sem a coluna", src.includes("[row] = await sbInsert(sessao.token, \"convites\", [baseConvite])"));
+t("a sala de reuniao aceita chamada do WhatsApp", src.includes("Criar link de chamada"));
+t("o README explica o WhatsApp do convite", leia("README.md").includes("### WhatsApp do convite"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
