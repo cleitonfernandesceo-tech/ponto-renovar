@@ -140,6 +140,29 @@ codigo de conduta) sao opcionais: se ainda nao existirem no Supabase, o app cont
 funcionando normalmente e apenas nao persiste esses registros - o carregamento de cada uma
 fica isolado em seu proprio tratamento de erro.
 
+### Corrigir uma marcacao
+
+Esquecer de bater o ponto acontece. Antes, quando acontecia, o espelho ficava
+errado pra sempre: o app nao tinha nenhum caminho de correcao.
+
+Agora, no **Espelho de ponto**, cada dia tem o botao **Pedir correcao**. O
+colaborador escolhe o que houve - faltou uma marcacao, o horario esta errado ou
+a batida nao deveria existir -, informa o horario certo e escreve o motivo
+(minimo 10 caracteres). O pedido cai na fila **Correcoes de ponto** do painel do
+gestor, que aprova ou recusa; pra recusar, a resposta ao colaborador e
+obrigatoria. Cada pedido e cada decisao entram na trilha de auditoria.
+
+O ponto importante: **a marcacao original nunca e alterada nem apagada.** Ela
+continua no banco exatamente como o coletor gravou e e ela que sai no AFD
+(Portaria MTP 671/2021). O que a aprovacao muda e a *jornada tratada* - espelho,
+banco de horas, premio, folha e AEJ -, montada aplicando os ajustes aprovados por
+cima dos registros brutos. No espelho, o horario corrigido aparece com `*` e o
+horario original continua guardado em `tsOriginal`.
+
+Precisa da tabela opcional `ajustes_ponto` (SQL em *Painel do gestor ->
+Diagnostico do sistema -> Copiar SQL*). Sem ela o app roda igual, so que sem o
+caminho de correcao.
+
 ## Base legal
 
 Registro eletronico de ponto conforme CLT art. 74 e Portaria MTP 671/2021; jornada, banco de
@@ -535,7 +558,42 @@ create policy "presenca: cada um atualiza a sua" on public.presenca_chamada
 
 drop policy if exists "presenca: cada um apaga a sua" on public.presenca_chamada;
 create policy "presenca: cada um apaga a sua" on public.presenca_chamada
-  for delete to authenticated using (usuario_id = auth.uid());```
+  for delete to authenticated using (usuario_id = auth.uid());
+
+-- Correcao de marcacao (Portaria 671/2021): guarda o PEDIDO de ajuste.
+-- A marcacao original em public.marcacoes nunca e alterada nem apagada;
+-- o espelho e o banco de horas aplicam por cima so o que o gestor aprovou.
+create table if not exists public.ajustes_ponto (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  solicitante_id uuid not null references public.usuarios (id) on delete cascade,
+  dia date not null,
+  acao text not null check (acao in ('incluir', 'alterar', 'excluir')),
+  tipo text check (tipo in ('entrada', 'saida')),
+  marcacao_ts timestamptz,
+  hora_nova timestamptz,
+  motivo text not null,
+  status text not null default 'pendente' check (status in ('pendente', 'aprovado', 'recusado')),
+  resposta text,
+  decidido_por uuid references public.usuarios (id),
+  decidido_em timestamptz,
+  criado_em timestamptz not null default now()
+);
+create index if not exists ajustes_ponto_usuario_dia on public.ajustes_ponto (usuario_id, dia);
+alter table public.ajustes_ponto enable row level security;
+
+drop policy if exists "ajustes: cada um ve os seus" on public.ajustes_ponto;
+create policy "ajustes: cada um ve os seus" on public.ajustes_ponto
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "ajustes: cada um pede o seu" on public.ajustes_ponto;
+create policy "ajustes: cada um pede o seu" on public.ajustes_ponto
+  for insert to authenticated
+  with check (solicitante_id = auth.uid() and status = 'pendente' and (usuario_id = auth.uid() or is_gestor()));
+
+drop policy if exists "ajustes: so o gestor decide" on public.ajustes_ponto;
+create policy "ajustes: so o gestor decide" on public.ajustes_ponto
+  for update to authenticated using (is_gestor()) with check (is_gestor());```
 
 ## Push de servidor (lembrete com o app fechado)
 
