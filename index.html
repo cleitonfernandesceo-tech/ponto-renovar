@@ -2037,6 +2037,29 @@ for (let i = 10; i >= 1; i--) {
   pushDia("u2", -i, 7, 58, 18, 6); // Marina: sempre pontual, expediente cheio 8-18
   pushDia("u3", -i, i % 3 === 0 ? 8 : 8, i % 3 === 0 ? 40 : i % 2 === 0 ? 25 : 2, 18, 0, i === 4); // Rafael: atrasos e 1 falta
 }
+
+/* Um pedido de correcao ja aberto no modo demonstracao: o gestor abre o app e
+   ve a fila funcionando, sem precisar de dado real nenhum. */
+const AJUSTES_SEED = (() => {
+  const alvo = REGISTROS_SEED.filter(r => r.userId === "u3" && r.tipo === "saida").slice(-1)[0];
+  if (!alvo) return [];
+  return [{
+    id: "aj-demo-1",
+    userId: "u3",
+    solicitanteId: "u3",
+    dia: dataISO(new Date(alvo.ts)),
+    acao: "alterar",
+    tipo: "saida",
+    alvoTs: alvo.ts,
+    horaNova: iso(new Date(new Date(alvo.ts).getTime() + 42 * 60000)),
+    motivo: "Fiquei fechando o inventário e só lembrei de bater o ponto depois. O horário certo é o corrigido.",
+    status: "pendente",
+    resposta: "",
+    decididoPor: null,
+    decididoEm: null,
+    criadoEm: iso(new Date())
+  }];
+})();
 const FALTAS_SEED = [{
   userId: "u3",
   data: iso(d(-4)),
@@ -2090,6 +2113,114 @@ function agruparPorDia(registros, userId) {
   // Ordenar aqui torna todo o sistema imune à ordem em que os dados são carregados.
   Object.values(dias).forEach(regs => regs.sort((a, b) => new Date(a.ts) - new Date(b.ts)));
   return dias;
+}
+
+/* ---------- correcao de marcacao (Portaria 671/2021) ----------------------
+   A marcacao original nunca e apagada nem reescrita: ela e o registro fiel do
+   coletor e continua indo inteira pro AFD. O que existe aqui e um PEDIDO de
+   ajuste, que passa pelo gestor. A jornada tratada -- espelho, banco de horas,
+   premio, folha e AEJ -- e montada aplicando por cima somente os ajustes
+   APROVADOS, e cada marcacao mexida carrega tsOriginal e ajustada, pro app
+   conseguir mostrar o "antes" do lado do "depois".
+   Sem isso quem esquecia de bater a saida ficava com o espelho errado pra
+   sempre: o app nao tinha nenhum caminho de correcao. */
+const AJUSTE_ACOES = ["incluir", "alterar", "excluir"];
+const AJUSTE_MOTIVO_MIN = 10;
+const mapAjuste = r => ({
+  id: r.id,
+  userId: r.usuario_id,
+  solicitanteId: r.solicitante_id,
+  dia: r.dia,
+  acao: r.acao,
+  tipo: r.tipo || null,
+  alvoTs: r.marcacao_ts || null,
+  horaNova: r.hora_nova || null,
+  motivo: r.motivo || "",
+  status: r.status || "pendente",
+  resposta: r.resposta || "",
+  decididoPor: r.decidido_por || null,
+  decididoEm: r.decidido_em || null,
+  criadoEm: r.criado_em || null
+});
+const chaveMarcacao = (userId, ts) => String(userId) + "|" + new Date(ts).getTime();
+function aplicarAjustes(registros, ajustes) {
+  const base = Array.isArray(registros) ? registros : [];
+  const aprovados = (Array.isArray(ajustes) ? ajustes : []).filter(a => a && a.status === "aprovado");
+  if (aprovados.length === 0) return base;
+  const excluir = new Set();
+  const alterar = new Map();
+  const incluir = [];
+  aprovados.forEach(a => {
+    if (a.acao === "excluir" && a.alvoTs) excluir.add(chaveMarcacao(a.userId, a.alvoTs));else if (a.acao === "alterar" && a.alvoTs && a.horaNova) alterar.set(chaveMarcacao(a.userId, a.alvoTs), a);else if (a.acao === "incluir" && a.horaNova && a.tipo) incluir.push({
+      nsr: null,
+      userId: a.userId,
+      tipo: a.tipo,
+      ts: new Date(a.horaNova).toISOString(),
+      lat: null,
+      lng: null,
+      foto: null,
+      facialOk: false,
+      metodo: "ajuste_aprovado",
+      ajustada: true,
+      ajusteId: a.id || null
+    });
+  });
+  const saida = [];
+  base.forEach(r => {
+    if (!r || !r.ts) {
+      saida.push(r);
+      return;
+    }
+    const k = chaveMarcacao(r.userId, r.ts);
+    if (excluir.has(k)) return;
+    const a = alterar.get(k);
+    if (!a) {
+      saida.push(r);
+      return;
+    }
+    saida.push({
+      ...r,
+      ts: new Date(a.horaNova).toISOString(),
+      tipo: a.tipo || r.tipo,
+      tsOriginal: r.tsOriginal || r.ts,
+      ajustada: true,
+      ajusteId: a.id || null
+    });
+  });
+  return saida.concat(incluir).sort((x, y) => new Date(x.ts) - new Date(y.ts));
+}
+
+/* Guarda de entrada: roda igual no formulario do colaborador e antes de gravar. */
+function validarAjuste(pedido, registros) {
+  const p = pedido || {};
+  if (!AJUSTE_ACOES.includes(p.acao)) return "Escolha o que precisa ser corrigido nesse dia.";
+  if (limparTexto(p.motivo, LIMITES.obs).trim().length < AJUSTE_MOTIVO_MIN) return "Explique o motivo com pelo menos " + AJUSTE_MOTIVO_MIN + " caracteres — quem aprova precisa entender o que houve.";
+  if (p.acao !== "incluir" && !p.alvoTs) return "Escolha qual marcação do dia deve ser corrigida.";
+  if (p.acao !== "excluir") {
+    if (p.tipo !== "entrada" && p.tipo !== "saida") return "Diga se a marcação é de entrada ou de saída.";
+    const t = new Date(p.horaNova);
+    if (!p.horaNova || isNaN(t.getTime())) return "Informe o horário no formato HH:MM.";
+    if (t.getTime() - Date.now() > 60000) return "Não dá pra pedir correção de um horário que ainda nem aconteceu.";
+  }
+  if (p.acao === "incluir") {
+    const repetida = (registros || []).some(r => r && r.userId === p.userId && r.tipo === p.tipo && Math.abs(new Date(r.ts) - new Date(p.horaNova)) < 60000);
+    if (repetida) return "Já existe uma marcação desse tipo nesse horário.";
+  }
+  return null;
+}
+const ajustesPendentes = ajustes => (Array.isArray(ajustes) ? ajustes : []).filter(a => a && a.status === "pendente");
+
+/* Frase curta do pedido, usada na fila do gestor, no espelho e na auditoria. */
+function resumoAjuste(a) {
+  if (!a) return "";
+  const h = v => v ? new Date(v).toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }) : "--:--";
+  const rot = a.tipo === "saida" ? "saída" : "entrada";
+  if (a.acao === "incluir") return "incluir " + rot + " às " + h(a.horaNova);
+  if (a.acao === "excluir") return "apagar a marcação das " + h(a.alvoTs);
+  return "mudar a marcação das " + h(a.alvoTs) + " para " + rot + " às " + h(a.horaNova);
 }
 function analisarAssiduidade(userId, registros, faltas) {
   const dias = agruparPorDia(registros, userId);
@@ -5162,7 +5293,12 @@ function AppInterno() {
   const [sessao, setSessao] = useState(null); // { token, uid }
   const [user, setUser] = useState(null);
   const [usuarios, setUsuarios] = useState([]);
-  const [registros, setRegistros] = useState([]);
+  const [registrosBrutos, setRegistros] = useState([]);
+  const [ajustes, setAjustes] = useState([]);
+  /* registros = jornada TRATADA: as marcacoes do coletor com os ajustes ja
+     aprovados aplicados por cima. registrosBrutos e o que o relogio gravou e
+     e ele que vai pro AFD, intocado. Toda a tela usa a versao tratada. */
+  const registros = useMemo(() => aplicarAjustes(registrosBrutos, ajustes), [registrosBrutos, ajustes]);
   const [faltas, setFaltas] = useState([]);
   const [justificativas, setJustificativas] = useState([]);
   const [atestados, setAtestados] = useState([]);
@@ -5438,6 +5574,16 @@ function AppInterno() {
           setAceites(rows.map(mapAceite));
         } catch (e) {
           console.warn("[aceites]", e.message);
+        }
+      })();
+      // Correcoes de ponto: tabela opcional (ajustes_ponto). Sem ela o app roda
+      // igual, so que sem o caminho de correcao.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "ajustes_ponto", "select=*&order=criado_em.desc");
+          setAjustes(rows.map(mapAjuste));
+        } catch (e) {
+          console.warn("[ajustes de ponto]", e.message);
         }
       })();
       // Combinados das reunioes: tabela opcional (combinados). Sem ela o app
@@ -5763,6 +5909,7 @@ function AppInterno() {
     setDemo(true);
     setUsuarios(USUARIOS_SEED);
     setRegistros(REGISTROS_SEED);
+    setAjustes(AJUSTES_SEED);
     setFaltas(FALTAS_SEED.map((f, i) => ({
       id: `fd${i}`,
       ...f,
@@ -5831,6 +5978,7 @@ function AppInterno() {
     setRit(ritVazio());
     setUsuarios([]);
     setRegistros([]);
+    setAjustes([]);
     setFaltas([]);
     setJustificativas([]);
     setAtestados([]);
@@ -7516,6 +7664,59 @@ function AppInterno() {
     }]);
     log("lgpd", `Termo de imagem: CFTV ${cftvCiente ? "ciente" : "sem ciência"} · divulgação ${autorizada ? "AUTORIZADA" : "NÃO autorizada"}`);
   };
+
+  /* ---------- correcao de ponto ---------- */
+  const nomeDeUsuario = id => (usuarios.find(u => u.id === id) || {}).nome || "colaborador";
+  const pedirAjuste = async pedido => {
+    const erro = validarAjuste(pedido, registrosBrutos);
+    if (erro) throw new Error(erro);
+    const agora = iso(new Date());
+    const linha = {
+      usuario_id: pedido.userId,
+      solicitante_id: user.id,
+      dia: pedido.dia,
+      acao: pedido.acao,
+      tipo: pedido.acao === "excluir" ? null : pedido.tipo,
+      marcacao_ts: pedido.alvoTs || null,
+      hora_nova: pedido.acao === "excluir" ? null : new Date(pedido.horaNova).toISOString(),
+      motivo: limparTexto(pedido.motivo, LIMITES.obs),
+      status: "pendente",
+      criado_em: agora
+    };
+    let salvo = {
+      ...linha,
+      id: "local-" + Date.now()
+    };
+    if (!demo) {
+      const r = await sbInsert(sessao.token, "ajustes_ponto", [linha]);
+      if (Array.isArray(r) && r[0]) salvo = r[0];
+    }
+    const novo = mapAjuste(salvo);
+    setAjustes(as => [novo, ...as]);
+    log("ajuste_pedido", "Correção de ponto pedida para " + fmtData(pedido.dia + "T12:00:00") + " (" + nomeDeUsuario(pedido.userId) + "): " + resumoAjuste(novo) + " — " + novo.motivo);
+    return novo;
+  };
+  const decidirAjuste = async (id, status, resposta) => {
+    const texto = limparTexto(resposta || "", LIMITES.obs).trim();
+    if (status === "recusado" && texto.length < 5) throw new Error("Diga em uma linha por que está recusando — o colaborador precisa saber o motivo.");
+    const alvo = ajustes.find(a => a.id === id);
+    if (!alvo) throw new Error("Esse pedido não está mais na fila. Atualize a página.");
+    const agora = iso(new Date());
+    if (!demo) await sbUpdate(sessao.token, "ajustes_ponto", "id=eq." + id, {
+      status,
+      resposta: texto || null,
+      decidido_por: user.id,
+      decidido_em: agora
+    });
+    setAjustes(as => as.map(a => a.id === id ? {
+      ...a,
+      status,
+      resposta: texto,
+      decididoPor: user.id,
+      decididoEm: agora
+    } : a));
+    log("ajuste_decidido", "Correção de ponto de " + nomeDeUsuario(alvo.userId) + " em " + fmtData(alvo.dia + "T12:00:00") + " (" + resumoAjuste(alvo) + "): " + status.toUpperCase() + (texto ? " — " + texto : ""));
+  };
   const salvarAceite = async (tipo, ref, status, obs) => {
     const agora = iso(new Date());
     if (!demo) await sbUpsert(sessao.token, 'aceites', [{
@@ -7541,7 +7742,7 @@ function AppInterno() {
   const cpfDe = userId => usuarios.find(u => u.id === userId)?.cpf || "";
   const exportarAFD = async () => {
     // Portaria 671: em batida offline, tsMarcacao (quando bateu) difere de tsGravacao (quando gravou).
-    const marcacoes = registros.filter(r => r.nsr).map(r => ({
+    const marcacoes = registrosBrutos.filter(r => r.nsr).map(r => ({
       nsr: r.nsr,
       cpf: cpfDe(r.userId),
       tsMarcacao: r.tsOriginal || r.ts,
@@ -8143,7 +8344,9 @@ function AppInterno() {
     exportarAFD: exportarAFD,
     exportarAEJ: exportarAEJ,
     aceites: aceites,
-    onAceitar: salvarAceite
+    onAceitar: salvarAceite,
+    ajustes: ajustes.filter(a => a.userId === user.id),
+    onPedirAjuste: pedirAjuste
   }), tela === "justificar" && /*#__PURE__*/React.createElement(TelaJustificar, {
     user,
     justificativas,
@@ -8258,6 +8461,8 @@ function AppInterno() {
     onSalvarLinhaGuia: salvarLinhaGuia,
     consImagem,
     aceites,
+    ajustes,
+    onDecidirAjuste: decidirAjuste,
     demo
   }))));
 }
@@ -9727,8 +9932,11 @@ function TelaEspelho({
   exportarAFD,
   exportarAEJ,
   aceites = [],
-  onAceitar
+  onAceitar,
+  ajustes = [],
+  onPedirAjuste
 }) {
+  const [pedindo, setPedindo] = useState(null); // { dia, regs }
   const todosDias = agruparPorDia(registros, user.id);
   // O espelho e o aceite sao MENSAIS: lista as competencias com marcacao, mais recente primeiro.
   const comps = Array.from(new Set(Object.values(todosDias).map(regs => compDe(new Date(regs[0].ts))))).sort().reverse();
@@ -9821,7 +10029,9 @@ function TelaEspelho({
     style: {
       padding: 8
     }
-  }, "Data"), /*#__PURE__*/React.createElement("th", null, "Marca\xE7\xF5es"), /*#__PURE__*/React.createElement("th", null, "Trabalhado"), /*#__PURE__*/React.createElement("th", null, "Saldo do dia"))), /*#__PURE__*/React.createElement("tbody", null, Object.entries(dias).map(([dia, regs]) => {
+  }, "Data"), /*#__PURE__*/React.createElement("th", null, "Marca\xE7\xF5es"), /*#__PURE__*/React.createElement("th", null, "Trabalhado"), /*#__PURE__*/React.createElement("th", null, "Saldo do dia"), /*#__PURE__*/React.createElement("th", {
+    className: "no-print"
+  }))), /*#__PURE__*/React.createElement("tbody", null, Object.entries(dias).map(([dia, regs]) => {
     const exp = expedienteDoDia(new Date(regs[0].ts));
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
@@ -9847,8 +10057,82 @@ function TelaEspelho({
         color: saldo >= 0 ? C.verde : C.vermelho,
         fontWeight: 700
       }
-    }, hmm(saldo)));
-  }))), (() => {
+    }, hmm(saldo)), /*#__PURE__*/React.createElement("td", {
+      className: "no-print",
+      style: {
+        textAlign: "right"
+      }
+    }, (() => {
+      const doDia = ajustes.filter(a => a.dia === dataISO(new Date(regs[0].ts)));
+      const pend = doDia.find(a => a.status === "pendente");
+      if (pend) return /*#__PURE__*/React.createElement("span", {
+        style: {
+          ...S.tag(C.amarelo, "#0B1526"),
+          fontSize: 10
+        },
+        title: pend.motivo
+      }, "em an\xE1lise");
+      const recusado = doDia.find(a => a.status === "recusado");
+      return /*#__PURE__*/React.createElement("span", {
+        style: {
+          display: "inline-flex",
+          gap: 6,
+          alignItems: "center"
+        }
+      }, recusado && /*#__PURE__*/React.createElement("span", {
+        style: {
+          ...S.tag(C.vermelho, "#fff"),
+          fontSize: 10
+        },
+        title: recusado.resposta || "sem resposta"
+      }, "recusado"), /*#__PURE__*/React.createElement("button", {
+        style: {
+          ...S.btnGhost,
+          padding: "5px 10px",
+          fontSize: 11
+        },
+        onClick: () => setPedindo({
+          dia: dataISO(new Date(regs[0].ts)),
+          regs
+        })
+      }, "Pedir corre\xE7\xE3o"));
+    })()));
+  }))), pedindo && /*#__PURE__*/React.createElement(FormAjustePonto, {
+    dia: pedindo.dia,
+    regs: pedindo.regs,
+    userId: user.id,
+    onCancelar: () => setPedindo(null),
+    onEnviar: async p => {
+      await onPedirAjuste(p);
+      setPedindo(null);
+    }
+  }), ajustes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "no-print",
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      marginBottom: 6
+    }
+  }, "Seus pedidos de corre\xE7\xE3o"), ajustes.slice(0, 8).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      fontSize: 12,
+      color: "#B3C2DA",
+      padding: "5px 0",
+      borderTop: "1px solid #16283F",
+      lineHeight: 1.6
+    }
+  }, fmtData(a.dia + "T12:00:00"), " \xB7 ", resumoAjuste(a), " \xB7 ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: a.status === "aprovado" ? C.verde : a.status === "recusado" ? C.vermelho : C.amarelo
+    }
+  }, a.status), a.resposta ? " — " + a.resposta : ""))), (() => {
     const todosRegs = Object.values(dias).reduce((ac, v) => ac.concat(v), []);
     const marcas = [{
       s: "ᴬ",
@@ -9923,6 +10207,185 @@ function TelaEspelho({
 /* Aceite mensal do espelho de ponto: prova datada de que o colaborador conferiu as
    proprias marcacoes. Contestar exige descrever a divergencia, que chega ao gestor.
    O aceite e ciencia - nao convalida erro nem impede correcao depois (CLT art. 9º). */
+/* Pedido de correcao de marcacao. Mora dentro do espelho, na linha do dia
+   errado, porque e olhando o espelho que a pessoa percebe o problema. */
+function FormAjustePonto({
+  dia,
+  regs = [],
+  userId,
+  onCancelar,
+  onEnviar
+}) {
+  const [acao, setAcao] = useState(regs.length ? "alterar" : "incluir");
+  const [tipo, setTipo] = useState("saida");
+  const [alvo, setAlvo] = useState((regs[0] || {}).ts || "");
+  const [hora, setHora] = useState("18:00");
+  const [motivo, setMotivo] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const montar = () => ({
+    userId,
+    dia,
+    acao,
+    tipo: acao === "excluir" ? null : tipo,
+    alvoTs: acao === "incluir" ? null : alvo,
+    horaNova: acao === "excluir" ? null : dia + "T" + hora + ":00",
+    motivo
+  });
+  const enviar = async () => {
+    if (salvando) return;
+    const p = montar();
+    const e = validarAjuste(p, regs);
+    if (e) {
+      setErro(e);
+      return;
+    }
+    setSalvando(true);
+    setErro(null);
+    try {
+      await onEnviar(p);
+    } catch (ex) {
+      setErro(mensagemAmigavel(ex, "ao enviar o pedido de correção"));
+    } finally {
+      setSalvando(false);
+    }
+  };
+  const rotulo = {
+    incluir: "Faltou uma marcação",
+    alterar: "O horário está errado",
+    excluir: "Essa marcação não deveria existir"
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "no-print",
+    style: {
+      ...S.card,
+      marginTop: 14,
+      borderLeft: "4px solid " + C.amarelo
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\u270E Pedir corre\xE7\xE3o \u2014 ", fmtData(dia + "T12:00:00")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 12px",
+      lineHeight: 1.6
+    }
+  }, "A marca\xE7\xE3o original continua guardada do jeito que o rel\xF3gio gravou. O gestor aprova ou recusa, e s\xF3 depois disso a corre\xE7\xE3o passa a valer no seu espelho e no banco de horas."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, AJUSTE_ACOES.map(a => /*#__PURE__*/React.createElement("button", {
+    key: a,
+    onClick: () => setAcao(a),
+    disabled: a !== "incluir" && regs.length === 0,
+    style: {
+      ...(acao === a ? S.btn : S.btnGhost),
+      padding: "8px 12px",
+      fontSize: 12,
+      opacity: a !== "incluir" && regs.length === 0 ? 0.4 : 1
+    }
+  }, rotulo[a]))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 10
+    }
+  }, acao !== "incluir" && /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: C.cinza
+    }
+  }, "Qual marca\xE7\xE3o", /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      padding: "10px 12px",
+      fontSize: 14
+    },
+    value: alvo,
+    onChange: e => setAlvo(e.target.value)
+  }, regs.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r.ts,
+    value: r.ts
+  }, fmtHora(r.ts), " \xB7 ", r.tipo)))), acao !== "excluir" && /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: C.cinza
+    }
+  }, "\xC9 entrada ou sa\xEDda", /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...S.input,
+      padding: "10px 12px",
+      fontSize: 14
+    },
+    value: tipo,
+    onChange: e => setTipo(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "entrada"
+  }, "entrada"), /*#__PURE__*/React.createElement("option", {
+    value: "saida"
+  }, "sa\xEDda"))), acao !== "excluir" && /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: C.cinza
+    }
+  }, "Hor\xE1rio certo", /*#__PURE__*/React.createElement("input", {
+    type: "time",
+    style: {
+      ...S.input,
+      padding: "10px 12px",
+      fontSize: 14
+    },
+    value: hora,
+    onChange: e => setHora(e.target.value)
+  }))), /*#__PURE__*/React.createElement("textarea", {
+    style: {
+      ...S.input,
+      marginTop: 10,
+      minHeight: 76,
+      fontSize: 14
+    },
+    maxLength: LIMITES.obs,
+    value: motivo,
+    onChange: e => setMotivo(e.target.value),
+    placeholder: "O que aconteceu? Ex.: fiquei atendendo cliente e s\xF3 lembrei de bater o ponto no dia seguinte."
+  }), erro && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.vermelho,
+      marginTop: 8
+    }
+  }, erro), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 10,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "10px 16px",
+      fontSize: 13
+    },
+    disabled: salvando,
+    onClick: enviar
+  }, salvando ? "⏳…" : "Enviar pedido"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "10px 16px",
+      fontSize: 13
+    },
+    onClick: onCancelar
+  }, "Cancelar")));
+}
 function ConfereEspelho({
   comp,
   aceite,
@@ -15057,7 +15520,7 @@ function ModalConfirm({
 
 /* Ações administrativas sensíveis: gravadas com auditoria CRÍTICA (aguardada, com retry e
    falha visível) e destacadas na trilha. São as que mexem em dinheiro, acesso ou registro de jornada. */
-const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada", "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto", "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado", "exame_agendado", "exame_concluido", "candidato_criado", "candidato_etapa", "documento_anexado", "guia_linha_salva"];
+const ACOES_SENSIVEIS = ["cadastro_alterado", "convite_criado", "folha_gerada", "folha_ajustada", "folha_fechada", "adiantamento_criado", "adiantamento_cancelado", "guia_paga", "saida_auto_corrigida", "saida_auto", "aprovacao", "folga_decidida", "local_criado", "local_desativado", "biometria", "batida_sem_localizacao", "rescisao_criada", "rescisao_confirmada", "exame_ocupacional_criado", "exame_agendado", "exame_concluido", "ajuste_pedido", "ajuste_decidido", "candidato_criado", "candidato_etapa", "documento_anexado", "guia_linha_salva"];
 const AVISO_FOLHA = "⚠️ Conferência gerencial: cálculo com as tabelas 2026 (INSS Portaria MPS/MF · IRRF Lei 15.270/2025). Não substitui a folha oficial do contador (eSocial, guias e obrigações acessórias).";
 function SecaoFolha({
   usuarios,
@@ -17785,6 +18248,9 @@ const TABELAS_OPCIONAIS = [{
 }, {
   nome: "presenca_chamada",
   para: "quem esta na sala da reuniao agora"
+}, {
+  nome: "ajustes_ponto",
+  para: "pedidos de correcao de marcacao"
 }];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -18170,6 +18636,41 @@ create policy "presenca: cada um atualiza a sua" on public.presenca_chamada
 drop policy if exists "presenca: cada um apaga a sua" on public.presenca_chamada;
 create policy "presenca: cada um apaga a sua" on public.presenca_chamada
   for delete to authenticated using (usuario_id = auth.uid());
+
+-- Correcao de marcacao (Portaria 671/2021): guarda o PEDIDO de ajuste.
+-- A marcacao original em public.marcacoes nunca e alterada nem apagada;
+-- o espelho e o banco de horas aplicam por cima so o que o gestor aprovou.
+create table if not exists public.ajustes_ponto (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  solicitante_id uuid not null references public.usuarios (id) on delete cascade,
+  dia date not null,
+  acao text not null check (acao in ('incluir', 'alterar', 'excluir')),
+  tipo text check (tipo in ('entrada', 'saida')),
+  marcacao_ts timestamptz,
+  hora_nova timestamptz,
+  motivo text not null,
+  status text not null default 'pendente' check (status in ('pendente', 'aprovado', 'recusado')),
+  resposta text,
+  decidido_por uuid references public.usuarios (id),
+  decidido_em timestamptz,
+  criado_em timestamptz not null default now()
+);
+create index if not exists ajustes_ponto_usuario_dia on public.ajustes_ponto (usuario_id, dia);
+alter table public.ajustes_ponto enable row level security;
+
+drop policy if exists "ajustes: cada um ve os seus" on public.ajustes_ponto;
+create policy "ajustes: cada um ve os seus" on public.ajustes_ponto
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "ajustes: cada um pede o seu" on public.ajustes_ponto;
+create policy "ajustes: cada um pede o seu" on public.ajustes_ponto
+  for insert to authenticated
+  with check (solicitante_id = auth.uid() and status = 'pendente' and (usuario_id = auth.uid() or is_gestor()));
+
+drop policy if exists "ajustes: so o gestor decide" on public.ajustes_ponto;
+create policy "ajustes: so o gestor decide" on public.ajustes_ponto
+  for update to authenticated using (is_gestor()) with check (is_gestor());
 `;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
@@ -18445,6 +18946,179 @@ function SecaoBackup({
     }
   }, "O backup n\xE3o substitui a guarda oficial das marca\xE7\xF5es por 5 anos (CLT art. 74 e Portaria MTP 671/2021) \u2014 ele \xE9 a sua c\xF3pia de seguran\xE7a."));
 }
+/* Fila de correcoes de ponto do gestor. Fica junto dos aceites porque as duas
+   coisas respondem a mesma pergunta: o espelho de quem ainda esta em aberto. */
+function SecaoAjustesPonto({
+  ajustes = [],
+  usuarios = [],
+  onDecidir
+}) {
+  const [abertoId, setAbertoId] = useState(null);
+  const [resposta, setResposta] = useState("");
+  const [salvandoId, setSalvandoId] = useState(null);
+  const [erro, setErro] = useState(null);
+  const nome = id => (usuarios.find(u => u.id === id) || {}).nome || id;
+  const pendentes = ajustesPendentes(ajustes);
+  const decididos = ajustes.filter(a => a.status !== "pendente").slice(0, 8);
+  const agir = async (a, status) => {
+    if (salvandoId) return;
+    setSalvandoId(a.id);
+    setErro(null);
+    try {
+      await onDecidir(a.id, status, resposta);
+      setAbertoId(null);
+      setResposta("");
+    } catch (e) {
+      setErro(mensagemAmigavel(e, "ao registrar a decisão"));
+    } finally {
+      setSalvandoId(null);
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14,
+      borderLeft: pendentes.length ? "4px solid " + C.amarelo : "none"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15,
+      color: C.branco
+    }
+  }, "\u270E Corre\xE7\xF5es de ponto ", pendentes.length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      ...S.tag(C.amarelo, "#0B1526"),
+      fontSize: 11
+    }
+  }, pendentes.length, " esperando voc\xEA")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 10px",
+      lineHeight: 1.6
+    }
+  }, "Aprovar n\xE3o apaga nada: a batida original continua guardada e vai inteira pro AFD. O que muda \xE9 a jornada tratada \u2014 espelho, banco de horas, pr\xEAmio e folha."), pendentes.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza
+    }
+  }, "Nenhuma corre\xE7\xE3o esperando decis\xE3o."), pendentes.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      borderTop: "1px solid #1E3450",
+      padding: "10px 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: C.branco,
+      fontWeight: 700
+    }
+  }, nome(a.userId), " \xB7 ", fmtData(a.dia + "T12:00:00")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#B3C2DA",
+      marginTop: 3
+    }
+  }, "Pede para ", resumoAjuste(a)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      marginTop: 3,
+      fontStyle: "italic"
+    }
+  }, "\u201C", a.motivo, "\u201D"), abertoId === a.id ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      fontSize: 13
+    },
+    maxLength: LIMITES.obs,
+    value: resposta,
+    onChange: e => setResposta(e.target.value),
+    placeholder: "Resposta pro colaborador (obrigat\xF3ria pra recusar)"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 8,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "8px 14px",
+      fontSize: 12
+    },
+    disabled: salvandoId === a.id,
+    onClick: () => agir(a, "aprovado")
+  }, "Aprovar corre\xE7\xE3o"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 12,
+      color: C.vermelho
+    },
+    disabled: salvandoId === a.id,
+    onClick: () => agir(a, "recusado")
+  }, "Recusar"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 12
+    },
+    onClick: () => {
+      setAbertoId(null);
+      setErro(null);
+    }
+  }, "Fechar")), erro && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.vermelho,
+      marginTop: 6
+    }
+  }, erro)) : /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 12,
+      marginTop: 8
+    },
+    onClick: () => {
+      setAbertoId(a.id);
+      setResposta("");
+      setErro(null);
+    }
+  }, "Analisar"))), decididos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12,
+      borderTop: "1px solid #1E3450",
+      paddingTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      marginBottom: 4
+    }
+  }, "\xDAltimas decis\xF5es"), decididos.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      fontSize: 12,
+      color: "#B3C2DA",
+      padding: "4px 0",
+      lineHeight: 1.6
+    }
+  }, fmtData(a.dia + "T12:00:00"), " \xB7 ", nome(a.userId), " \xB7 ", resumoAjuste(a), " \xB7", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: a.status === "aprovado" ? C.verde : C.vermelho
+    }
+  }, " ", a.status), a.resposta ? " — " + a.resposta : ""))));
+}
 function SecaoAceites({
   usuarios,
   aceites = []
@@ -18719,6 +19393,8 @@ function TelaGestor({
   onSalvarLinhaGuia,
   consImagem,
   aceites,
+  ajustes = [],
+  onDecidirAjuste,
   demo
 }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({
@@ -19236,6 +19912,10 @@ function TelaGestor({
   }), /*#__PURE__*/React.createElement(SecaoConformidade, {
     usuarios: usuarios,
     registros: registros
+  }), /*#__PURE__*/React.createElement(SecaoAjustesPonto, {
+    ajustes: ajustes,
+    usuarios: usuarios,
+    onDecidir: onDecidirAjuste
   }), /*#__PURE__*/React.createElement(SecaoAceites, {
     usuarios: usuarios,
     aceites: aceites

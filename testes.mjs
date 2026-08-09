@@ -49,7 +49,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   SALAS_RITUAIS, PRESENCA_MIN, chaveSalaNoBanco, salaDoRitual, salasLer, salasGravar,
   enderecoSalaSugerido, sortearSementeSala, mapPresenca, presencaAtiva, textoPresenca,
   RESUMO_JANELA_DIAS, rituaisDaJanela, autoresQueResponderam, temAtaDaReuniao,
-  prioridadeDaSemana, resumoDaSemana };`;
+  prioridadeDaSemana, resumoDaSemana,
+  aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -989,6 +990,67 @@ t("o gestor recebe as atas para saber o que ficou sem registro",
   src.includes("atas: rit.atas || []"));
 t("o README explica o resumo da semana",
   leia("README.md").includes("### Resumo da semana do gestor"));
+
+secao("Correcao de marcacao (Portaria 671/2021)");
+const regAj = [
+  { nsr: 1, userId: "u1", tipo: "entrada", ts: "2026-08-03T11:00:00.000Z" },
+  { nsr: 2, userId: "u1", tipo: "saida", ts: "2026-08-03T21:00:00.000Z" },
+];
+const ajBase = { id: "a1", userId: "u1", dia: "2026-08-03", acao: "alterar", tipo: "saida",
+  alvoTs: "2026-08-03T21:00:00.000Z", horaNova: "2026-08-03T21:40:00.000Z",
+  motivo: "esqueci de bater a saida", status: "pendente" };
+const ajAprov = (extra) => m.aplicarAjustes(regAj, [{ ...ajBase, status: "aprovado", ...(extra || {}) }]);
+
+t("pedido pendente nao mexe na jornada", m.aplicarAjustes(regAj, [ajBase]) === regAj);
+t("pedido recusado nao mexe na jornada",
+  m.aplicarAjustes(regAj, [{ ...ajBase, status: "recusado" }])[1].ts === regAj[1].ts);
+const corrigido = ajAprov();
+t("aprovado, o horario certo passa a valer no espelho", m.minutosDia(corrigido) === 640);
+t("a batida original fica guardada em tsOriginal", corrigido[1].tsOriginal === "2026-08-03T21:00:00.000Z");
+t("a marcacao corrigida sai marcada com * no espelho", corrigido[1].ajustada === true);
+t("o registro do coletor nao e alterado em lugar nenhum", regAj[1].ts === "2026-08-03T21:00:00.000Z");
+const incluida = m.aplicarAjustes([regAj[0]], [{ ...ajBase, acao: "incluir", alvoTs: null,
+  horaNova: "2026-08-03T21:00:00.000Z", status: "aprovado" }]);
+t("da pra incluir a marcacao que faltou", incluida.length === 2 && m.minutosDia(incluida) === 600);
+t("marcacao incluida entra sem NSR (fica fora do AFD)", incluida[1].nsr === null);
+t("da pra tirar da jornada a batida repetida", ajAprov({ acao: "excluir" }).length === 1);
+t("a jornada tratada sai sempre em ordem de horario",
+  incluida.every((r, i, a) => i === 0 || new Date(a[i - 1].ts) <= new Date(r.ts)));
+t("dois ajustes aprovados no mesmo dia convivem",
+  m.aplicarAjustes(regAj, [{ ...ajBase, status: "aprovado" },
+    { ...ajBase, id: "a2", acao: "incluir", alvoTs: null, tipo: "entrada",
+      horaNova: "2026-08-03T15:00:00.000Z", status: "aprovado" }]).length === 3);
+
+t("motivo curto demais e barrado", !!m.validarAjuste({ ...ajBase, motivo: "erro" }, regAj));
+t("motivo explicado passa", m.validarAjuste(ajBase, regAj) === null);
+t("nao da pra pedir correcao de horario que ainda nem aconteceu",
+  !!m.validarAjuste({ ...ajBase, horaNova: new Date(Date.now() + 864e5).toISOString() }, regAj));
+t("pedido sem acao valida e barrado", !!m.validarAjuste({ ...ajBase, acao: "sumir" }, regAj));
+t("alterar sem dizer qual marcacao e barrado", !!m.validarAjuste({ ...ajBase, alvoTs: null }, regAj));
+t("incluir marcacao que ja existe e barrado",
+  !!m.validarAjuste({ ...ajBase, acao: "incluir", alvoTs: null, horaNova: "2026-08-03T21:00:30.000Z" }, regAj));
+t("excluir nao precisa de horario novo",
+  m.validarAjuste({ ...ajBase, acao: "excluir", horaNova: null, tipo: null }, regAj) === null);
+t("a fila do gestor mostra so o que esta pendente",
+  m.ajustesPendentes([ajBase, { ...ajBase, id: "a2", status: "aprovado" }]).length === 1);
+t("o pedido vira uma frase curta pro gestor ler", m.resumoAjuste(ajBase).length > 10);
+t("as tres acoes possiveis estao declaradas", m.AJUSTE_ACOES.length === 3);
+
+t("o AFD continua saindo das marcacoes brutas, sem ajuste nenhum",
+  src.includes("registrosBrutos.filter(r => r.nsr)"));
+t("o resto do app usa a jornada ja corrigida",
+  src.includes("aplicarAjustes(registrosBrutos, ajustes)"));
+t("o colaborador pede a correcao no proprio espelho", src.includes("Pedir corre"));
+t("o gestor tem a fila de correcoes no painel", src.includes("SecaoAjustesPonto"));
+t("recusar sem explicar e barrado", src.includes("por que est\u00e1 recusando"));
+t("cada decisao entra na trilha de auditoria", src.includes('log("ajuste_decidido"'));
+t("o diagnostico avisa se a tabela ajustes_ponto nao existir",
+  src.includes('nome: "ajustes_ponto"'));
+t("o SQL da tabela vem junto no botao Copiar SQL",
+  src.includes("create table if not exists public.ajustes_ponto"));
+t("so o gestor pode aprovar (RLS)", src.includes("ajustes: so o gestor decide"));
+t("o README explica a correcao de ponto",
+  leia("README.md").includes("### Corrigir uma marcacao"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
