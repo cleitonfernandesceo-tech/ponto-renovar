@@ -51,7 +51,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   RESUMO_JANELA_DIAS, rituaisDaJanela, autoresQueResponderam, temAtaDaReuniao,
   prioridadeDaSemana, resumoDaSemana,
   aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES,
-  telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO };`;
+  telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
+  gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1088,6 +1089,43 @@ t("a lista avisa quando falta o numero", src.includes("sem WhatsApp cadastrado")
 t("convite nao quebra em banco sem a coluna", src.includes("[row] = await sbInsert(sessao.token, \"convites\", [baseConvite])"));
 t("a sala de reuniao aceita chamada do WhatsApp", src.includes("Criar link de chamada"));
 t("o README explica o WhatsApp do convite", leia("README.md").includes("### WhatsApp do convite"));
+
+/* ---------- manter conectado (sessao lembrada no aparelho) ---------- */
+console.log("\n-- manter conectado --");
+m.esquecerSessao();
+t("sem nada guardado nao existe sessao lembrada", m.lerSessaoLembrada() === null);
+m.gravarSessaoLembrada({ refresh: "rt-1", uid: "u1" });
+t("o que foi guardado volta na leitura", (m.lerSessaoLembrada() || {}).refresh === "rt-1");
+t("a lembranca sabe de quem ela e", (m.lerSessaoLembrada() || {}).uid === "u1");
+m.esquecerSessao();
+t("esquecer apaga a lembranca", m.lerSessaoLembrada() === null);
+m.gravarSessaoLembrada({ refresh: "rt-2", uid: "u1" });
+t("depois de 30 dias a lembranca vence sozinha",
+  m.lerSessaoLembrada(Date.now() + (m.LEMBRANCA_DIAS + 1) * 86400000) === null);
+t("a lembranca vencida some de vez", m.lerSessaoLembrada() === null);
+m.gravarSessaoLembrada({ refresh: "rt-3", uid: "u1" });
+t("dentro do prazo a lembranca continua valendo",
+  (m.lerSessaoLembrada(Date.now() + (m.LEMBRANCA_DIAS - 1) * 86400000) || {}).refresh === "rt-3");
+m.gravarSessaoLembrada({ uid: "u1" });
+t("sem refresh_token nao existe lembranca", m.lerSessaoLembrada() === null);
+m.esquecerSessao();
+t("a lembranca guarda so o refresh, nunca a senha",
+  (src.match(/gravarSessaoLembrada\(\{ refresh:/g) || []).length === 2 && src.includes("Nunca guardamos senha no aparelho"));
+t("caixa desmarcada nao grava e ainda limpa o aparelho", src.includes("else esquecerSessao();"));
+t("a renovacao silenciosa usa o grant_type certo", src.includes("grant_type=refresh_token"));
+t("queda de rede nao apaga a lembranca", src.includes("queda de rede nao apaga a lembranca"));
+t("a renovacao tem trava contra laco de rede", src.includes("Date.now() - _ultimaRenovacao > 20000"));
+t("instabilidade do servidor nao apaga a lembranca", src.includes("sessaoMorta: r.status >= 400 && r.status < 500"));
+t("a caixa de manter conectado esta na tela de login", src.includes("Manter conectado neste aparelho"));
+t("a caixa ja vem marcada", src.includes("const [lembrar, setLembrar] = useState(true);"));
+t("a escolha da caixa chega no login de verdade", src.includes("await onSupabase(e, senha, lembrar);"));
+t("sair apaga a lembranca do aparelho", /const sair = \(\) => \{\s*esquecerSessao\(\);/.test(src));
+t("link de convite nao entra na sessao de outra pessoa",
+  src.includes('if (new URLSearchParams(window.location.search).get("convite")) return false;'));
+t("o token de renovacao do convite nao e gravado no aparelho",
+  src.includes("setSessao({ token, uid, refresh, lembrar: false });"));
+t("o app mostra que esta retomando em vez de piscar o login", src.includes("Retomando sua sess"));
+t("o README explica o manter conectado", leia("README.md").includes("### Manter conectado")); 
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

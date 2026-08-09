@@ -650,6 +650,40 @@ funciona sem nenhuma mudanca de codigo: no WhatsApp, aba **Ligacoes**, toque em
 videochamada**. Esse link e o unico que o botao **Sugerir enderecos** nao
 consegue sortear, porque so o WhatsApp pode cria-lo.
 
+### Manter conectado
+
+O token de acesso do Supabase vale 1 hora e ate agora o app nao guardava nada
+no aparelho: fechar a aba, recarregar a pagina ou so voltar pro app depois do
+almoco significava digitar e-mail e senha de novo. Num registro de ponto, que e
+aberto quatro vezes por dia no celular, esse era o maior atrito do sistema.
+
+A tela de login agora tem a caixa **Manter conectado neste aparelho**, marcada
+por padrao. Marcada, o app guarda no proprio aparelho o `refresh_token` do
+Supabase (`localStorage`, chave `pontorenovar.sessao.v1`) e, ao abrir de novo,
+troca esse token por um acesso novo antes de mostrar qualquer tela - a pessoa
+ve *Retomando sua sessao* e cai direto no ponto.
+
+O que nunca acontece:
+
+- a senha nao e guardada em lugar nenhum, nem o token de acesso (esse vive so
+  na memoria da aba);
+- caixa desmarcada nao grava nada e ainda apaga o que houvesse gravado;
+- `Sair` apaga a lembranca do aparelho;
+- a lembranca vence sozinha em 30 dias (`LEMBRANCA_DIAS`);
+- link de convite tem prioridade sobre a lembranca, pra ninguem criar conta
+  dentro da sessao de outra pessoa que usou o mesmo celular;
+- se o servidor recusar a renovacao (senha trocada, sessao revogada no painel,
+  conta desativada, ou seja, uma resposta 4xx) a lembranca e apagada. Queda de
+  rede e erro de servidor (5xx) *nao* apagam: ficam guardados pra proxima
+  tentativa.
+
+De quebra, quem esta com o app aberto tambem parou de ser expulso: o token e
+renovado sozinho dois minutos antes de vencer. O aviso **Sessao expirada** so
+aparece agora quando a renovacao e recusada de verdade.
+
+Em computador compartilhado (um tablet de recepcao, por exemplo) e so
+desmarcar a caixa - o comportamento volta a ser exatamente o de antes.
+
 ### Segredos (Edge Functions > Secrets)
 
 - `VAPID_PUBLIC_KEY` - a mesma chave que esta em `VAPID_PUBLICA` no app (publica).

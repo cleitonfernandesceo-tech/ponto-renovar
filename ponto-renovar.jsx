@@ -332,6 +332,50 @@ function jwtExpiraEm(token) {
   } catch { return null; }
 }
 
+/* ---------- "manter conectado": a sessao lembrada no proprio aparelho ----------
+   O access_token do Supabase vive 1 hora e o app nao guardava nada em lugar
+   nenhum. Na pratica, quem recarregava a pagina — ou so fechava a aba — tinha
+   que digitar e-mail e senha de novo. Num app de ponto, aberto quatro vezes por
+   dia no celular, esse era o maior atrito do sistema inteiro.
+   Agora, e SO se a pessoa marcar a caixa na tela de login, guardamos aqui no
+   aparelho o refresh_token do Supabase (e exatamente o que o SDK oficial faz).
+   Regras da casa:
+   - caixa desmarcada nao grava nada e ainda apaga o que houvesse gravado;
+   - a lembranca vence sozinha depois de 30 dias;
+   - sair() apaga, e o servidor recusar a renovacao tambem apaga;
+   - o refresh_token do Supabase e rotativo: cada renovacao devolve um novo e
+     queima o anterior, entao sempre regravamos o que voltou.
+   Nunca guardamos senha no aparelho, e o access_token continua so na memoria. */
+const SESSAO_KEY = "pontorenovar.sessao.v1";
+const LEMBRANCA_DIAS = 30;
+let _sessaoMemoria = null;
+let _ultimaRenovacao = 0;   // trava: nunca renovar duas vezes em menos de 20s, pra nao virar laco
+
+function gravarSessaoLembrada(dados) {
+  const pacote = { ...dados, salvoEm: Date.now() };
+  _sessaoMemoria = pacote;
+  if (storageDisponivel()) {
+    try { window.localStorage.setItem(SESSAO_KEY, JSON.stringify(pacote)); } catch { /* cota cheia: segue em memoria */ }
+  }
+  return pacote;
+}
+
+function esquecerSessao() {
+  _sessaoMemoria = null;
+  if (!storageDisponivel()) return;
+  try { window.localStorage.removeItem(SESSAO_KEY); } catch {}
+}
+
+function lerSessaoLembrada(agora = Date.now()) {
+  let d = _sessaoMemoria;
+  if (storageDisponivel()) {
+    try { d = JSON.parse(window.localStorage.getItem(SESSAO_KEY) || "null"); } catch { d = null; }
+  }
+  if (!d || typeof d.refresh !== "string" || !d.refresh.trim()) return null;
+  if (agora - Number(d.salvoEm || 0) > LEMBRANCA_DIAS * 86400000) { esquecerSessao(); return null; }
+  return d;
+}
+
 async function sbFetch(token, path, { method = "GET", body, headers = {} } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000); // request pendurada não pode parecer travamento de tela
@@ -549,6 +593,23 @@ async function sbLogin(email, password) {
   const j = await r.json();
   if (!r.ok) throw new Error(j.error_description || j.msg || "Falha no login");
   return j; // { access_token, user: { id, email } }
+}
+
+/* Renovacao silenciosa: troca o refresh_token por um access_token novo. E o
+   mesmo endereco do login, so muda o grant_type. Se o Supabase recusar (token
+   ja usado, senha trocada, sessao revogada no painel) a marca sessaoMorta avisa
+   quem chamou que a lembranca acabou — diferente de uma queda de rede, em que a
+   lembranca continua valendo pra proxima tentativa. */
+async function sbRenovarSessao(refreshToken) {
+  const r = await fetch(`${SUPA.url}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST", headers: { apikey: SUPA.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  const j = await r.json().catch(() => ({}));
+ /* sessaoMorta so quando o proprio Supabase recusa (4xx). Erro de servidor
+     (5xx) ou queda de rede nao apagam a lembranca: e so tentar de novo. */
+  if (!r.ok || !j.access_token) throw Object.assign(new Error(j.error_description || j.msg || "Não foi possível retomar sua sessão."), { sessaoMorta: r.status >= 400 && r.status < 500 });
+  return j; // { access_token, refresh_token, user }
 }
 
 /* Mapas linha do banco ↔ formato interno do app */
@@ -3517,6 +3578,14 @@ function AppInterno() {
   const [rit, setRit] = useState(() => ritVazio());
   const mudarRit = (p) => setRit((r) => ({ ...r, ...p }));
   const [sessaoExpirada, setSessaoExpirada] = useState(false);
+  /* Se existe sessao lembrada neste aparelho, o app ja nasce tentando retomar
+     ela — assim ninguem ve a tela de login piscar antes de entrar. Link de
+     convite tem prioridade: quem esta criando conta nao pode cair na sessao de
+     outra pessoa que usou o mesmo celular. */
+  const [restaurando, setRestaurando] = useState(() => {
+    try { if (new URLSearchParams(window.location.search).get("convite")) return false; } catch {}
+    return !!lerSessaoLembrada();
+  });
   const [carregandoSecundarios, setCarregandoSecundarios] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: "erro"|"ok", texto }
   const avisar = (texto, tipo = "erro") => setAviso({ tipo, texto });
@@ -3569,8 +3638,9 @@ function AppInterno() {
   };
 
   /* ---------- login ---------- */
-  const entrarSupabase = async (email, senha) => {
-    const auth = await sbLogin(email, senha); // lança erro se credencial inválida
+  /* Abrir sessao e o mesmo trabalho vindo do login com senha ou da renovacao
+     silenciosa, entao os dois caminhos passam por aqui. */
+  const abrirSessao = async (auth, lembrar) => {
     const token = auth.access_token, uid = auth.user.id;
     const [perfis, consents] = await Promise.all([
       sbSelect(token, "usuarios", `select=*&id=eq.${uid}`),
@@ -3579,10 +3649,19 @@ function AppInterno() {
     if (!perfis.length) throw new Error("Perfil não encontrado na tabela usuarios.");
     if (perfis[0].ativo === false) throw new Error("Usuário inativo. Fale com o RH.");
     const perfil = mapUser(perfis[0], consents[0]?.aceito);
-    setSessao({ token, uid });
+    if (lembrar && auth.refresh_token) gravarSessaoLembrada({ refresh: auth.refresh_token, uid });
+    else esquecerSessao();
+    setSessao({ token, uid, refresh: auth.refresh_token || null, lembrar: !!lembrar });
     setUser(perfil);
     await carregarDados(token, perfil);
     setTela(telaInicial());   // respeita o atalho ./?ir=<tela> da tela de inicio
+  };
+
+  /* A tela de login manda junto o "manter conectado". Quem nao marcou entra
+     igual antes e nada fica gravado no aparelho. */
+  const entrarSupabase = async (email, senha, lembrar = false) => {
+    const auth = await sbLogin(email, senha); // lança erro se credencial inválida
+    await abrirSessao(auth, lembrar);
   };
 
   /* Carregamento em DUAS FASES.
@@ -3805,15 +3884,15 @@ function AppInterno() {
 
   const concluirConvite = async (conv, senha) => {
     // 1) cria a conta (ou reaproveita se já existir e a senha bater)
-    let token, uid;
+    let token, uid, refresh = null;   // refresh fica so na memoria: convite nao tem caixa de "manter conectado"
     try {
       const cad = await sbSignUp(conv.email, senha);
-      token = cad.access_token; uid = cad.user?.id;
+      token = cad.access_token; uid = cad.user?.id; refresh = cad.refresh_token || null;
     } catch (e) {
       if (!/already|registered|exists/i.test(e.message)) throw e; // conta já existe → tenta logar com a senha informada
     }
     if (!token) {
-      try { const lg = await sbLogin(conv.email, senha); token = lg.access_token; uid = lg.user.id; }
+      try { const lg = await sbLogin(conv.email, senha); token = lg.access_token; uid = lg.user.id; refresh = lg.refresh_token || null; }
       catch (e) {
         if (/confirm/i.test(e.message)) throw new Error("Conta criada, mas o projeto exige confirmação de e-mail. Confirme pelo link enviado ao seu e-mail e abra este convite de novo pra concluir.");
         throw e;
@@ -3827,7 +3906,7 @@ function AppInterno() {
       sbSelect(token, "consentimentos_lgpd", `select=*&usuario_id=eq.${uid}`),
     ]);
     const perfil = mapUser(perfis[0], consents[0]?.aceito);
-    setSessao({ token, uid });
+    setSessao({ token, uid, refresh, lembrar: false });
     setUser(perfil);
     await carregarDados(token, perfil);
     try { window.history.replaceState({}, "", window.location.pathname); } catch {}
@@ -3920,6 +3999,7 @@ function AppInterno() {
   };
 
   const sair = () => {
+    esquecerSessao();   // sair e sair de verdade: o aparelho nao guarda mais nada
     setUser(null); setSessao(null); setDemo(false);
     setAcoes([]); setAcoesNoBanco(false); setRit(ritVazio());
     setUsuarios([]); setRegistros([]); setAjustes([]); setFaltas([]); setJustificativas([]); setAtestados([]); setFerias([]); setLogs([]);
@@ -4557,17 +4637,60 @@ function AppInterno() {
   // tenta esvaziar a fila assim que a sessão fica pronta (ex.: app reaberto depois de um dia sem rede)
   useEffect(() => { if (sessao?.token && !demo) enviarFila(); }, [sessao, demo]);
 
-  /* ---------- sessão: expiração tratada com aviso claro ---------- */
+  /* ---------- sessao: renova sozinha e so avisa quando nao da mais ----------
+     Antes o app so sabia dizer "sessao expirada" quando o token de 1 hora
+     vencia, mesmo com a pessoa usando a tela naquele instante. Agora, se temos
+     refresh_token, ele e trocado por um token novo dois minutos antes de vencer
+     e ninguem percebe nada. O aviso continua existindo pra quando o Supabase
+     recusar a renovacao: senha trocada, sessao revogada no painel, conta
+     desativada. */
   useEffect(() => {
     registrarHandlerSessao(() => setSessaoExpirada(true));
     if (demo || !sessao?.token) return;
     const exp = jwtExpiraEm(sessao.token);
     if (!exp) return;
-    const checar = () => { if (Date.now() >= exp - 5000) setSessaoExpirada(true); };
+    let vivo = true, renovando = false;
+    const checar = async () => {
+      if (!vivo || Date.now() < exp - 120000) return;
+      if (sessao.refresh && !renovando && Date.now() - _ultimaRenovacao > 20000) {
+        renovando = true; _ultimaRenovacao = Date.now();
+        try {
+          const novo = await sbRenovarSessao(sessao.refresh);
+          if (!vivo) return;
+          if (sessao.lembrar && novo.refresh_token) gravarSessaoLembrada({ refresh: novo.refresh_token, uid: sessao.uid });
+          setSessao((s) => ({ ...s, token: novo.access_token, refresh: novo.refresh_token || s.refresh }));
+          return;
+        } catch (e) {
+          if (e?.sessaoMorta) esquecerSessao();   // queda de rede nao apaga a lembranca
+        } finally { renovando = false; }
+      }
+      if (vivo && Date.now() >= exp - 5000) setSessaoExpirada(true);
+    };
     checar();
     const t = setInterval(checar, 30000);
-    return () => clearInterval(t);
+    return () => { vivo = false; clearInterval(t); };
   }, [sessao, demo]);
+
+  /* ---------- "manter conectado": retoma a sessao ao abrir o app ---------- */
+  useEffect(() => {
+    if (!restaurando) return;
+    const lembrada = lerSessaoLembrada();
+    if (!lembrada) { setRestaurando(false); return; }
+    let vivo = true;
+    (async () => {
+      try {
+        const auth = await sbRenovarSessao(lembrada.refresh);
+        if (!vivo) return;
+        try { await abrirSessao(auth, true); }
+        catch (e) { esquecerSessao(); throw e; }   // perfil sumiu ou usuario inativo
+      } catch (e) {
+        if (e?.sessaoMorta) esquecerSessao();      // sem rede: guarda pra proxima tentativa
+      } finally {
+        if (vivo) setRestaurando(false);
+      }
+    })();
+    return () => { vivo = false; };
+  }, []);
 
   /* ---------- biometria WebAuthn ---------- */
   const cadastrarBiometria = async (rotuloDispositivo) => {
@@ -5005,6 +5128,15 @@ function AppInterno() {
   };
 
   if (!user && conviteToken) return <TelaConvite token={conviteToken} onConcluir={concluirConvite} onVoltar={() => { try { window.history.replaceState({}, "", window.location.pathname); } catch {} window.location.reload(); }} />;
+  if (!user && restaurando) return (
+    <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ ...S.card, maxWidth: 380, textAlign: "center", padding: 30 }}>
+        <div style={{ fontSize: 34 }}>⏳</div>
+        <div style={{ ...S.display, fontSize: 18, color: C.amarelo, marginTop: 10 }}>Retomando sua sessão</div>
+        <p style={{ fontSize: 13, color: C.cinza, marginTop: 8, lineHeight: 1.6 }}>Um instante — você deixou este aparelho conectado.</p>
+      </div>
+    </div>
+  );
   if (!user) return <Login onSupabase={entrarSupabase} onDemo={entrarDemo} onReset={(email) => sbResetSenha(email)} />;
 
   if (sessaoExpirada) return (
@@ -5364,6 +5496,7 @@ function Login({ onSupabase, onDemo, onReset }) {
   const [erro, setErro] = useState(null);
   const [carregando, setCarregando] = useState(false);
   const [mostrarDemo, setMostrarDemo] = useState(false);
+  const [lembrar, setLembrar] = useState(true);   // padrao ligado: e um app de celular, aberto varias vezes por dia
   const [segundosBloqueio, setSegundosBloqueio] = useState(Math.max(0, Math.ceil((_tentativasLogin.bloqueadoAte - Date.now()) / 1000)));
   useEffect(() => {
     if (segundosBloqueio <= 0) return;
@@ -5387,7 +5520,7 @@ function Login({ onSupabase, onDemo, onReset }) {
     if (segundosBloqueio > 0) return;
     setCarregando(true); setErro(null);
     try {
-      await onSupabase(e, senha);
+      await onSupabase(e, senha, lembrar);
       _tentativasLogin.n = 0; _tentativasLogin.bloqueadoAte = 0;
     } catch (err) {
       _tentativasLogin.n += 1;
@@ -5414,6 +5547,11 @@ function Login({ onSupabase, onDemo, onReset }) {
           <label htmlFor="campo-senha" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>Senha</label>
           <input id="campo-senha" name="password" autoComplete="current-password" type="password" aria-label="Senha" style={{ ...S.input, fontSize: 14 }} placeholder="Senha" value={senha}
             onChange={e => { setSenha(e.target.value); setErro(null); }} onKeyDown={e => e.key === "Enter" && entrar()} />
+          <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: C.cinza, textAlign: "left", cursor: "pointer" }}>
+            <input type="checkbox" checked={lembrar} onChange={(e) => setLembrar(e.target.checked)} aria-label="Manter conectado neste aparelho"
+              style={{ width: 17, height: 17, flex: "0 0 auto", accentColor: C.amarelo, cursor: "pointer" }} />
+            <span>Manter conectado neste aparelho <span style={{ opacity: 0.7 }}>— desmarque se for um computador compartilhado</span></span>
+          </label>
           <button style={{ ...S.btn, width: "100%", opacity: carregando || segundosBloqueio > 0 ? 0.6 : 1 }} disabled={carregando || segundosBloqueio > 0} onClick={entrar}>
             {carregando ? "Autenticando…" : segundosBloqueio > 0 ? `Aguarde ${segundosBloqueio}s` : "Entrar"}
           </button>
