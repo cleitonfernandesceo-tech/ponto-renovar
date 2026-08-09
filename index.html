@@ -14326,6 +14326,8 @@ function SecaoEquipe({
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
   const linkDe = tk => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
+  const msgConvite = (nome, link) => "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" + "Abra o link abaixo, escolha uma senha e sua conta fica pronta na hora:\n" + link + "\n\n" + "O link é só seu, vale uma única vez e vence em 7 dias.";
+  const abrirWhats = (nome, link) => window.open("https://wa.me/?text=" + encodeURIComponent(msgConvite(nome, link)), "_blank", "noopener");
   const copiar = async txt => {
     try {
       await navigator.clipboard.writeText(txt);
@@ -14642,7 +14644,14 @@ function SecaoEquipe({
       color: C.amarelo,
       marginTop: 16
     }
-  }, "\u2795 Convidar novo colaborador"), /*#__PURE__*/React.createElement("div", {
+  }, "\u2795 Convidar novo colaborador"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "6px 0 0",
+      lineHeight: 1.6
+    }
+  }, "\u26A0\uFE0F O app ", /*#__PURE__*/React.createElement("b", null, "n\xE3o envia e-mail"), ". Ao criar o convite voc\xEA recebe um link \u2014 quem manda para a pessoa \xE9 voc\xEA, pelo WhatsApp ou pelo canal que preferir."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -14747,7 +14756,14 @@ function SecaoEquipe({
       fontSize: 12
     },
     onClick: () => copiar(linkGerado)
-  }, "\uD83D\uDCCB Copiar link")), msg && /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCCB Copiar link"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => abrirWhats(null, linkGerado)
+  }, "\uD83D\uDCAC Enviar no WhatsApp")), msg && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: msg.ok ? C.verde : C.vermelho,
@@ -14797,7 +14813,14 @@ function SecaoEquipe({
         fontSize: 12
       },
       onClick: () => copiar(linkDe(c.token))
-    }, "\uD83D\uDCCB Link")));
+    }, "\uD83D\uDCCB Link"), tx === "PENDENTE" && /*#__PURE__*/React.createElement("button", {
+      style: {
+        ...S.btn,
+        padding: "5px 10px",
+        fontSize: 12
+      },
+      onClick: () => abrirWhats(c.nome, linkDe(c.token))
+    }, "\uD83D\uDCAC WhatsApp")));
   })), /*#__PURE__*/React.createElement(Detalhes, {
     titulo: "Sobre desativar e convidar"
   }, /*#__PURE__*/React.createElement("p", {

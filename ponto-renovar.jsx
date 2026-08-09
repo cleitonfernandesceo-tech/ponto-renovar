@@ -7469,6 +7469,11 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
   const linkDe = (tk) => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
+  const msgConvite = (nome, link) =>
+    "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" +
+    "Abra o link abaixo, escolha uma senha e sua conta fica pronta na hora:\n" + link + "\n\n" +
+    "O link é só seu, vale uma única vez e vence em 7 dias.";
+  const abrirWhats = (nome, link) => window.open("https://wa.me/?text=" + encodeURIComponent(msgConvite(nome, link)), "_blank", "noopener");
   const copiar = async (txt) => { try { await navigator.clipboard.writeText(txt); setMsg({ ok: true, txt: "Link copiado! Compartilhe com o colaborador." }); } catch { setMsg({ ok: false, txt: "Não deu pra copiar automático — selecione o link e copie manual." }); } };
   const criar = async () => {
     if (!form.nome.trim() || !/.+@.+\..+/.test(form.email) || !form.dataAdmissao || criando) { setMsg({ ok: false, txt: "Preencha nome, e-mail válido e a data de admissão (obrigatória)." }); return; }
@@ -7532,6 +7537,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
       ))}
 
       <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 16 }}>➕ Convidar novo colaborador</div>
+      <p style={{ fontSize: 12, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>⚠️ O app <b>não envia e-mail</b>. Ao criar o convite você recebe um link — quem manda para a pessoa é você, pelo WhatsApp ou pelo canal que preferir.</p>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
         <input style={{ ...S.input, width: 170 }} placeholder="Nome completo" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} />
         <input style={{ ...S.input, width: 210 }} placeholder="email@renovartech.com.br" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
@@ -7547,7 +7553,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
       {linkGerado && (
         <div style={{ background: C.grafite, borderRadius: 10, padding: 12, marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <code style={{ fontSize: 12, color: C.amarelo, wordBreak: "break-all", flex: 1 }}>{linkGerado}</code>
-          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(linkGerado)}>📋 Copiar link</button>
+          <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(linkGerado)}>📋 Copiar link</button><button style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }} onClick={() => abrirWhats(null, linkGerado)}>💬 Enviar no WhatsApp</button>
         </div>
       )}
       {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
@@ -7560,7 +7566,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
               <div style={{ fontSize: 13 }}><b>{c.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {c.email} · {c.tipo}{c.dataAdmissao ? ` · admissão ${fmtData(c.dataAdmissao)}` : ""} · expira {fmtData(c.expiraEm)}</span></div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                 <span style={S.tag(bg, fg)}>{tx}</span>
-                {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}
+                {tx === "PENDENTE" && <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 12 }} onClick={() => copiar(linkDe(c.token))}>📋 Link</button>}{tx === "PENDENTE" && <button style={{ ...S.btn, padding: "5px 10px", fontSize: 12 }} onClick={() => abrirWhats(c.nome, linkDe(c.token))}>💬 WhatsApp</button>}
               </span>
             </div>
           );
