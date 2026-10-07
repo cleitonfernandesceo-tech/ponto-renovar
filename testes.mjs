@@ -1131,6 +1131,13 @@ secao("Telas do funcionario sem termo tecnico");
 t("o topo do app nao mostra o nome do servico (Supabase)", !src.includes("conectado ao Supabase"));
 t("a recuperacao de senha explica em portugues simples", src.includes("receba por e-mail um link para criar uma nova senha.") && !src.includes("(Supabase Auth)"));
 
+secao("Auditoria: gravacao com return=minimal (correcao de RLS)");
+const gravaAuditoria = src.match(/sbInsert\([^;\n]*"auditoria"[^;\n]*\)/g) || [];
+t("o app grava na auditoria em pelo menos 2 lugares (log e auditar)", gravaAuditoria.length >= 2, String(gravaAuditoria.length));
+t("TODA gravacao na auditoria usa return=minimal (true)", gravaAuditoria.every(c => c.includes("}], true)")));
+t("o sbInsert traduz minimal em Prefer: return=minimal", src.includes('Prefer: minimal ? "return=minimal" : "return=representation"'));
+t("nenhuma outra rota grava na auditoria sem passar pelo sbInsert", !/rest\/v1\/auditoria/.test(src.replace(/sbSelect[^\n]*/g, "")));
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
