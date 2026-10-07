@@ -1181,6 +1181,13 @@ t("servidor: dia antes do marco segue 8h e 9h", srv.etapaDaHora("2026-10-01", 4,
 t("servidor: almoço segue 12h e 13h", srv.etapaDaHora("2026-10-05", 1, 12) === "alm12" && srv.etapaDaHora("2026-10-05", 1, 13) === "alm13");
 t("README manda o agendamento rodar também às 10h", leia("README.md").includes("11,12,13,15,16"));
 
+secao("Auditoria: gravacao com return=minimal (correcao de RLS)");
+const gravaAuditoria = src.match(/sbInsert\([^;\n]*"auditoria"[^;\n]*\)/g) || [];
+t("o app grava na auditoria em pelo menos 2 lugares (log e auditar)", gravaAuditoria.length >= 2, String(gravaAuditoria.length));
+t("TODA gravacao na auditoria usa return=minimal (true)", gravaAuditoria.every(c => c.includes("}], true)")));
+t("o sbInsert traduz minimal em Prefer: return=minimal", src.includes('Prefer: minimal ? "return=minimal" : "return=representation"'));
+t("nenhuma outra rota grava na auditoria sem passar pelo sbInsert", !/rest\/v1\/auditoria/.test(src.replace(/sbSelect[^\n]*/g, "")));
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
