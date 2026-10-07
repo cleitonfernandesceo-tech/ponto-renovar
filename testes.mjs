@@ -1127,6 +1127,10 @@ t("o token de renovacao do convite nao e gravado no aparelho",
 t("o app mostra que esta retomando em vez de piscar o login", src.includes("Retomando sua sess"));
 t("o README explica o manter conectado", leia("README.md").includes("### Manter conectado")); 
 
+secao("Telas do funcionario sem termo tecnico");
+t("o topo do app nao mostra o nome do servico (Supabase)", !src.includes("conectado ao Supabase"));
+t("a recuperacao de senha explica em portugues simples", src.includes("receba por e-mail um link para criar uma nova senha.") && !src.includes("(Supabase Auth)"));
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
