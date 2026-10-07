@@ -52,7 +52,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   prioridadeDaSemana, resumoDaSemana,
   aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
-  gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS };`;
+  gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
+  horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1130,6 +1131,59 @@ t("o README explica o manter conectado", leia("README.md").includes("### Manter 
 secao("Telas do funcionario sem termo tecnico");
 t("o topo do app nao mostra o nome do servico (Supabase)", !src.includes("conectado ao Supabase"));
 t("a recuperacao de senha explica em portugues simples", src.includes("receba por e-mail um link para criar uma nova senha.") && !src.includes("(Supabase Auth)"));
+
+secao("Horário novo desde 02/10/2026 (seg-sex 9h-18h, sábado 8h-12h)");
+const ex = (iso) => m.expedienteDoDia(new Date(iso + "T12:00:00"));
+t("o marco do horário novo é 02/10/2026", m.HORARIO_NOVO_DESDE === "2026-10-02");
+t("quinta 01/10/2026 ainda é o horário ANTIGO (8h-18h, 9h)", ex("2026-10-01").jornadaMin === 540 && ex("2026-10-01").entradaMin === 480);
+t("sexta 02/10/2026 já é o NOVO: 9h-18h, jornada de 8h, 1h de almoço",
+  ex("2026-10-02").entradaMin === 540 && ex("2026-10-02").saidaMin === 1080 && ex("2026-10-02").jornadaMin === 480 && ex("2026-10-02").intervaloMin === 60);
+t("sábado 26/09/2026 (antes) segue 8h-13h, 5h", ex("2026-09-26").saidaMin === 780 && ex("2026-09-26").jornadaMin === 300);
+t("sábado 03/10/2026 (depois) é 8h-12h, 4h, sem intervalo",
+  ex("2026-10-03").entradaMin === 480 && ex("2026-10-03").saidaMin === 720 && ex("2026-10-03").jornadaMin === 240 && ex("2026-10-03").intervaloMin === 0);
+t("domingo continua fechado", ex("2026-10-04").jornadaMin === 0);
+t("semana nova soma 44h (5 x 8h + 4h)", 5 * ex("2026-10-05").jornadaMin + ex("2026-10-10").jornadaMin === 44 * 60);
+t("feriado nacional continua fechado no horário novo",
+  (() => { m.setFeriadosGlobal([{ data: "2026-10-12", nome: "Nossa Senhora Aparecida" }]); const r = ex("2026-10-12").jornadaMin === 0; m.setFeriadosGlobal([{ data: "2026-07-09", nome: "Feriado" }, { data: "2026-08-15", nome: "Assunção (BH)" }, { data: "2026-12-08", nome: "Imaculada (BH)" }, { data: "2026-06-04", nome: "Corpus Christi" }, { data: "2026-12-12", nome: "Aniversário de BH" }]); return r; })());
+const at = (iso, hhmm) => new Date(`${iso}T${hhmm}:00`);
+t("tolerância de 10 min segue: 9:10 é pontual", m.entradaPontual(at("2026-10-05", "09:10")));
+t("9:11 deixa de ser pontual", !m.entradaPontual(at("2026-10-05", "09:11")));
+t("9:25 conta 15 min de atraso", m.minutosAtrasoDia(at("2026-10-05", "09:25")) === 15);
+t("chegar às 8:50 não é atraso nem crédito de atraso", m.minutosAtrasoDia(at("2026-10-05", "08:50")) === 0);
+t("sábado novo: 8:10 pontual, 8:25 conta 15 min", m.entradaPontual(at("2026-10-03", "08:10")) && m.minutosAtrasoDia(at("2026-10-03", "08:25")) === 15);
+t("o horário ANTIGO não mudou: 9:10 em 01/10 conta 60 min de atraso", m.minutosAtrasoDia(at("2026-10-01", "09:10")) === 60);
+const diaD = (iso, hE, mE, hS, mS) => [
+  { userId: "u", tipo: "entrada", ts: `${iso}T${String(hE).padStart(2, "0")}:${String(mE).padStart(2, "0")}:00`, nsr: 1 },
+  { userId: "u", tipo: "saida", ts: `${iso}T${String(hS).padStart(2, "0")}:${String(mS).padStart(2, "0")}:00`, nsr: 2 }];
+const saldoD = (regs) => m.analisarAssiduidade("u", regs, []).saldoMin;
+t("dia novo 9-18 com par único fecha em ZERO", saldoD(diaD("2026-10-05", 9, 0, 18, 0)) === 0);
+t("dia novo com almoço batido (9-12/13-18) fecha em ZERO", saldoD([...diaD("2026-10-05", 9, 0, 12, 0), ...diaD("2026-10-05", 13, 0, 18, 0).map(r => ({ ...r, nsr: r.nsr + 2 }))]) === 0);
+t("dia novo: saída às 19h gera +60 min no banco", saldoD(diaD("2026-10-05", 9, 0, 19, 0)) === 60);
+t("dia novo: entrada às 8h (uma hora antes) gera +60 min", saldoD(diaD("2026-10-05", 8, 0, 18, 0)) === 60);
+t("sábado novo 8-12 fecha em ZERO", saldoD(diaD("2026-10-03", 8, 0, 12, 0)) === 0);
+t("sábado novo 8-13 gera +60 min", saldoD(diaD("2026-10-03", 8, 0, 13, 0)) === 60);
+t("histórico NÃO é recalculado: 01/10 das 8h às 18h segue fechando em zero", saldoD(diaD("2026-10-01", 8, 0, 18, 0)) === 0);
+t("histórico NÃO é recalculado: sábado 26/09 das 8h às 13h segue em zero", saldoD(diaD("2026-09-26", 8, 0, 13, 0)) === 0);
+t("trabalho no domingo segue virando crédito integral", saldoD(diaD("2026-10-04", 9, 0, 13, 0)) === 240);
+t("folga: 1 dia = 8h no novo e 9h no antigo", m.jornadaDiaCheioMin(new Date("2026-10-05T12:00:00")) === 480 && m.jornadaDiaCheioMin(new Date("2026-10-01T12:00:00")) === 540);
+t("AEJ usa o código de horário certo antes/depois do marco",
+  m.codHorarioDe("2026-10-01T10:00:00") === "H0818" && m.codHorarioDe("2026-10-02T10:00:00") === "H0918" &&
+  m.codHorarioDe("2026-09-26T10:00:00") === "H0813" && m.codHorarioDe("2026-10-03T10:00:00") === "H0812");
+t("todo código de horário declarado no AEJ tem duração igual à soma dos seus pares",
+  m.HORARIOS_CONTRATUAIS.every(h => h.durMin === h.pares.reduce((a, [e, s]) => a + (+s.slice(0, 2) * 60 + +s.slice(2)) - (+e.slice(0, 2) * 60 + +e.slice(2)), 0)));
+t("todo código usado por codHorarioDe existe na lista do AEJ",
+  ["2026-09-25", "2026-09-26", "2026-10-02", "2026-10-03"].every(d => m.HORARIOS_CONTRATUAIS.some(h => h.cod === m.codHorarioDe(d + "T10:00:00"))));
+t("PDF: jornada contratual por competência", m.jornadaContratualTxt("2026-09").includes("9h/dia") && m.jornadaContratualTxt("2026-11") === "8h/dia seg-sex + sabado 4h" && m.jornadaContratualTxt("2026-10").includes("desde 02/10"));
+t("o texto da tela não fala mais do horário antigo como atual", !src.includes("Expediente: seg-sex 8:00 às 18:00") && !src.includes("1 folga = 9h (seg-sex)"));
+// lembretes de entrada: app e servidor precisam abrir no mesmo horário
+const fnSrc = readFileSync("supabase/functions/lembretes-push/index.ts", "utf8");
+const trecho = fnSrc.slice(fnSrc.indexOf("const HORARIO_NOVO_DESDE"), fnSrc.indexOf("const etapaDaHora")) + fnSrc.slice(fnSrc.indexOf("const etapaDaHora"), fnSrc.indexOf("/* ---------- reunioes do time"));
+const srv = new Function(trecho.replace(/const ETAPAS = \{[\s\S]*?\n\};/, "") + "; return { horaDeAbrir, etapaDaHora };")();
+t("servidor: sexta nova abre às 9h (aviso 9h e 10h)", srv.etapaDaHora("2026-10-02", 5, 9) === "ent8" && srv.etapaDaHora("2026-10-02", 5, 10) === "ent9" && srv.etapaDaHora("2026-10-02", 5, 8) === undefined);
+t("servidor: sábado novo abre às 8h (aviso 8h e 9h)", srv.etapaDaHora("2026-10-03", 6, 8) === "ent8" && srv.etapaDaHora("2026-10-03", 6, 9) === "ent9");
+t("servidor: dia antes do marco segue 8h e 9h", srv.etapaDaHora("2026-10-01", 4, 8) === "ent8" && srv.etapaDaHora("2026-10-01", 4, 9) === "ent9");
+t("servidor: almoço segue 12h e 13h", srv.etapaDaHora("2026-10-05", 1, 12) === "alm12" && srv.etapaDaHora("2026-10-05", 1, 13) === "alm13");
+t("README manda o agendamento rodar também às 10h", leia("README.md").includes("11,12,13,15,16"));
 
 secao("Auditoria: gravacao com return=minimal (correcao de RLS)");
 const gravaAuditoria = src.match(/sbInsert\([^;\n]*"auditoria"[^;\n]*\)/g) || [];

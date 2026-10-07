@@ -293,7 +293,11 @@ const EMPRESA = {
   cidade: "Belo Horizonte/MG",
   ramo: "Assistência técnica e comércio de peças e acessórios pra fones e caixas de som bluetooth (JBL, Bose, Harman Kardon)"
 };
-/* Calendário de expediente:
+/* Calendário de expediente (a partir de 02/10/2026 — antes disso vale o horário antigo, ver HORARIO_NOVO_DESDE):
+   seg-sex 9:00→18:00 com 1h de intervalo (jornada de 8h por dia)
+   sábado  8:00→12:00 (turno único de 4h, sem intervalo)
+   domingo e feriado nacional: fechado
+   Horário ANTIGO (até 01/10/2026):
    seg-sex 8:00→18:00 com 1h de intervalo (presença 10h − 1h = 9h efetivas; jornada normal 8h,
            o excedente diário vai pro banco de horas · CLT art. 71 exige mínimo de 1h)
    sábado  8:00→13:00 (turno único de 5h, sem intervalo)
@@ -321,7 +325,10 @@ const MUDANCA_INTERVALO = {
   jornadaAntiga: 8 * 60,
   jornadaNova: 9 * 60
 };
-const JORNADA_MIN = 9 * 60; // dia cheio de trabalho (usado na conversão de folga: 1 dia = 9h)
+const JORNADA_MIN = 9 * 60; // dia cheio do horário ANTIGO (até 01/10/2026); hoje use jornadaDiaCheioMin(dt)
+// Horário atual da loja (decisão da gestão, em vigor desde 02/10/2026). Os dias antes disso NÃO são recalculados.
+const HORARIO_NOVO_DESDE = "2026-10-02";
+const horarioNovo = dataIso => String(dataIso) >= HORARIO_NOVO_DESDE;
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = lista => {
@@ -346,12 +353,26 @@ function expedienteDoDia(dt) {
     intervaloMin: 0,
     rotulo: `feriado — ${feriado}`
   };
-  if (dow === 6) return {
+  const novo = horarioNovo(dataISO(dt));
+  if (dow === 6) return novo ? {
+    jornadaMin: 4 * 60,
+    entradaMin: 8 * 60,
+    saidaMin: 12 * 60,
+    intervaloMin: 0,
+    rotulo: "sábado 8:00–12:00"
+  } : {
     jornadaMin: 5 * 60,
     entradaMin: 8 * 60,
     saidaMin: 13 * 60,
     intervaloMin: 0,
     rotulo: "sábado 8:00–13:00"
+  };
+  if (novo) return {
+    jornadaMin: 8 * 60,
+    entradaMin: 9 * 60,
+    saidaMin: 18 * 60,
+    intervaloMin: EXPEDIENTE.intervaloMin,
+    rotulo: "9:00–18:00 (8h + 1h de intervalo)"
   };
   // Jornada contratual de 9h/dia (decisão da empresa): presença 8h→18h menos 1h de intervalo.
   // Fechando em zero o dia normal — sem crédito nem débito automático no banco de horas.
@@ -363,8 +384,13 @@ function expedienteDoDia(dt) {
     rotulo: "8:00–18:00 (9h + 1h de intervalo)"
   };
 }
-// Minutos após o horário de entrada (negativo = chegou antes)
-const minutosAposEntrada = dt => dt.getHours() * 60 + dt.getMinutes() - EXPEDIENTE.entradaMin;
+// Minutos após o horário de entrada do dia (negativo = chegou antes). Dia fechado não tem entrada: devolve 0.
+const minutosAposEntrada = dt => {
+  const e = expedienteDoDia(dt).entradaMin;
+  return e == null ? 0 : dt.getHours() * 60 + dt.getMinutes() - e;
+};
+// Jornada de um dia cheio de semana (conversão de folga: 1 dia = 8h hoje, 9h no horário antigo)
+const jornadaDiaCheioMin = dt => (horarioNovo(dataISO(dt || new Date())) ? 8 : 9) * 60;
 // Dia sem expediente nunca gera atraso
 const entradaPontual = dt => expedienteDoDia(dt).jornadaMin === 0 ? true : minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
 // FONTE ÚNICA do atraso computável (usada pelo Prêmio E pela folha — nunca duplicar essa regra):
@@ -404,14 +430,38 @@ const HORARIOS_CONTRATUAIS = [{
   durMin: 540,
   pares: [["0800", "1200"], ["1300", "1800"]]
 },
-// seg-sex: 9h de jornada, intervalo 12-13
+// seg-sex até 01/10/2026: 9h de jornada, intervalo 12-13
 {
   cod: "H0813",
   durMin: 300,
   pares: [["0800", "1300"]]
-} // sábado: turno único de 5h
+},
+// sábado até 01/10/2026: turno único de 5h
+{
+  cod: "H0918",
+  durMin: 480,
+  pares: [["0900", "1200"], ["1300", "1800"]]
+},
+// seg-sex desde 02/10/2026: 8h de jornada, intervalo 12-13
+{
+  cod: "H0812",
+  durMin: 240,
+  pares: [["0800", "1200"]]
+} // sábado desde 02/10/2026: turno único de 4h
 ];
-const codHorarioDe = dt => new Date(dt).getDay() === 6 ? "H0813" : "H0818";
+const codHorarioDe = dt => {
+  const d = new Date(dt),
+    novo = horarioNovo(dataISO(d)),
+    sab = d.getDay() === 6;
+  return novo ? sab ? "H0812" : "H0918" : sab ? "H0813" : "H0818";
+};
+// Texto curto da jornada contratual pro cabeçalho dos PDFs; comp = "AAAA-MM". Outubro/2026 tem os dois horários.
+const jornadaContratualTxt = comp => {
+  const c = String(comp || "").slice(0, 7);
+  if (c && c < HORARIO_NOVO_DESDE.slice(0, 7)) return "9h/dia seg-sex + sabado 5h";
+  if (c === HORARIO_NOVO_DESDE.slice(0, 7)) return "8h/dia seg-sex + sabado 4h (desde 02/10; antes 9h e 5h)";
+  return "8h/dia seg-sex + sabado 4h";
+};
 
 /* ============================================================
    SUPABASE — backend real
@@ -2947,7 +2997,7 @@ function pdfReciboFolha(f, u, compISO) {
   campo(x0 + 340, 108, "CPF", u?.cpf);
   campo(x0 + 430, 108, "ADMISSAO", u?.admissao ? fmtData(u.admissao) : "-");
   campo(x0 + 8, 134, "FUNCAO", u?.cargo || "-");
-  campo(x0 + 200, 134, "JORNADA CONTRATUAL", "9h/dia seg-sex + sabado 5h");
+  campo(x0 + 200, 134, "JORNADA CONTRATUAL", jornadaContratualTxt(comp));
   campo(x0 + 340, 134, "DEPENDENTES IRRF", String(dep));
   campo(x0 + 430, 134, "DIAS TRABALHADOS", `${dias}`);
   // tabela de verbas
@@ -3026,7 +3076,7 @@ function pdfEspelhoPonto(u, dias, comp, aceite) {
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
     const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
-    const rot = exp.jornadaMin === 0 ? exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO" : exp.jornadaMin <= 300 ? "SABADO 8-13h" : "SEG-SEX 8-18h";
+    const rot = exp.jornadaMin === 0 ? exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO" : exp.jornadaMin <= 300 ? horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h" : horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h";
     const marcas = regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "A" : "") + (r.metodo === "sem_verificacao" ? "!" : "") + (r.offline ? "F" : "") + (r.geoStatus === "dispensado_por_falha" ? "G" : "")).join("  ");
     return {
       dia,
@@ -3074,7 +3124,7 @@ function pdfEspelhoPonto(u, dias, comp, aceite) {
     campo(x0 + 340, 108, "CPF", u && u.cpf);
     campo(x0 + 430, 108, "ADMISSAO", u && u.admissao ? fmtData(u.admissao) : "-");
     campo(x0 + 8, 134, "FUNCAO", u && u.cargo || "-");
-    campo(x0 + 200, 134, "JORNADA CONTRATUAL", "9h/dia seg-sex + sabado 5h");
+    campo(x0 + 200, 134, "JORNADA CONTRATUAL", jornadaContratualTxt(comp));
     campo(x0 + 430, 134, "DIAS COM MARCACAO", String(itens.length));
     y = 160;
     p.fundo(x0, y, larg, 16, 0.88);
@@ -6680,8 +6730,9 @@ function AppInterno() {
         });
         if (notifStatus === "granted") notificarAparelho(titulo, corpo, id + "-" + chaveDia);
       };
-      if (h === 8 && total === 0) disparar("ent8", "⏰ Hora de bater o ponto", "Seu expediente começou às 8:00 — registre sua entrada.");
-      if (h === 9 && total === 0) disparar("ent9", "⏰ Entrada ainda não registrada", "Já passa das 9:00 e sua entrada de hoje não foi registrada.");
+      const abre = Math.floor(exp.entradaMin / 60); // 9h em dia de semana, 8h no sábado (desde 02/10/2026)
+      if (h === abre && total === 0) disparar("ent8", "⏰ Hora de bater o ponto", `Seu expediente começou às ${abre}:00 — registre sua entrada.`);
+      if (h === abre + 1 && total === 0) disparar("ent9", "⏰ Entrada ainda não registrada", `Já passa das ${abre + 1}:00 e sua entrada de hoje não foi registrada.`);
       if (dow >= 1 && dow <= 5) {
         // almoço só seg-sex (sábado é turno único)
         if (h === 12 && total === 1) disparar("alm12", "🍽 Saída pro almoço", "Lembre de registrar a saída pro intervalo.");
@@ -10466,7 +10517,7 @@ function TelaEspelho({
       style: {
         margin: 0
       }
-    }, "Expediente: seg-sex 8:00 \xE0s 18:00 (9h produtivas + 1h de intervalo intrajornada, CLT art. 71) \xB7 s\xE1bado 8:00 \xE0s 13:00 \xB7 domingos e feriados nacionais fechado. Com um \xFAnico par entrada/sa\xEDda no dia, a 1h de intervalo \xE9 descontada da presen\xE7a. Horas al\xE9m das 9h produtivas entram no banco de horas (acordo individual escrito, CLT art. 59 \xA75\xBA) ou s\xE3o pagas como extra com adicional m\xEDnimo de 50%.")));
+    }, "Expediente desde 02/10/2026: seg-sex 9:00 \xE0s 18:00 (8h produtivas + 1h de intervalo intrajornada, CLT art. 71) \xB7 s\xE1bado 8:00 \xE0s 12:00 \xB7 domingos e feriados nacionais fechado. At\xE9 01/10/2026 valia seg-sex 8:00 \xE0s 18:00 (9h) e s\xE1bado 8:00 \xE0s 13:00. Com um \xFAnico par entrada/sa\xEDda no dia, a 1h de intervalo \xE9 descontada da presen\xE7a. Horas al\xE9m da jornada do dia entram no banco de horas (acordo individual escrito, CLT art. 59 \xA75\xBA) ou s\xE3o pagas como extra com adicional m\xEDnimo de 50%.")));
   })()), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
@@ -14269,7 +14320,7 @@ function TelaBanco({
       color: C.cinza,
       marginTop: 8
     }
-  }, "As horas s\xF3 s\xE3o debitadas depois da aprova\xE7\xE3o do gestor. 1 folga = 9h (seg-sex) ou 5h (s\xE1bado). Base legal: CLT art. 59 \xA7\xA7 5\xBA-6\xBA (acordo individual escrito).")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
+  }, "As horas s\xF3 s\xE3o debitadas depois da aprova\xE7\xE3o do gestor. 1 folga = 8h (seg-sex) ou 4h (s\xE1bado), no hor\xE1rio em vigor desde 02/10/2026. Base legal: CLT art. 59 \xA7\xA7 5\xBA-6\xBA (acordo individual escrito).")), minhas.map(f => /*#__PURE__*/React.createElement("div", {
     key: f.id,
     style: {
       ...S.card,
@@ -19992,7 +20043,7 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 9h/dia"), " (8h \xE0s 18h com 1h de intervalo) + s\xE1bado de 5h = 50h semanais. ", /*#__PURE__*/React.createElement("b", null, "Aten\xE7\xE3o jur\xEDdica:"), " a Constitui\xE7\xE3o (art. 7\xBA XIII) fixa 44h \u2014 as 6h excedentes precisam de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam por push de servidor (Supabase + chaves VAPID), valendo tamb\xE9m com o app fechado."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h/13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 8h/dia"), " (9h \xE0s 18h com 1h de intervalo) + s\xE1bado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constitui\xE7\xE3o (art. 7\xBA XIII). At\xE9 01/10/2026 eram 9h/dia + s\xE1bado de 5h = 50h semanais; as horas acima de 44h naquele per\xEDodo dependem de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam por push de servidor (Supabase + chaves VAPID), valendo tamb\xE9m com o app fechado."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h em dia de semana, 12h no s\xE1bado desde 02/10/2026; antes 13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,

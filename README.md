@@ -163,6 +163,23 @@ Precisa da tabela opcional `ajustes_ponto` (SQL em *Painel do gestor ->
 Diagnostico do sistema -> Copiar SQL*). Sem ela o app roda igual, so que sem o
 caminho de correcao.
 
+## Horário da loja
+
+Em vigor desde **02/10/2026** (`HORARIO_NOVO_DESDE` no `.jsx`):
+
+| Dia | Horário | Jornada |
+| --- | --- | --- |
+| Segunda a sexta | 9h às 18h, 1h de almoço | 8h por dia |
+| Sábado | 8h às 12h, sem intervalo | 4h |
+| Domingo e feriado nacional | fechado | - |
+
+Total de 44h por semana. A tolerância de atraso continua 10 minutos.
+Os dias **anteriores** a 02/10/2026 continuam com o horário antigo (seg-sex 8h às 18h,
+jornada de 9h; sábado 8h às 13h, 5h) e **não são recalculados**: quem decide é a data
+do dia, em `expedienteDoDia`. O arquivo fiscal AEJ usa os códigos `H0918` e `H0812`
+a partir do marco e `H0818` e `H0813` antes dele. A rotina de saída automática do
+banco (pg_cron) é externa ao repositório: confirme que ela fecha o sábado às 12h.
+
 ## Base legal
 
 Registro eletronico de ponto conforme CLT art. 74 e Portaria MTP 671/2021; jornada, banco de
@@ -605,10 +622,10 @@ Quem dispara e uma Edge Function no Supabase - nao o navegador. As pecas:
 | `push` + `showNotification` | `sw.js` | exibe o aviso que vem do servidor (no iPhone so o service worker consegue) |
 | `VAPID_PUBLICA` e `registrarPush()` | `ponto-renovar.jsx` | inscreve o aparelho e grava a inscricao em `push_inscricoes` |
 | `lembretes-push` | Edge Function | decide quem esta devendo batida e assina o envio com a chave VAPID |
-| `cron.schedule('lembretes-push')` | banco (pg_cron + pg_net) | chama a funcao as 8h, 9h, 12h e 13h de Brasilia |
+| `cron.schedule('lembretes-push')` | banco (pg_cron + pg_net) | chama a funcao as 8h, 9h, 10h, 12h e 13h de Brasilia (dia de semana: 9h e 10h; sabado: 8h e 9h) |
 | `push_lembretes_log` | banco | trava de 1 aviso por pessoa/dia/etapa (o cron pode repetir sem risco) |
 
-Regras espelhadas do app: 8h e 9h sem nenhuma batida, 12h com 1 batida e 13h
+Regras espelhadas do app: os dois avisos de entrada (9h e 10h em dia de semana, 8h e 9h no sabado) sem nenhuma batida, 12h com 1 batida e 13h
 com 2 batidas (almoco so de segunda a sexta). Domingo e feriado nacional nao
 geram aviso. Aparelho que desinstalou o app devolve 404/410 e a inscricao e
 apagada sozinha.
@@ -729,11 +746,13 @@ create table if not exists public.push_lembretes_log (
 alter table public.push_lembretes_log enable row level security;
 create policy push_lembretes_log_select on public.push_lembretes_log for select to authenticated using (auth.uid() = usuario_id);
 
--- 8h, 9h, 12h e 13h de Brasilia = 11, 12, 15 e 16 UTC (duas passadas por hora).
+-- 8h, 9h, 10h, 12h e 13h de Brasilia = 11, 12, 13, 15 e 16 UTC (duas passadas por hora).
+-- Desde 02/10/2026 a loja abre as 9h em dia de semana (avisos as 9h e 10h) e as 8h no sabado
+-- (avisos as 8h e 9h); a funcao escolhe sozinha qual aviso vale em cada hora.
 -- A chave usada aqui e a PUBLICAVEL, a mesma que o index.html leva pro navegador.
 select cron.schedule(
   'lembretes-push',
-  '5,35 11,12,15,16 * * 1-6',
+  '5,35 11,12,13,15,16 * * 1-6',
   $job$
   select net.http_post(
     url := 'https://SEU-PROJETO.supabase.co/functions/v1/lembretes-push',

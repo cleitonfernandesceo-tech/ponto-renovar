@@ -35,13 +35,27 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+
+/* Os ids ent8/ent9 sao os mesmos de antes (a trava push_lembretes_log guarda esse texto):
+   "ent8" = primeiro aviso da entrada, "ent9" = segundo aviso (entrada ainda nao registrada).
+   A hora da entrada mudou em 02/10/2026: dia de semana abre as 9h, sabado as 8h. */
+const HORARIO_NOVO_DESDE = "2026-10-02";
+const horaDeAbrir = (dia, dow) => (dia >= HORARIO_NOVO_DESDE && dow >= 1 && dow <= 5 ? 9 : 8);
 const ETAPAS = {
-  ent8: { titulo: "⏰ Hora de bater o ponto", corpo: "Seu expediente comecou as 8:00 — registre sua entrada.", batidas: 0 },
-  ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: "Ja passa das 9:00 e sua entrada de hoje nao foi registrada.", batidas: 0 },
-  alm12: { titulo: "🍽 Saida pro almoco", corpo: "Lembre de registrar a saida pro intervalo.", batidas: 1 },
-  alm13: { titulo: "🍽 Volta do almoco", corpo: "Lembre de registrar o retorno do intervalo.", batidas: 2 },
+  ent8: { titulo: "⏰ Hora de bater o ponto", corpo: (abre) => "Seu expediente comecou as " + abre + ":00 — registre sua entrada.", batidas: 0 },
+  ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: (abre) => "Ja passa das " + (abre + 1) + ":00 e sua entrada de hoje nao foi registrada.", batidas: 0 },
+  alm12: { titulo: "🍽 Saida pro almoco", corpo: () => "Lembre de registrar a saida pro intervalo.", batidas: 1 },
+  alm13: { titulo: "🍽 Volta do almoco", corpo: () => "Lembre de registrar o retorno do intervalo.", batidas: 2 },
 };
-const ETAPA_DA_HORA = { 8: "ent8", 9: "ent9", 12: "alm12", 13: "alm13" };
+/* Qual aviso corresponde a esta hora. Dia de semana novo: 9h e 10h; sabado: 8h e 9h. */
+const etapaDaHora = (dia, dow, hora) => {
+  const abre = horaDeAbrir(dia, dow);
+  if (hora === abre) return "ent8";
+  if (hora === abre + 1) return "ent9";
+  if (hora === 12) return "alm12";
+  if (hora === 13) return "alm13";
+  return undefined;
+};
 
 /* ---------- reunioes do time ----------
    Espelho de RITUAIS/reunioesDoDia do ponto-renovar.jsx. O calendario e
@@ -184,7 +198,7 @@ Deno.serve(async (req) => {
   }
 
   const { dia, hora, dow } = agoraSP();
-  const etapa = (corpo && corpo.etapa) || ETAPA_DA_HORA[hora];
+  const etapa = (corpo && corpo.etapa) || etapaDaHora(dia, dow, hora);
 
   /* ---------- aviso das reunioes do time ----------
      Cada reuniao avisa duas vezes: ao sair no dia anterior e ao chegar no
@@ -228,7 +242,7 @@ Deno.serve(async (req) => {
        na ultima passada do dia. O de chegada segue a mesma logica na entrada. */
     const naHora = (reg) => etapa === "reuniao_saida"
       ? (!!(reg && reg.saida) || hora >= 19)
-      : (!!(reg && reg.entrada) || hora >= 9);
+      : (!!(reg && reg.entrada) || hora >= horaDeAbrir(dia, dow) + 1);
 
     const feitos = [];
     for (const p of pessoas) {
@@ -248,7 +262,7 @@ Deno.serve(async (req) => {
     return json({ dia, hora, etapa, reuniao: alvo.dia, avisados: feitos.length, detalhe: feitos });
   }
 
-  if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete (8h, 9h, 12h e 13h)" });
+  if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete (9h e 10h em dia de semana, 8h e 9h no sabado, 12h e 13h)" });
   if (dow === 0) return json({ dia, etapa, ignorado: "domingo" });
   if ((etapa === "alm12" || etapa === "alm13") && dow === 6) return json({ dia, etapa, ignorado: "sabado e turno unico" });
   const feriado = await rest("feriados_nacionais?select=nome&data=eq." + dia);
@@ -279,7 +293,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify([{ usuario_id: u.id, dia, etapa, aparelhos: insc.length }]),
     });
     if (!gravou.length) continue;
-    const enviados = await enviar(insc, { titulo: cfg.titulo, corpo: cfg.corpo, etapa, url: "./" });
+    const enviados = await enviar(insc, { titulo: cfg.titulo, corpo: cfg.corpo(horaDeAbrir(dia, dow)), etapa, url: "./" });
     detalhe.push({ nome: u.nome, aparelhos: insc.length, enviados });
   }
   return json({ dia, hora, etapa, avisados: detalhe.length, detalhe });
