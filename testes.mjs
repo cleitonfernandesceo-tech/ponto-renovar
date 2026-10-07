@@ -1127,6 +1127,13 @@ t("o token de renovacao do convite nao e gravado no aparelho",
 t("o app mostra que esta retomando em vez de piscar o login", src.includes("Retomando sua sess"));
 t("o README explica o manter conectado", leia("README.md").includes("### Manter conectado")); 
 
+secao("Auditoria: gravacao com return=minimal (correcao de RLS)");
+const gravaAuditoria = src.match(/sbInsert\([^;\n]*"auditoria"[^;\n]*\)/g) || [];
+t("o app grava na auditoria em pelo menos 2 lugares (log e auditar)", gravaAuditoria.length >= 2, String(gravaAuditoria.length));
+t("TODA gravacao na auditoria usa return=minimal (true)", gravaAuditoria.every(c => c.includes("}], true)")));
+t("o sbInsert traduz minimal em Prefer: return=minimal", src.includes('Prefer: minimal ? "return=minimal" : "return=representation"'));
+t("nenhuma outra rota grava na auditoria sem passar pelo sbInsert", !/rest\/v1\/auditoria/.test(src.replace(/sbSelect[^\n]*/g, "")));
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
