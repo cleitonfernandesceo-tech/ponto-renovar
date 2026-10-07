@@ -1128,6 +1128,10 @@ t("o token de renovacao do convite nao e gravado no aparelho",
 t("o app mostra que esta retomando em vez de piscar o login", src.includes("Retomando sua sess"));
 t("o README explica o manter conectado", leia("README.md").includes("### Manter conectado")); 
 
+secao("Telas do funcionario sem termo tecnico");
+t("o topo do app nao mostra o nome do servico (Supabase)", !src.includes("conectado ao Supabase"));
+t("a recuperacao de senha explica em portugues simples", src.includes("receba por e-mail um link para criar uma nova senha.") && !src.includes("(Supabase Auth)"));
+
 secao("Horário novo desde 02/10/2026 (seg-sex 9h-18h, sábado 8h-12h)");
 const ex = (iso) => m.expedienteDoDia(new Date(iso + "T12:00:00"));
 t("o marco do horário novo é 02/10/2026", m.HORARIO_NOVO_DESDE === "2026-10-02");

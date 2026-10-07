@@ -5285,8 +5285,8 @@ function AppInterno() {
           <div className="topo-empresa" style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{EMPRESA.nome}</div>
           <div className="topo-status" style={{ marginTop: 8 }}>
             {demo
-              ? <span style={S.tag(C.grafite, C.amarelo)}>⚡ demonstração (local)</span>
-              : <span style={S.tag(C.grafite, C.verde)}>● conectado ao Supabase</span>}
+              ? <span style={S.tag(C.grafite, C.amarelo)}>⚡ modo de demonstração</span>
+              : <span style={S.tag(C.grafite, C.verde)}>● conectado</span>}
           </div>
           <div className="menu" role="navigation" aria-label="Menu principal" style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
             {menu.map(([k, label]) => (
@@ -5586,7 +5586,7 @@ function Login({ onSupabase, onDemo, onReset }) {
             <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 12, cursor: "pointer", textDecoration: "underline", marginTop: 2 }} onClick={() => { setModoReset(true); setMsgReset(null); }}>Esqueci minha senha</button>
           ) : (
             <div style={{ marginTop: 4, padding: 10, background: C.grafite, borderRadius: 8 }}>
-              <div style={{ fontSize: 12, color: C.cinza, marginBottom: 6 }}>Digite seu e-mail no campo acima e receba um link de redefinição por e-mail (Supabase Auth).</div>
+              <div style={{ fontSize: 12, color: C.cinza, marginBottom: 6 }}>Digite seu e-mail no campo acima e receba por e-mail um link para criar uma nova senha.</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button style={{ ...S.btn, flex: 1, padding: "8px 12px", fontSize: 13, opacity: carregando ? 0.6 : 1 }} disabled={carregando} onClick={enviarReset}>{carregando ? "Enviando…" : "Enviar link de redefinição"}</button>
                 <button style={{ ...S.btnGhost, padding: "8px 12px", fontSize: 13 }} onClick={() => { setModoReset(false); setMsgReset(null); }}>Cancelar</button>
