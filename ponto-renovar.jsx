@@ -638,7 +638,8 @@ async function sbRenovarSessao(refreshToken) {
 }
 
 /* Mapas linha do banco ↔ formato interno do app */
-const hojeStr = () => new Date().toISOString().slice(0, 10);
+// Data de HOJE no relógio do aparelho. toISOString() usa o horário de Londres e, depois das 21h em Brasília, devolvia o dia seguinte.
+const hojeStr = () => dataISO(new Date());
 
 /* ============================================================
    SANITIZAÇÃO E VALIDAÇÃO DE ENTRADAS
@@ -4262,7 +4263,7 @@ function AppInterno() {
           setFerias(x => [{ id: Date.now(), userId: user.id, inicio, dias: +dias, status: "pendente" }, ...x]);
         } else {
           const fim = new Date(ini); fim.setDate(fim.getDate() + (+dias) - 1);
-          const [row] = await sbInsert(sessao.token, "ferias", [{ usuario_id: user.id, data_inicio: inicio, data_fim: fim.toISOString().slice(0, 10), dias: +dias }]);
+          const [row] = await sbInsert(sessao.token, "ferias", [{ usuario_id: user.id, data_inicio: inicio, data_fim: dataISO(fim), dias: +dias }]);
           setFerias(x => [mapFer(row), ...x]);
         }
         log("ferias", `Solicitação: ${dias} dias a partir de ${fmtData(ini)}`);

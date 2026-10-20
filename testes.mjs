@@ -53,7 +53,7 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
   gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
-  horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin };`;
+  hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1191,6 +1191,20 @@ t("o app grava na auditoria em pelo menos 2 lugares (log e auditar)", gravaAudit
 t("TODA gravacao na auditoria usa return=minimal (true)", gravaAuditoria.every(c => c.includes("}], true)")));
 t("o sbInsert traduz minimal em Prefer: return=minimal", src.includes('Prefer: minimal ? "return=minimal" : "return=representation"'));
 t("nenhuma outra rota grava na auditoria sem passar pelo sbInsert", !/rest\/v1\/auditoria/.test(src.replace(/sbSelect[^\n]*/g, "")));
+
+secao("Data de hoje depois das 21h (horário de Brasília)");
+{
+  const tzAntes = process.env.TZ, DataReal = globalThis.Date;
+  process.env.TZ = "America/Sao_Paulo";
+  // relógio parado em 20/10/2026 às 23h30 (horário local); em UTC já é dia 21
+  globalThis.Date = class extends DataReal { constructor(...a) { a.length ? super(...a) : super(2026, 9, 20, 23, 30); } };
+  const hoje = m.hojeStr();
+  const comTzUtc = new globalThis.Date().toISOString().slice(0, 10);
+  globalThis.Date = DataReal;
+  if (tzAntes === undefined) delete process.env.TZ; else process.env.TZ = tzAntes;
+  t("às 23h30 de 20/10 o app ainda diz que hoje é 20/10", hoje === "2026-10-20", hoje);
+  t("(prova do problema antigo: toISOString diria 21/10)", comTzUtc === "2026-10-21", comTzUtc);
+}
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
