@@ -316,9 +316,9 @@ t("o service worker reage ao toque no aviso e foca a aba aberta",
   /addEventListener\('notificationclick'/.test(swTxt) && /clients\.matchAll/.test(swTxt) && /clients\.openWindow/.test(swTxt));
 t("a legenda do lembrete muda conforme a permissão (4 situações)",
   ["granted", "denied", "unsupported", "return \"toque em Ativar"].every((c) => blocoNotif.includes(c)));
-t("o aviso de transparência explica a condição do iPhone e aponta o push de servidor",
+t("o aviso de transparência explica a condição do iPhone e que o aviso vem do servidor",
   src.includes("Lembretes de batida</b> viram aviso do celular") &&
-  src.includes("tela de início") && src.includes("push de servidor (Supabase + chaves VAPID)"));
+  src.includes("tela de início") && src.includes("chegam mesmo com o app fechado, porque o aviso é enviado pelo servidor"));
 t("o service worker mostra o aviso que chega do servidor (app fechado)",
   swTxt.includes("addEventListener('push'") && swTxt.includes("registration.showNotification"));
 t("o app inscreve o aparelho no push com a chave VAPID publica",

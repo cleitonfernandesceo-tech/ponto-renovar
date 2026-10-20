@@ -3405,7 +3405,7 @@ function BiometriaCheck({ credenciais, onAprovado, onSemVerificacao, onIrConfigu
       const r = await bioVerificar(credenciais, token, demo);
       onAprovado({ ok: true, metodo: r.metodo, credentialId: r.credentialId });
     } catch (e) {
-      setErro(e.message); setMotivo(e.motivo || "erro"); setEstado("erro");
+      setErro(mensagemAmigavel(e, "a verificação")); setMotivo(e.motivo || "erro"); setEstado("erro");
     }
   };
 
@@ -4124,7 +4124,7 @@ function AppInterno() {
         auditar("local_criado", `${user.nome} criou o local "${linha.nome}" — raio ${linha.raio_metros}m, coordenadas ${linha.latitude},${linha.longitude} (±${Math.round(p.coords.accuracy)}m na captura)`).catch(e => console.warn("[auditoria local]", e.message));
         resolve(Math.round(p.coords.accuracy));
       } catch (e) { reject(e); }
-    }, (err) => reject(new Error("Não foi possível obter sua posição: " + err.message)), { enableHighAccuracy: true, timeout: 10000 });
+    }, () => reject(new Error("Não foi possível obter sua posição. Confira se a localização do aparelho está ligada e permitida para este app e tente de novo.")), { enableHighAccuracy: true, timeout: 10000 });
   });
 
   const desativarLocal = async (id) => {
@@ -5156,7 +5156,7 @@ function AppInterno() {
   if (!user && conviteToken) return <TelaConvite token={conviteToken} onConcluir={concluirConvite} onVoltar={() => { try { window.history.replaceState({}, "", window.location.pathname); } catch {} window.location.reload(); }} />;
   if (!user && restaurando) return (
     <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ ...S.card, maxWidth: 380, textAlign: "center", padding: 30 }}>
+      <div style={{ ...S.card, maxWidth: 380, boxSizing: "border-box", textAlign: "center", padding: 30 }}>
         <div style={{ fontSize: 34 }}>⏳</div>
         <div style={{ ...S.display, fontSize: 18, color: C.amarelo, marginTop: 10 }}>Retomando sua sessão</div>
         <p style={{ fontSize: 13, color: C.cinza, marginTop: 8, lineHeight: 1.6 }}>Um instante — você deixou este aparelho conectado.</p>
@@ -5167,7 +5167,7 @@ function AppInterno() {
 
   if (sessaoExpirada) return (
     <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ ...S.card, maxWidth: 420, textAlign: "center", padding: 30 }}>
+      <div style={{ ...S.card, maxWidth: 420, boxSizing: "border-box", textAlign: "center", padding: 30 }}>
         <div style={{ fontSize: 40 }}>🔒</div>
         <div style={{ ...S.display, fontSize: 20, color: C.amarelo, marginTop: 8 }}>Sessão expirada</div>
         <p style={{ fontSize: 13.5, color: C.branco, marginTop: 10, lineHeight: 1.6 }}>
@@ -5193,6 +5193,8 @@ function AppInterno() {
     <div style={S.app}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
         @media print { .no-print { display:none!important } body { background:#fff } }
+        /* Campos de largura total contam a borda e o espaço interno dentro dos 100%; sem isto passam da tela no celular. */
+        input[style*="width: 100%"], select[style*="width: 100%"], textarea[style*="width: 100%"] { box-sizing: border-box; max-width: 100%; }
         /* ---- Toques de app: sem realce cinza ao tocar e sem atraso de 300ms ---- */
         html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
         button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -5253,6 +5255,11 @@ function AppInterno() {
           .conteudo div[style*="grid-template-columns"] { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important; }
           .conteudo div[style*="grid-template-columns"] > * { min-width: 0; }
           table { font-size: 11.5px !important; }
+          /* tabela larga rola de lado (como as demais) em vez de quebrar palavra no meio ("COLAB ORADO R") */
+          .conteudo table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+          .conteudo th, .conteudo td { overflow-wrap: normal; word-break: normal; }
+          /* campos de largura fixa dentro de linhas que quebram: ocupam a linha inteira em vez de ficarem desalinhados */
+          .conteudo input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .conteudo select { flex-grow: 1; max-width: 100%; }
         }
         @media (max-width: 380px) {
           .topo-status { display: none !important; }
@@ -5345,7 +5352,7 @@ function AppInterno() {
                     <>
                       <b>{fila.length} batida(s) aguardando envio.</b> Elas <b>já estão registradas</b> com o horário do momento em que você bateu — vão pro servidor sozinhas assim que a rede voltar.
                       {!storageDisponivel() && <div style={{ color: C.vermelho, marginTop: 4 }}>⚠️ Este navegador bloqueia o armazenamento local: mantenha o app aberto até a fila esvaziar, senão as batidas pendentes se perdem.</div>}
-                      {fila.some(i => i.tentativas > 2) && <div style={{ color: C.cinza, marginTop: 4, fontSize: 12 }}>Última falha: {fila.find(i => i.ultimoErro)?.ultimoErro}</div>}
+                      {fila.some(i => i.tentativas > 2) && <div style={{ color: C.cinza, marginTop: 4, fontSize: 12 }}>Motivo da última falha: {mensagemAmigavel(fila.find(i => i.ultimoErro)?.ultimoErro)}</div>}
                     </>
                   ) : <span style={{ color: C.cinza }}>Nenhuma batida pendente.</span>}
                 </div>
@@ -5564,8 +5571,8 @@ function Login({ onSupabase, onDemo, onReset }) {
   };
   return (
     <div style={{ ...S.app, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ ...S.card, width: 440, textAlign: "center", padding: 36 }}>
-        <div style={{ ...S.display, fontSize: 34, color: C.amarelo, lineHeight: 1 }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
+      <div style={{ ...S.card, width: 440, maxWidth: "100%", boxSizing: "border-box", textAlign: "center", padding: 36 }}>
+        <div style={{ ...S.display, fontSize: "clamp(26px, 9vw, 34px)", color: C.amarelo, lineHeight: 1 }}>PONTO<span style={{ color: C.branco }}>RENOVAR</span></div>
         <div style={{ fontSize: 13, color: C.cinza, marginTop: 8 }}>Entre com sua conta corporativa</div>
         <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 10 }}>
           <input style={{ ...S.input, fontSize: 14 }} type="email" placeholder="E-mail corporativo" value={email} autoFocus
@@ -5604,7 +5611,7 @@ function Login({ onSupabase, onDemo, onReset }) {
             </button>
           ) : (
             <div>
-              <div style={{ fontSize: 11, color: C.cinza, marginBottom: 8 }}>⚡ Demonstração — dados 100% fictícios, sem backend:</div>
+              <div style={{ fontSize: 11, color: C.cinza, marginBottom: 8 }}>⚡ Demonstração — dados 100% fictícios, nada é gravado de verdade:</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                 {USUARIOS_SEED.map(u => (
                   <button key={u.id} style={{ ...S.btnGhost, fontSize: 11, padding: "6px 10px" }} onClick={() => onDemo(u)}>
@@ -8104,7 +8111,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
           );
         })}
       </>}
-      <Detalhes titulo="Sobre desativar e convidar"><p style={{ margin: 0 }}>Desativar bloqueia o login (o app checa ativo=false), mas a conta de autenticação permanece — exclusão definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e são de uso único (resgate atômico via function no banco).</p></Detalhes>
+      <Detalhes titulo="Sobre desativar e convidar"><p style={{ margin: 0 }}>Desativar impede a pessoa de entrar no app, mas o cadastro e o histórico dela continuam guardados — nada é apagado. Convites valem por 7 dias e só podem ser usados uma vez.</p></Detalhes>
     </div>
   );
 }
@@ -9521,7 +9528,7 @@ function SecaoBackup({ dados, demo }) {
         {conta(dados.usuarios)} pessoa(s), {linhas} marcação(ões) e {papeis} pedido(s) na tela agora.
         {demo ? " Em demonstração o arquivo sai com dados fictícios." : " Baixe uma cópia no fim de cada mês e guarde fora do celular."}
       </p>
-      <button style={{ ...S.btnGhost, fontSize: 13 }} onClick={baixar}>Baixar backup (JSON)</button>
+      <button style={{ ...S.btnGhost, fontSize: 13 }} onClick={baixar}>Baixar cópia de segurança</button>
       {feito && (
         <p style={{ fontSize: 12, color: C.verde, margin: "10px 0 0", lineHeight: 1.6 }}>
           Arquivo gerado. Ele tem dados pessoais: guarde em local restrito (LGPD, art. 46).
@@ -9822,10 +9829,10 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
       <Detalhes titulo="⚠️ Limites e transparência do sistema">
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
           <li><b>Jornada de 8h/dia</b> (9h às 18h com 1h de intervalo) + sábado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constituição (art. 7º XIII). Até 01/10/2026 eram 9h/dia + sábado de 5h = 50h semanais; as horas acima de 44h naquele período dependem de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
-          <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início) e chegam por push de servidor (Supabase + chaves VAPID), valendo também com o app fechado.</li>
-          <li><b>Saída automática (18h em dia de semana, 12h no sábado desde 02/10/2026; antes 13h)</b> depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h está ativo.</li>
-          <li><b>Biometria (WebAuthn)</b> comprova que quem bateu está com o aparelho cadastrado e passou pelo Face ID/digital <b>daquele aparelho</b>. Não é reconhecimento facial contra foto de referência da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto.</li>
-          <li><b>Assinatura validada no servidor</b> antes de gravar a marcação — desafio de uso único, conferência de origem, flag de verificação biométrica, assinatura contra a chave pública e contador do autenticador.</li>
+          <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início) e chegam mesmo com o app fechado, porque o aviso é enviado pelo servidor.</li>
+          <li><b>Saída automática (18h em dia de semana, 12h no sábado desde 02/10/2026; antes 13h)</b> depende de uma rotina automática agendada no servidor. Confirme com quem cuida do sistema se a rotina das 23h está ligada.</li>
+          <li><b>Biometria (Face ID ou digital)</b> comprova que quem bateu está com o aparelho cadastrado e passou pelo Face ID/digital <b>daquele aparelho</b>. Não é reconhecimento facial contra foto de referência da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto.</li>
+          <li><b>Conferência no servidor</b> antes de gravar a marcação: o servidor confirma que o pedido veio do aparelho cadastrado, que a biometria foi feita na hora e que ele não é uma cópia de um pedido antigo.</li>
         </ul>
         <p style={{ fontSize: 11.5, color: C.cinza, margin: "8px 0 0", lineHeight: 1.5 }}>
           Mitigação: cerca geográfica (ativa) + regra no regulamento interno proibindo cadastrar terceiros no aparelho usado pro ponto. Batidas sem verificação ficam sinalizadas (⚠) no espelho e na trilha de auditoria.
@@ -9932,7 +9939,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
             const csv = "\uFEFF" + linhas.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
             const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
             const a = document.createElement("a"); a.href = url; a.download = `auditoria-${hojeStr()}.csv`; a.click(); URL.revokeObjectURL(url);
-          }}>⬇ Exportar CSV</button>
+          }}>⬇ Baixar planilha (CSV)</button>
         </div>
         <div style={{ maxHeight: 300, overflowY: "auto", marginTop: 8 }}>
           {logsFiltrados.length === 0 && <p style={{ fontSize: 12, color: C.cinza, padding: "8px 0" }}>Nenhum evento com esses filtros.</p>}
