@@ -3387,7 +3387,7 @@ const S = {
 };
 
 const Badge = ({ st }) => {
-  const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, "#fff", "APROVADO"], aprovada: [C.verde, "#fff", "APROVADA"], recusado: [C.vermelho, "#fff", "RECUSADO"], rejeitado: [C.vermelho, "#fff", "REJEITADO"], rejeitada: [C.vermelho, "#fff", "REJEITADA"] };
+  const map = { pendente: [C.amarelo, "#111", "PENDENTE"], aprovado: [C.verde, C.preto, "APROVADO"], aprovada: [C.verde, C.preto, "APROVADA"], recusado: [C.vermelho, C.preto, "RECUSADO"], rejeitado: [C.vermelho, C.preto, "REJEITADO"], rejeitada: [C.vermelho, C.preto, "REJEITADA"] };
   const [bg, fg, tx] = map[st] || map.pendente;
   return <span style={S.tag(bg, fg)}>{tx}</span>;
 };
@@ -5309,7 +5309,7 @@ function AppInterno() {
               </div>
             </div>
             <button style={{ ...S.btnGhost, marginTop: 12, width: "100%", fontSize: 13 }} aria-label="Sair da conta" onClick={sair}>Sair</button>
-            <div className="rodape-empresa" style={{ marginTop: 14, fontSize: 10, color: C.cinza, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+            <div className="rodape-empresa" style={{ marginTop: 14, fontSize: 11, color: C.cinza, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
               <b style={{ color: C.branco }}>{EMPRESA.nome}</b><br />
               CNPJ {EMPRESA.cnpj}<br />
               {EMPRESA.endereco}<br />
@@ -5622,7 +5622,7 @@ function Login({ onSupabase, onDemo, onReset }) {
             </div>
           )}
         </div>
-        <div style={{ fontSize: 10, color: C.cinza, marginTop: 12, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
+        <div style={{ fontSize: 11, color: C.cinza, marginTop: 12, lineHeight: 1.6, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
           <b style={{ color: C.branco }}>{EMPRESA.nome}</b> · CNPJ {EMPRESA.cnpj}<br />
           {EMPRESA.endereco} · CEP {EMPRESA.cep}<br />
           {EMPRESA.ramo}
@@ -6041,7 +6041,7 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
               const saldo = min - (exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0) - exp.jornadaMin;
               return (
                 <tr key={dia} style={{ borderTop: "1px solid #1E3450" }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>{dia} <span style={{ fontSize: 10, color: C.cinza, fontWeight: 400 }}>{exp.rotulo}</span></td>
+                  <td style={{ padding: 8, fontWeight: 700 }}>{dia} <span style={{ fontSize: 11, color: C.cinza, fontWeight: 400 }}>{exp.rotulo}</span></td>
                   <td>{regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "ᴬ" : "") + (r.metodo === "sem_verificacao" ? "⚠" : "") + (r.pendente ? "⏳" : r.offline ? "ᶠ" : "") + (r.geoStatus === "dispensado_por_falha" ? "📍" : "")).join(" · ")}</td>
                   <td>{hmm(min)}</td>
                   <td style={{ color: saldo >= 0 ? C.verde : C.vermelho, fontWeight: 700 }}>{hmm(saldo)}</td>
@@ -6049,11 +6049,11 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
                     {(() => {
                       const doDia = ajustes.filter((a) => a.dia === dataISO(new Date(regs[0].ts)));
                       const pend = doDia.find((a) => a.status === "pendente");
-                      if (pend) return <span style={{ ...S.tag(C.amarelo, "#0B1526"), fontSize: 10 }} title={pend.motivo}>em análise</span>;
+                      if (pend) return <span style={{ ...S.tag(C.amarelo, "#0B1526"), fontSize: 11 }} title={pend.motivo}>em análise</span>;
                       const recusado = doDia.find((a) => a.status === "recusado");
                       return (
                         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                          {recusado && <span style={{ ...S.tag(C.vermelho, "#fff"), fontSize: 10 }} title={recusado.resposta || "sem resposta"}>recusado</span>}
+                          {recusado && <span style={{ ...S.tag(C.vermelho, C.preto), fontSize: 11 }} title={recusado.resposta || "sem resposta"}>recusado</span>}
                           <button style={{ ...S.btnGhost, padding: "5px 10px", fontSize: 11 }} onClick={() => setPedindo({ dia: dataISO(new Date(regs[0].ts)), regs })}>Pedir correção</button>
                         </span>
                       );
@@ -6655,7 +6655,7 @@ function PainelImpedimentos({ respostas, acoes, hojeIso, ritual, onVirarCombinad
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <div style={{ fontSize: 12.5, color: C.branco }}>{x.autor}</div>
                   {x.travado ? (
-                    <span style={{ fontSize: 10.5, color: C.vermelho, border: "1px solid " + C.vermelho, borderRadius: 20, padding: "1px 8px" }}>
+                    <span style={{ fontSize: 11, color: C.vermelho, border: "1px solid " + C.vermelho, borderRadius: 20, padding: "1px 8px" }}>
                       já pediu em {fmtData(x.desde)}
                     </span>
                   ) : null}
@@ -6730,7 +6730,7 @@ function RespostasDoTime({ user, usuarios, respostas, respostasNoBanco, hojeIso,
           <div key={l.nome} style={{ border: "1px solid " + C.borda, borderRadius: 12, padding: "10px 12px" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <b style={{ fontSize: 13, color: C.branco }}>{l.nome}</b>
-              {l.eu ? <span style={{ ...S.tag, fontSize: 10.5 }}>você</span> : null}
+              {l.eu ? <span style={{ ...S.tag, fontSize: 11 }}>você</span> : null}
             </div>
             {!l.r || respostaVazia(l.r) ? (
               <div style={{ fontSize: 12, color: C.cinza, marginTop: 6 }}>ainda não escreveu — dá para responder na hora, em voz alta.</div>
@@ -6987,7 +6987,7 @@ function TelaTime({ user, usuarios, acoes, onCriar, onAlternar, acoesNoBanco, sa
               {hist.map((e) => (
                 <div key={e.data} style={{ flex: 1, textAlign: "center" }} title={e.motivo || ""}>
                   <div style={{ height: (e.nota * 9) + "px", borderRadius: "6px 6px 0 0", background: corEnergia(e.nota) }} />
-                  <div style={{ fontSize: 10, color: C.cinza, marginTop: 5 }}>{e.data.slice(8) + "/" + e.data.slice(5, 7)}</div>
+                  <div style={{ fontSize: 11, color: C.cinza, marginTop: 5 }}>{e.data.slice(8) + "/" + e.data.slice(5, 7)}</div>
                 </div>
               ))}
             </div>
@@ -8025,7 +8025,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
     try { await onSalvarUsuario(editando.id, { nome: editando.nome, cargo: editando.cargo, tipo: editando.tipo, data_admissao: editando.admissao, salario_bruto: +editando.salario || 0, vale_transporte_ativo: !!editando.vtAtivo, vale_transporte_valor_mensal: +editando.vtValor || 0, dependentes_irrf: +editando.dependentes || 0 }); setEditando(null); }
     catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
   };
-  const statusConvite = (c) => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, "#fff"] : ["PENDENTE", C.amarelo, "#111"];
+  const statusConvite = (c) => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, C.preto] : ["PENDENTE", C.amarelo, "#111"];
   return (
     <div style={{ ...S.card, marginTop: 14 }}>
       <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>👥 Equipe — colaboradores e convites</div>
@@ -8063,7 +8063,7 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
                 <b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {u.email}{u.cargo ? ` · ${u.cargo}` : ""} · {u.papel === "gestor" ? "Gestor" : "Colaborador"} · admissão {fmtData((u.admissao || "").slice(0, 10)) || "—"}</span>
               </div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-                {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, "#fff")}>ATIVO</span>}
+                {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, C.preto)}>ATIVO</span>}
                 <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel, admissao: (u.admissao || "").slice(0, 10), salario: u.salario || 0, vtAtivo: !!u.vtAtivo, vtValor: u.vtValor || 0, dependentes: u.dependentes || 0 })}>Editar</button>
                 {u.id !== gestorId && (u.ativo === false
                   ? <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: true })}>Reativar</button>
@@ -8794,7 +8794,7 @@ function TelaHolerite({ user, folhasPg, adiantamentos }) {
               </tr>
             </tbody>
           </table>
-          <p style={{ fontSize: 10, color: C.cinza, marginTop: 8 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>
+          <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>
         </div>
       ))}
       {adiantamentos.some(a => a.status === "pendente") && (
@@ -9679,7 +9679,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
             <b>{l.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {(+l.latitude).toFixed(5)}, {(+l.longitude).toFixed(5)} · raio {l.raio} m</span>
           </div>
           <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-            {l.ativo ? <span style={S.tag(C.verde, "#fff")}>ATIVO</span> : <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span>}
+            {l.ativo ? <span style={S.tag(C.verde, C.preto)}>ATIVO</span> : <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span>}
             {l.ativo && <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onDesativar(l.id)}>Desativar</button>}
           </span>
         </div>
@@ -9708,7 +9708,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
   ), [logs, filtroAcao, filtroAutor, buscaLog, usuarios]);
   return (
     <div>
-      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, "#fff")}>{pend} pendência(s)</span>}</h1>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, C.preto)}>{pend} pendência(s)</span>}</h1>
       {(() => {
         const afetados = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, imp: impactoMudancaIntervalo(u.id, registros) })).filter(x => x.imp.diasAfetados > 0);
         if (!afetados.length) return null;
@@ -9872,8 +9872,8 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
                 <td style={{ color: a.atrasos >= 3 ? C.vermelho : C.branco }}>{a.atrasos}</td>
                 <td style={{ color: a.faltas > 0 ? C.vermelho : C.branco }}>{a.faltas}</td>
                 <td style={{ color: a.saldoMin >= 0 ? C.verde : C.vermelho }}>{hmm(a.saldoMin)}</td>
-                <td>{e.elegivel ? <span style={S.tag(C.verde, "#fff")}>ELEGÍVEL{e.bonusPontualidade ? " +10%" : ""}</span> : <span style={S.tag(C.vermelho, "#fff")}>NÃO ELEGÍVEL</span>}</td>
-                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, "#fff")}>ATENÇÃO</span> : a.diasTrab === 0 ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>SEM DADOS</span> : <span style={S.tag(C.verde, "#fff")}>OK</span>}</td>
+                <td>{e.elegivel ? <span style={S.tag(C.verde, C.preto)}>ELEGÍVEL{e.bonusPontualidade ? " +10%" : ""}</span> : <span style={S.tag(C.vermelho, C.preto)}>NÃO ELEGÍVEL</span>}</td>
+                <td>{a.atrasos >= 3 || a.faltas > 0 ? <span style={S.tag(C.vermelho, C.preto)}>ATENÇÃO</span> : a.diasTrab === 0 ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>SEM DADOS</span> : <span style={S.tag(C.verde, C.preto)}>OK</span>}</td>
               </tr>
             );})}
           </tbody>
