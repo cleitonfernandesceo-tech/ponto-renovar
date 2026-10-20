@@ -5101,11 +5101,11 @@ const Badge = ({
 }) => {
   const map = {
     pendente: [C.amarelo, "#111", "PENDENTE"],
-    aprovado: [C.verde, "#fff", "APROVADO"],
-    aprovada: [C.verde, "#fff", "APROVADA"],
-    recusado: [C.vermelho, "#fff", "RECUSADO"],
-    rejeitado: [C.vermelho, "#fff", "REJEITADO"],
-    rejeitada: [C.vermelho, "#fff", "REJEITADA"]
+    aprovado: [C.verde, C.preto, "APROVADO"],
+    aprovada: [C.verde, C.preto, "APROVADA"],
+    recusado: [C.vermelho, C.preto, "RECUSADO"],
+    rejeitado: [C.vermelho, C.preto, "REJEITADO"],
+    rejeitada: [C.vermelho, C.preto, "REJEITADA"]
   };
   const [bg, fg, tx] = map[st] || map.pendente;
   return /*#__PURE__*/React.createElement("span", {
@@ -8399,7 +8399,7 @@ function AppInterno() {
     className: "rodape-empresa",
     style: {
       marginTop: 14,
-      fontSize: 10,
+      fontSize: 11,
       color: C.cinza,
       lineHeight: 1.6,
       borderTop: "1px solid #1E3450",
@@ -9422,7 +9422,7 @@ function Login({
     onClick: () => onDemo(u)
   }, u.avatar, " ", u.nome.split(" ")[0], u.papel === "gestor" ? " (gestor)" : ""))))), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: C.cinza,
       marginTop: 12,
       lineHeight: 1.6,
@@ -10401,7 +10401,7 @@ function TelaEspelho({
       }
     }, dia, " ", /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 10,
+        fontSize: 11,
         color: C.cinza,
         fontWeight: 400
       }
@@ -10421,7 +10421,7 @@ function TelaEspelho({
       if (pend) return /*#__PURE__*/React.createElement("span", {
         style: {
           ...S.tag(C.amarelo, "#0B1526"),
-          fontSize: 10
+          fontSize: 11
         },
         title: pend.motivo
       }, "em an\xE1lise");
@@ -10434,8 +10434,8 @@ function TelaEspelho({
         }
       }, recusado && /*#__PURE__*/React.createElement("span", {
         style: {
-          ...S.tag(C.vermelho, "#fff"),
-          fontSize: 10
+          ...S.tag(C.vermelho, C.preto),
+          fontSize: 11
         },
         title: recusado.resposta || "sem resposta"
       }, "recusado"), /*#__PURE__*/React.createElement("button", {
@@ -11850,7 +11850,7 @@ function PainelImpedimentos({
     }
   }, x.autor), x.travado ? /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: 10.5,
+      fontSize: 11,
       color: C.vermelho,
       border: "1px solid " + C.vermelho,
       borderRadius: 20,
@@ -11984,7 +11984,7 @@ function RespostasDoTime({
   }, l.nome), l.eu ? /*#__PURE__*/React.createElement("span", {
     style: {
       ...S.tag,
-      fontSize: 10.5
+      fontSize: 11
     }
   }, "voc\xEA") : null), !l.r || respostaVazia(l.r) ? /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12546,7 +12546,7 @@ function TelaTime({
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: C.cinza,
       marginTop: 5
     }
@@ -15283,7 +15283,7 @@ function SecaoEquipe({
       });
     }
   };
-  const statusConvite = c => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, "#fff"] : ["PENDENTE", C.amarelo, "#111"];
+  const statusConvite = c => c.usado ? ["USADO", "#2A4568", "#C7D2E4"] : new Date(c.expiraEm) < new Date() ? ["EXPIRADO", C.vermelho, C.preto] : ["PENDENTE", C.amarelo, "#111"];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
@@ -15482,7 +15482,7 @@ function SecaoEquipe({
   }, u.ativo === false ? /*#__PURE__*/React.createElement("span", {
     style: S.tag("#1A2F4A", "#C7D2E4")
   }, "INATIVO") : /*#__PURE__*/React.createElement("span", {
-    style: S.tag(C.verde, "#fff")
+    style: S.tag(C.verde, C.preto)
   }, "ATIVO"), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
@@ -18234,7 +18234,7 @@ function TelaHolerite({
     }
   }, brl(f.liquido))))), /*#__PURE__*/React.createElement("p", {
     style: {
-      fontSize: 10,
+      fontSize: 11,
       color: C.cinza,
       marginTop: 8
     }
@@ -19702,7 +19702,7 @@ function SecaoLocais({
       flexShrink: 0
     }
   }, l.ativo ? /*#__PURE__*/React.createElement("span", {
-    style: S.tag(C.verde, "#fff")
+    style: S.tag(C.verde, C.preto)
   }, "ATIVO") : /*#__PURE__*/React.createElement("span", {
     style: S.tag("#1A2F4A", "#C7D2E4")
   }, "INATIVO"), l.ativo && /*#__PURE__*/React.createElement("button", {
@@ -19792,7 +19792,7 @@ function TelaGestor({
       margin: 0
     }
   }, "Painel do gestor ", pend > 0 && /*#__PURE__*/React.createElement("span", {
-    style: S.tag(C.vermelho, "#fff")
+    style: S.tag(C.vermelho, C.preto)
   }, pend, " pend\xEAncia(s)")), (() => {
     const afetados = usuarios.filter(u => u.papel !== "gestor").map(u => ({
       u,
@@ -20194,15 +20194,15 @@ function TelaGestor({
         color: a.saldoMin >= 0 ? C.verde : C.vermelho
       }
     }, hmm(a.saldoMin)), /*#__PURE__*/React.createElement("td", null, e.elegivel ? /*#__PURE__*/React.createElement("span", {
-      style: S.tag(C.verde, "#fff")
+      style: S.tag(C.verde, C.preto)
     }, "ELEG\xCDVEL", e.bonusPontualidade ? " +10%" : "") : /*#__PURE__*/React.createElement("span", {
-      style: S.tag(C.vermelho, "#fff")
+      style: S.tag(C.vermelho, C.preto)
     }, "N\xC3O ELEG\xCDVEL")), /*#__PURE__*/React.createElement("td", null, a.atrasos >= 3 || a.faltas > 0 ? /*#__PURE__*/React.createElement("span", {
-      style: S.tag(C.vermelho, "#fff")
+      style: S.tag(C.vermelho, C.preto)
     }, "ATEN\xC7\xC3O") : a.diasTrab === 0 ? /*#__PURE__*/React.createElement("span", {
       style: S.tag("#1A2F4A", "#C7D2E4")
     }, "SEM DADOS") : /*#__PURE__*/React.createElement("span", {
-      style: S.tag(C.verde, "#fff")
+      style: S.tag(C.verde, C.preto)
     }, "OK")));
   })))), /*#__PURE__*/React.createElement(SecaoEquipe, {
     usuarios: usuarios,
