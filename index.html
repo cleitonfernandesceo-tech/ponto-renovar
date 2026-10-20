@@ -5137,7 +5137,7 @@ function BiometriaCheck({
         credentialId: r.credentialId
       });
     } catch (e) {
-      setErro(e.message);
+      setErro(mensagemAmigavel(e, "a verificação"));
       setMotivo(e.motivo || "erro");
       setEstado("erro");
     }
@@ -6371,7 +6371,7 @@ function AppInterno() {
       } catch (e) {
         reject(e);
       }
-    }, err => reject(new Error("Não foi possível obter sua posição: " + err.message)), {
+    }, () => reject(new Error("Não foi possível obter sua posição. Confira se a localização do aparelho está ligada e permitida para este app e tente de novo.")), {
       enableHighAccuracy: true,
       timeout: 10000
     });
@@ -8111,6 +8111,7 @@ function AppInterno() {
     style: {
       ...S.card,
       maxWidth: 380,
+      boxSizing: "border-box",
       textAlign: "center",
       padding: 30
     }
@@ -8150,6 +8151,7 @@ function AppInterno() {
     style: {
       ...S.card,
       maxWidth: 420,
+      boxSizing: "border-box",
       textAlign: "center",
       padding: 30
     }
@@ -8195,6 +8197,8 @@ function AppInterno() {
     style: S.app
   }, /*#__PURE__*/React.createElement("style", null, `@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
         @media print { .no-print { display:none!important } body { background:#fff } }
+        /* Campos de largura total contam a borda e o espaço interno dentro dos 100%; sem isto passam da tela no celular. */
+        input[style*="width: 100%"], select[style*="width: 100%"], textarea[style*="width: 100%"] { box-sizing: border-box; max-width: 100%; }
         /* ---- Toques de app: sem realce cinza ao tocar e sem atraso de 300ms ---- */
         html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
         button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -8255,6 +8259,11 @@ function AppInterno() {
           .conteudo div[style*="grid-template-columns"] { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important; }
           .conteudo div[style*="grid-template-columns"] > * { min-width: 0; }
           table { font-size: 11.5px !important; }
+          /* tabela larga rola de lado (como as demais) em vez de quebrar palavra no meio ("COLAB ORADO R") */
+          .conteudo table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+          .conteudo th, .conteudo td { overflow-wrap: normal; word-break: normal; }
+          /* campos de largura fixa dentro de linhas que quebram: ocupam a linha inteira em vez de ficarem desalinhados */
+          .conteudo input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .conteudo select { flex-grow: 1; max-width: 100%; }
         }
         @media (max-width: 380px) {
           .topo-status { display: none !important; }
@@ -8549,7 +8558,7 @@ function AppInterno() {
       marginTop: 4,
       fontSize: 12
     }
-  }, "\xDAltima falha: ", fila.find(i => i.ultimoErro)?.ultimoErro)) : /*#__PURE__*/React.createElement("span", {
+  }, "Motivo da \xFAltima falha: ", mensagemAmigavel(fila.find(i => i.ultimoErro)?.ultimoErro))) : /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.cinza
     }
@@ -9191,13 +9200,15 @@ function Login({
     style: {
       ...S.card,
       width: 440,
+      maxWidth: "100%",
+      boxSizing: "border-box",
       textAlign: "center",
       padding: 36
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
-      fontSize: 34,
+      fontSize: "clamp(26px, 9vw, 34px)",
       color: C.amarelo,
       lineHeight: 1
     }
@@ -9394,7 +9405,7 @@ function Login({
       color: C.cinza,
       marginBottom: 8
     }
-  }, "\u26A1 Demonstra\xE7\xE3o \u2014 dados 100% fict\xEDcios, sem backend:"), /*#__PURE__*/React.createElement("div", {
+  }, "\u26A1 Demonstra\xE7\xE3o \u2014 dados 100% fict\xEDcios, nada \xE9 gravado de verdade:"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -15712,7 +15723,7 @@ function SecaoEquipe({
     style: {
       margin: 0
     }
-  }, "Desativar bloqueia o login (o app checa ativo=false), mas a conta de autentica\xE7\xE3o permanece \u2014 exclus\xE3o definitiva exigiria a service_role key, que jamais vai pro client. Convites expiram em 7 dias e s\xE3o de uso \xFAnico (resgate at\xF4mico via function no banco).")));
+  }, "Desativar impede a pessoa de entrar no app, mas o cadastro e o hist\xF3rico dela continuam guardados \u2014 nada \xE9 apagado. Convites valem por 7 dias e s\xF3 podem ser usados uma vez.")));
 }
 function SecaoFolgas({
   folgas,
@@ -19289,7 +19300,7 @@ function SecaoBackup({
       fontSize: 13
     },
     onClick: baixar
-  }, "Baixar backup (JSON)"), feito && /*#__PURE__*/React.createElement("p", {
+  }, "Baixar c\xF3pia de seguran\xE7a"), feito && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.verde,
@@ -20043,7 +20054,7 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 8h/dia"), " (9h \xE0s 18h com 1h de intervalo) + s\xE1bado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constitui\xE7\xE3o (art. 7\xBA XIII). At\xE9 01/10/2026 eram 9h/dia + s\xE1bado de 5h = 50h semanais; as horas acima de 44h naquele per\xEDodo dependem de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam por push de servidor (Supabase + chaves VAPID), valendo tamb\xE9m com o app fechado."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h em dia de semana, 12h no s\xE1bado desde 02/10/2026; antes 13h)"), " depende de rotina agendada no banco (Supabase/pg_cron). Confirme com quem administra o banco se o agendamento das 23h est\xE1 ativo."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (WebAuthn)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Assinatura validada no servidor"), " antes de gravar a marca\xE7\xE3o \u2014 desafio de uso \xFAnico, confer\xEAncia de origem, flag de verifica\xE7\xE3o biom\xE9trica, assinatura contra a chave p\xFAblica e contador do autenticador.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 8h/dia"), " (9h \xE0s 18h com 1h de intervalo) + s\xE1bado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constitui\xE7\xE3o (art. 7\xBA XIII). At\xE9 01/10/2026 eram 9h/dia + s\xE1bado de 5h = 50h semanais; as horas acima de 44h naquele per\xEDodo dependem de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam mesmo com o app fechado, porque o aviso \xE9 enviado pelo servidor."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h em dia de semana, 12h no s\xE1bado desde 02/10/2026; antes 13h)"), " depende de uma rotina autom\xE1tica agendada no servidor. Confirme com quem cuida do sistema se a rotina das 23h est\xE1 ligada."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (Face ID ou digital)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Confer\xEAncia no servidor"), " antes de gravar a marca\xE7\xE3o: o servidor confirma que o pedido veio do aparelho cadastrado, que a biometria foi feita na hora e que ele n\xE3o \xE9 uma c\xF3pia de um pedido antigo.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
@@ -20448,7 +20459,7 @@ function TelaGestor({
       a.click();
       URL.revokeObjectURL(url);
     }
-  }, "\u2B07 Exportar CSV")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2B07 Baixar planilha (CSV)")), /*#__PURE__*/React.createElement("div", {
     style: {
       maxHeight: 300,
       overflowY: "auto",
