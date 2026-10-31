@@ -38,26 +38,67 @@ const EXPEDIENTE = { entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: 60, to
 // Marco da correção: usado pra sinalizar ao gestor que saldos históricos foram recalculados.
 const MUDANCA_INTERVALO = { data: "2026-07-23", de: 120, para: 60, jornadaAntiga: 8 * 60, jornadaNova: 9 * 60 };
 const JORNADA_MIN = 9 * 60; // dia cheio do horário ANTIGO (até 01/10/2026); hoje use jornadaDiaCheioMin(dt)
-// Horário atual da loja (decisão da gestão, em vigor desde 02/10/2026). Os dias antes disso NÃO são recalculados.
+// Horário da loja:
+// 1) Até 01/10/2026: seg-sex 8h-18h (9h), sábado 8h-13h (5h)
+// 2) De 02/10/2026 a 01/11/2026: seg-sex 9h-18h (8h, 1h almoço), sábado 8h-12h (4h)
+// 3) A partir de 02/11/2026 (pedido do dono, 30/10/2026, NÃO DESFAZER):
+//    seg-sex: 8h30 às 18h, 1h almoço e 30min lanche da tarde entre 15h e 17h (total 8h trabalhadas)
+//    sábado: 8h às 12h (4h), sem almoço e sem lanche
 const HORARIO_NOVO_DESDE = "2026-10-02";
+const HORARIO_LANCHE_DESDE = "2026-11-02";
 const horarioNovo = (dataIso) => String(dataIso) >= HORARIO_NOVO_DESDE;
+const horarioLanche = (dataIso) => String(dataIso) >= HORARIO_LANCHE_DESDE;
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = (lista) => { FERIADOS_SET = new Set(lista.map(f => f.data)); FERIADOS_NOMES = Object.fromEntries(lista.map(f => [f.data, f.nome])); };
 const dataISO = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 function expedienteDoDia(dt) {
   const dow = dt.getDay();
-  if (dow === 0) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, rotulo: "domingo — fechado" };
+  if (dow === 0) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "domingo — fechado" };
   const feriado = FERIADOS_NOMES[dataISO(dt)];
-  if (feriado) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, rotulo: `feriado — ${feriado}` };
-  const novo = horarioNovo(dataISO(dt));
-  if (dow === 6) return novo
-    ? { jornadaMin: 4 * 60, entradaMin: 8 * 60, saidaMin: 12 * 60, intervaloMin: 0, rotulo: "sábado 8:00–12:00" }
-    : { jornadaMin: 5 * 60, entradaMin: 8 * 60, saidaMin: 13 * 60, intervaloMin: 0, rotulo: "sábado 8:00–13:00" };
-  if (novo) return { jornadaMin: 8 * 60, entradaMin: 9 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, rotulo: "9:00–18:00 (8h + 1h de intervalo)" };
+  if (feriado) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: `feriado — ${feriado}` };
+  const dIso = dataISO(dt);
+  const novoLanche = horarioLanche(dIso);
+  const novoOut = horarioNovo(dIso);
+  if (dow === 6) return novoOut
+    ? { jornadaMin: 4 * 60, entradaMin: 8 * 60, saidaMin: 12 * 60, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "sábado 8:00–12:00" }
+    : { jornadaMin: 5 * 60, entradaMin: 8 * 60, saidaMin: 13 * 60, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "sábado 8:00–13:00" };
+  if (novoLanche) return {
+    jornadaMin: 8 * 60,
+    entradaMin: 8 * 60 + 30, // 8h30 (510 min)
+    saidaMin: 18 * 60,       // 18h00 (1080 min)
+    intervaloMin: 90,        // 1h de almoço + 30min de lanche
+    almocoMin: 60,
+    lancheMin: 30,
+    rotulo: "8:30–18:00 (8h + 1h almoço + 30min lanche)"
+  };
+  if (novoOut) return { jornadaMin: 8 * 60, entradaMin: 9 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, almocoMin: 60, lancheMin: 0, rotulo: "9:00–18:00 (8h + 1h de intervalo)" };
   // Jornada contratual de 9h/dia (decisão da empresa): presença 8h→18h menos 1h de intervalo.
   // Fechando em zero o dia normal — sem crédito nem débito automático no banco de horas.
-  return { jornadaMin: 9 * 60, entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, rotulo: "8:00–18:00 (9h + 1h de intervalo)" };
+  return { jornadaMin: 9 * 60, entradaMin: 8 * 60, saidaMin: 18 * 60, intervaloMin: EXPEDIENTE.intervaloMin, almocoMin: 60, lancheMin: 0, rotulo: "8:00–18:00 (9h + 1h de intervalo)" };
+}
+// Validação do intervalo do lanche (só pode começar depois das 15h e terminar até as 17h; sábado não tem lanche)
+function validarJanelaLanche(dt = new Date()) {
+  const d = new Date(dt);
+  if (d.getDay() === 6) {
+    return { valido: false, msg: "Aos sábados a jornada é das 8h às 12h (4 horas), sem almoço e sem lanche." };
+  }
+  const min = d.getHours() * 60 + d.getMinutes();
+  const min15 = 15 * 60; // 15:00
+  const min17 = 17 * 60; // 17:00
+  if (min < min15) {
+    return {
+      valido: false,
+      msg: "A pausa para o lanche da tarde só pode começar depois das 15h. Horário atual: " + fmtHora(d) + "."
+    };
+  }
+  if (min > min17) {
+    return {
+      valido: false,
+      msg: "A pausa para o lanche da tarde tem que terminar até as 17h. Horário atual: " + fmtHora(d) + "."
+    };
+  }
+  return { valido: true };
 }
 // Minutos após o horário de entrada do dia (negativo = chegou antes). Dia fechado não tem entrada: devolve 0.
 const minutosAposEntrada = (dt) => { const e = expedienteDoDia(dt).entradaMin; return e == null ? 0 : dt.getHours() * 60 + dt.getMinutes() - e; };
@@ -89,10 +130,14 @@ const HORARIOS_CONTRATUAIS = [
   { cod: "H0813", durMin: 300, pares: [["0800", "1300"]] },                    // sábado até 01/10/2026: turno único de 5h
   { cod: "H0918", durMin: 480, pares: [["0900", "1200"], ["1300", "1800"]] }, // seg-sex desde 02/10/2026: 8h de jornada, intervalo 12-13
   { cod: "H0812", durMin: 240, pares: [["0800", "1200"]] },                    // sábado desde 02/10/2026: turno único de 4h
+  { cod: "H083018", durMin: 480, pares: [["0830", "1200"], ["1300", "1600"], ["1630", "1800"]] }, // seg-sex desde 02/11/2026: 8h, almoço 12-13 e lanche 16-16:30
 ];
 const codHorarioDe = (dt) => {
-  const d = new Date(dt), novo = horarioNovo(dataISO(d)), sab = d.getDay() === 6;
-  return novo ? (sab ? "H0812" : "H0918") : (sab ? "H0813" : "H0818");
+  const d = new Date(dt), sab = d.getDay() === 6;
+  const dIso = dataISO(d);
+  if (horarioLanche(dIso)) return sab ? "H0812" : "H083018";
+  if (horarioNovo(dIso)) return sab ? "H0812" : "H0918";
+  return sab ? "H0813" : "H0818";
 };
 // Texto curto da jornada contratual pro cabeçalho dos PDFs; comp = "AAAA-MM". Outubro/2026 tem os dois horários.
 const jornadaContratualTxt = (comp) => {
@@ -703,7 +748,9 @@ const CONF = { interjornada: 11 * 60, extrasDia: 2 * 60, extrasSemana: 2 * 60, i
 // Minutos produtivos do dia: presença menos o intervalo descontado (mesma regra do banco de horas)
 function produtivasDoDia(regs, exp) {
   const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
-  const desconto = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+  const desconto = exp.intervaloMin > 0
+    ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
+    : 0;
   return { pares, min: minutosDia(regs) - desconto };
 }
 function alertasConformidade(userId, registros) {
@@ -981,6 +1028,9 @@ const mapFolhaPg = (r) => ({
   faltas: +r.desconto_faltas, atrasos: +r.desconto_atrasos, adiantamento: +r.desconto_adiantamento,
   liquido: +r.valor_liquido, diasFaltas: r.dias_faltas_nao_justificadas, horasAtraso: +r.horas_atraso_total,
   status: r.status, fechadoEm: r.fechado_em,
+  assinadoEm: r.assinado_em || null,
+  assinaturaSha256: r.assinatura_sha256 || null,
+  arquivoAssinadoUrl: r.arquivo_assinado_url || null,
 });
 const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
 const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.data_desligamento || "").slice(0, 10), motivo: r.motivo, motivoLabel: MOTIVOS_RESCISAO[r.motivo]?.label || r.motivo, avisoTipo: r.aviso_tipo, calculo: r.calculo || null, totalProventos: +r.total_proventos || 0, totalDescontos: +r.total_descontos || 0, liquido: +r.valor_liquido || 0, status: r.status, criadoEm: r.criado_em, confirmadoEm: r.confirmado_em });
@@ -1041,6 +1091,27 @@ const ACEITES_SEED = [
   { userId: 'u3', tipo: 'conduta', ref: CONDUTA_VERSAO, status: 'aceito', obs: '', em: iso(d(-60)) },
   { userId: 'u2', tipo: 'espelho', ref: compAtual(), status: 'aceito', obs: '', em: iso(d(-2)) },
   { userId: 'u3', tipo: 'espelho', ref: compAtual(), status: 'contestado', obs: 'A saída do dia 20 foi preenchida pelo sistema; saí às 18h20.', em: iso(d(-1)) },
+];
+
+/* Folhas de pagamento no modo demonstracao: Marina com contracheque assinado pelo gov.br
+   (com data, hash SHA-256 e arquivo), Rafael com assinatura pendente (falta assinar). */
+const FOLHAS_PG_SEED = [
+  {
+    id: "fpg-demo-1", userId: "u2", competencia: "2026-10-01",
+    salario: 3200, inss: 270.60, irrf: 0, vt: 192,
+    faltas: 0, atrasos: 0, adiantamento: 0, liquido: 2737.40,
+    diasFaltas: 0, horasAtraso: 0, status: "fechada", fechadoEm: iso(d(-2)),
+    assinadoEm: iso(d(-1, 16, 30)),
+    assinaturaSha256: "3d4f8a9b1c2e5d6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f",
+    arquivoAssinadoUrl: "u2/contracheque_assinado_2026-10.pdf"
+  },
+  {
+    id: "fpg-demo-2", userId: "u3", competencia: "2026-10-01",
+    salario: 2400, inss: 194.60, irrf: 0, vt: 144,
+    faltas: 160, atrasos: 30, adiantamento: 0, liquido: 1871.40,
+    diasFaltas: 1, horasAtraso: 0.5, status: "fechada", fechadoEm: iso(d(-2)),
+    assinadoEm: null, assinaturaSha256: null, arquivoAssinadoUrl: null
+  }
 ];
 
 const REGISTROS_SEED = [];
@@ -1210,7 +1281,9 @@ function analisarAssiduidade(userId, registros, faltas) {
     // Desconto do intervalo: só em dia com intervalo previsto (seg-sex) e batida em par único que o engloba;
     // sábado (turno único) e dom/feriado não têm intervalo. Dia fechado: tudo trabalhado vira crédito.
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const descontoIntervalo = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    const descontoIntervalo = exp.intervaloMin > 0
+      ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
+      : 0;
     saldoMin += minutosDia(regs) - descontoIntervalo - exp.jornadaMin;
   });
   const nFaltas = faltas.filter(f => f.userId === userId && !f.justificada).length;
@@ -1409,6 +1482,11 @@ function crc16Kermit(str) {
 async function sha256Hex(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function sha256Arquivo(fileOuBlob) {
+  const buf = await fileOuBlob.arrayBuffer();
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function gerarAFDReal(config, marcacoes, eventos = []) {
@@ -1662,8 +1740,10 @@ function pdfEspelhoPonto(u, dias, comp, aceite) {
     const exp = expedienteDoDia(dt);
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
-    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
-    const rot = exp.jornadaMin === 0 ? (exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO") : (exp.jornadaMin <= 300 ? (horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h") : (horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h"));
+    const desc = exp.intervaloMin > 0
+      ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
+      : 0;
+    const rot = exp.jornadaMin === 0 ? (exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO") : (exp.jornadaMin <= 300 ? (horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h") : (horarioLanche(dataISO(dt)) ? "SEG-SEX 8:30-18h" : (horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h")));
     const marcas = regs.map((r) => fmtHora(r.ts)
       + (r.ajustada ? "*" : r.automatica ? "A" : "")
       + (r.metodo === "sem_verificacao" ? "!" : "")
@@ -4015,7 +4095,7 @@ function AppInterno() {
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
-    setFolhasPg([]); setAdiantamentos([]); setGuias([]); setCredenciais([]);
+    setFolhasPg(FOLHAS_PG_SEED); setAdiantamentos([]); setGuias([]); setCredenciais([]);
     setConsImagem(CONS_IMAGEM_SEED); setAceites(ACEITES_SEED);
     setRankingUsuarios(USUARIOS_SEED.map(u => { const gg = calcularGamificacao(u.id, REGISTROS_SEED, FALTAS_SEED.map((f, i) => ({ id: i, ...f, justificada: false }))); return { id: u.id, nome: u.nome, papel: u.papel, pontos: gg.total, streak: gg.streak }; }));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
@@ -4600,6 +4680,28 @@ function AppInterno() {
       setFolgas(fs => [mapFolga(row), ...fs]);
     }
     log("folga", `Solicitou converter ${h}h do banco em folga em ${fmtData(dataFolga + "T00:00:00")}`);
+  };
+
+  /* ---------- assinar contracheque pelo gov.br ---------- */
+  const assinarContrachequeGovBr = async (folhaId, arquivo, hash) => {
+    const agoraIso = new Date().toISOString();
+    if (demo) {
+      const pathDemo = `${user.id}/${arquivo.name}`;
+      setFolhasPg(fps => fps.map(f => f.id === folhaId ? { ...f, assinadoEm: agoraIso, assinaturaSha256: hash, arquivoAssinadoUrl: pathDemo } : f));
+      log("contracheque", `${user.nome} assinou o contracheque pelo gov.br (modo demonstração)`);
+      return { ok: true, assinadoEm: agoraIso, hash, path: pathDemo };
+    }
+    const path = await sbUpload(sessao.token, user.id, arquivo);
+    await sbUpdate(sessao.token, "folha_pagamento", `id=eq.${folhaId}`, {
+      assinado_em: agoraIso,
+      assinatura_sha256: hash,
+      arquivo_assinado_url: path
+    });
+    setFolhasPg(fps => fps.map(f => f.id === folhaId ? { ...f, assinadoEm: agoraIso, assinaturaSha256: hash, arquivoAssinadoUrl: path } : f));
+    try {
+      await auditar("contracheque_assinado_govbr", `${user.nome} assinou o contracheque pelo gov.br (SHA-256: ${hash})`);
+    } catch (e) { console.warn("[auditoria folha]", e.message); }
+    return { ok: true, assinadoEm: agoraIso, hash, path };
   };
 
   const decidirFolga = async (id, aprovar) => {
@@ -5392,7 +5494,7 @@ function AppInterno() {
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
-          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} />}
+          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} onAssinarFolha={assinarContrachequeGovBr} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
           {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} salas={salas} onSalvarSalas={salvarSalas} semente={semente} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} onResponder={responderPerguntas} />}
@@ -5849,12 +5951,63 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   const temLocais = locais.some(l => l.ativo);
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
+  const expHoje = expedienteDoDia(new Date());
+  const temLancheHoje = expHoje.lancheMin > 0;
+  const mostrarBotoesLanche = temLancheHoje || demo || horarioLanche(dataISO(new Date()));
+  const [avisoLanche, setAvisoLanche] = useState(null);
+
+  let rotuloBatida = `Registrar ${proxTipo}`;
+  if (temLancheHoje) {
+    const rotulosSequenciais = [
+      "Registrar Entrada (08:30)",
+      "Registrar Saída para Almoço",
+      "Registrar Retorno do Almoço",
+      "Registrar Início do Lanche da Tarde",
+      "Registrar Retorno do Lanche da Tarde",
+      "Registrar Saída Final (18:00)"
+    ];
+    rotuloBatida = rotulosSequenciais[doDia.length] || `Registrar ${proxTipo}`;
+  } else if (expHoje.entradaMin != null && expHoje.jornadaMin <= 240) {
+    if (doDia.length === 0) rotuloBatida = "Registrar Entrada (08:00)";
+    else if (doDia.length === 1) rotuloBatida = "Registrar Saída (12:00)";
+  }
+
+  const acionarBatidaPrincipal = () => {
+    setAvisoLanche(null);
+    if (temLancheHoje && (doDia.length === 3 || doDia.length === 4)) {
+      const v = validarJanelaLanche(new Date());
+      if (!v.valido) {
+        setAvisoLanche(v.msg);
+        return;
+      }
+    }
+    iniciarBatida();
+  };
+
+  const acionarLanche = (tipo) => {
+    setAvisoLanche(null);
+    const v = validarJanelaLanche(new Date());
+    if (!v.valido) {
+      setAvisoLanche(v.msg);
+      return;
+    }
+    iniciarBatida();
+  };
+
   const a = analisarAssiduidade(user.id, registros, faltas);
   const eleg = elegibilidadePremio(user.id, registros, faltas);
   const emAlerta = eleg.medidores.filter(m => m.estourou || (m.limite && m.valor / m.limite >= 0.7));
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Registro de ponto</h1>
+      <div style={{ ...S.card, marginTop: 12, padding: 12, borderLeft: "4px solid " + C.amarelo, textAlign: "left" }}>
+        <div style={{ fontSize: 13, color: C.amarelo, fontWeight: 700 }}>⏰ Jornada de trabalho</div>
+        <p style={{ fontSize: 12, color: C.branco, margin: "4px 0 0", lineHeight: 1.5 }}>
+          {horarioLanche(dataISO(new Date()))
+            ? "Segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)."
+            : "A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche). Até 01/11 vigora: seg-sex 9h às 18h; sáb 8h às 12h."}
+        </p>
+      </div>
       <CartaoMomento nome={user.nome} doDia={doDia} />
       <CartaoReuniao user={user} doDia={doDia} onAbrirRoteiro={onAbrirRoteiro} acoes={acoes} respostas={respostas}
         salas={salas} presencas={presencas} presencaNoBanco={presencaNoBanco} onEntrarSala={onEntrarSala} />
@@ -5926,9 +6079,44 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginTop: 18 }}>
         <div style={{ ...S.card, textAlign: "center", padding: 34 }}>
           <RelogioVivo />
-          {!fluxoPonto && <button style={{ ...S.btn, marginTop: 24, fontSize: 18, padding: "16px 34px", opacity: batidaRecente ? 0.5 : 1 }} disabled={!!batidaRecente} onClick={iniciarBatida} aria-label={batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `Registrar ${proxTipo} agora`}>
-            {batidaRecente ? `Aguarde ${batidaRecente}s` : `Registrar ${proxTipo}`}
-          </button>}
+          {!fluxoPonto && (
+            <div>
+              <button
+                style={{ ...S.btn, marginTop: 24, fontSize: 18, padding: "16px 34px", opacity: batidaRecente ? 0.5 : 1 }}
+                disabled={!!batidaRecente}
+                onClick={acionarBatidaPrincipal}
+                aria-label={batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `${rotuloBatida} agora`}
+              >
+                {batidaRecente ? `Aguarde ${batidaRecente}s` : rotuloBatida}
+              </button>
+              {mostrarBotoesLanche && (
+                <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={{ ...S.btnGhost, borderColor: C.amarelo, color: C.amarelo, fontSize: 13, padding: "8px 14px" }}
+                    disabled={!!batidaRecente}
+                    onClick={() => acionarLanche("inicio")}
+                  >
+                    🥪 Início do lanche da tarde
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, fontSize: 13, padding: "8px 14px" }}
+                    disabled={!!batidaRecente}
+                    onClick={() => acionarLanche("fim")}
+                  >
+                    ☕ Fim do lanche da tarde
+                  </button>
+                </div>
+              )}
+              {avisoLanche && (
+                <div role="alert" style={{ marginTop: 14, background: "#3A1A1A", border: "1px solid " + C.vermelho, borderRadius: 10, padding: 12, textAlign: "left" }}>
+                  <div style={{ color: C.vermelho, fontWeight: 700, fontSize: 13 }}>⚠️ Horário da pausa para o lanche</div>
+                  <p style={{ color: C.branco, fontSize: 12.5, margin: "4px 0 0", lineHeight: 1.5 }}>{avisoLanche}</p>
+                </div>
+              )}
+            </div>
+          )}
           {batidaRecente > 0 && <p style={{ fontSize: 12, color: C.cinza, marginTop: 10 }}>Você acabou de registrar um ponto. A pausa evita batida duplicada por toque acidental.</p>}
           {fluxoPonto === "geo" && (
             <div style={{ marginTop: 20 }}>
@@ -5983,9 +6171,24 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Hoje</div>
-            <div style={{ fontSize: 11, color: C.cinza, marginBottom: 4 }}>expediente de hoje: {expedienteDoDia(new Date()).rotulo}</div>
+            <div style={{ fontSize: 11, color: C.cinza, marginBottom: 4 }}>expediente de hoje: {expHoje.rotulo}</div>
             {doDia.length === 0 ? <p style={{ fontSize: 14, color: C.cinza }}>Nenhuma marcação ainda.</p> :
-              doDia.map(r => <div key={r.nsr} style={{ fontSize: 14, marginTop: 6 }}>{r.tipo === "entrada" ? "🟢" : "🔴"} {r.tipo} — {fmtHora(r.ts)}</div>)}
+              doDia.map((r, idx) => {
+                let etapaNome = r.tipo;
+                if (temLancheHoje) {
+                  const etapas = ["Entrada (início)", "Saída para almoço", "Retorno do almoço", "Início do lanche", "Fim do lanche", "Saída final"];
+                  etapaNome = etapas[idx] || (r.tipo === "entrada" ? "Entrada extra" : "Saída extra");
+                } else if (expHoje.almocoMin > 0) {
+                  const etapas = ["Entrada", "Saída almoço", "Retorno almoço", "Saída final"];
+                  etapaNome = etapas[idx] || (r.tipo === "entrada" ? "Entrada extra" : "Saída extra");
+                }
+                return (
+                  <div key={r.nsr} style={{ fontSize: 13.5, marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>{r.tipo === "entrada" ? "🟢" : "🔴"} <b>{etapaNome}</b></span>
+                    <span style={{ color: C.branco }}>{fmtHora(r.ts)}</span>
+                  </div>
+                );
+              })}
           </div>
           <div style={S.card}>
             <div style={{ ...S.display, fontSize: 14, color: C.cinza }}>Banco de horas (10 dias)</div>
@@ -6015,8 +6218,10 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
     const exp = expedienteDoDia(new Date(regs[0].ts));
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter((r) => r.tipo === "entrada").length, regs.filter((r) => r.tipo === "saida").length);
-    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
-    return { dias: ac.dias + 1, trab: ac.trab + min, prev: ac.prev + exp.jornadaMin, saldo: ac.saldo + (min - desc - exp.jornadaMin) };
+    const desc = exp.intervaloMin > 0
+      ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
+      : 0;
+    return { dias: ac.dias + 1, trab: ac.trab + Math.max(0, min - desc), prev: ac.prev + exp.jornadaMin, saldo: ac.saldo + (min - desc - exp.jornadaMin) };
   }, { dias: 0, trab: 0, prev: 0, saldo: 0 });
   return (
     <div>
@@ -6031,7 +6236,13 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
           <button style={S.btn} onClick={() => baixarPDF(pdfEspelhoPonto(user, dias, comp, aceite), `espelho-${comp}.pdf`)}>🖨 Espelho em PDF</button>
         </div>
       </div>
-            <div style={{ ...S.card, marginTop: 16 }}>
+      <div style={{ ...S.card, marginTop: 12, padding: 12, borderLeft: "4px solid " + C.amarelo, textAlign: "left" }}>
+        <div style={{ fontSize: 13, color: C.amarelo, fontWeight: 700 }}>⏰ Jornada de trabalho</div>
+        <p style={{ fontSize: 12, color: C.branco, margin: "4px 0 0", lineHeight: 1.5 }}>
+          A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (com 1h de almoço e 30min de lanche da tarde das 15h às 17h — total 8h trabalhadas); sábado das 8h às 12h (4h, sem almoço e sem lanche). Dias anteriores seguem as regras contratuais da época sem recalcular o passado.
+        </p>
+      </div>
+      <div style={{ ...S.card, marginTop: 14 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead><tr style={{ color: C.cinza, textAlign: "left" }}><th style={{ padding: 8 }}>Data</th><th>Marcações</th><th>Trabalhado</th><th>Saldo do dia</th><th className="no-print"></th></tr></thead>
           <tbody>
@@ -6039,12 +6250,15 @@ function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], 
               const exp = expedienteDoDia(new Date(regs[0].ts));
               const min = minutosDia(regs);
               const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-              const saldo = min - (exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0) - exp.jornadaMin;
+              const desc = exp.intervaloMin > 0
+                ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
+                : 0;
+              const saldo = min - desc - exp.jornadaMin;
               return (
                 <tr key={dia} style={{ borderTop: "1px solid #1E3450" }}>
                   <td style={{ padding: 8, fontWeight: 700 }}>{dia} <span style={{ fontSize: 11, color: C.cinza, fontWeight: 400 }}>{exp.rotulo}</span></td>
                   <td>{regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "ᴬ" : "") + (r.metodo === "sem_verificacao" ? "⚠" : "") + (r.pendente ? "⏳" : r.offline ? "ᶠ" : "") + (r.geoStatus === "dispensado_por_falha" ? "📍" : "")).join(" · ")}</td>
-                  <td>{hmm(min)}</td>
+                  <td>{hmm(Math.max(0, min - desc))}</td>
                   <td style={{ color: saldo >= 0 ? C.verde : C.vermelho, fontWeight: 700 }}>{hmm(saldo)}</td>
                   <td className="no-print" style={{ textAlign: "right" }}>
                     {(() => {
@@ -8239,10 +8453,24 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
         />
       )}
       {doMes.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
+          <span style={{ color: C.cinza }}>Assinaturas do contracheque (gov.br):</span>
+          <span style={S.tag("#123B24", C.verde)}>
+            {doMes.filter(f => f.assinadoEm).length} assinada(s)
+          </span>
+          <span style={S.tag("#3A2A08", C.amarelo)}>
+            {doMes.filter(f => !f.assinadoEm).length} pendente(s)
+          </span>
+          <a href="https://validar.iti.gov.br" target="_blank" rel="noopener noreferrer" style={{ color: C.azul, fontSize: 12, textDecoration: "underline", marginLeft: 6 }}>
+            🔗 Conferir assinatura no ITI
+          </a>
+        </div>
+      )}
+      {doMes.length > 0 && (
         <div className="rolagem-x" style={{ marginTop: 10 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ color: C.cinza, textAlign: "right" }}>
-              <th style={{ textAlign: "left", padding: 6 }}>Colaborador</th><th>Bruto</th><th>Faltas</th><th>Atrasos</th><th>INSS</th><th>IRRF</th><th>VT</th><th>Adiant.</th><th>Líquido</th><th></th>
+              <th style={{ textAlign: "left", padding: 6 }}>Colaborador</th><th>Bruto</th><th>Faltas</th><th>Atrasos</th><th>INSS</th><th>IRRF</th><th>VT</th><th>Adiant.</th><th>Líquido</th><th style={{ textAlign: "center" }}>Assinatura gov.br</th><th></th>
             </tr></thead>
             <tbody>
               {doMes.map(f => (
@@ -8254,6 +8482,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                         <td key={k}><input type="number" step="0.01" style={{ ...S.input, width: 84, padding: 6, fontSize: 12 }} value={editRow[k]} onChange={e => setEditRow({ ...editRow, [k]: e.target.value })} /></td>
                       ))}
                       <td style={{ fontWeight: 700 }}>{brl((+editRow.salario || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
+                      <td></td>
                       <td style={{ whiteSpace: "nowrap" }}><button style={{ ...S.btn, padding: "4px 10px", fontSize: 11 }} onClick={salvarEdit}>Salvar</button> <button style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow(null)}>✕</button></td>
                     </>
                   ) : (
@@ -8263,6 +8492,21 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                       <td title={`${f.horasAtraso}h além da tolerância`}>{brl(f.atrasos)}</td>
                       <td>{brl(f.inss)}</td><td>{brl(f.irrf)}</td><td>{brl(f.vt)}</td><td>{brl(f.adiantamento)}</td>
                       <td style={{ fontWeight: 700, color: C.verde }}>{brl(f.liquido)}</td>
+                      <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                        {f.assinadoEm ? (
+                          <div>
+                            <span style={S.tag("#123B24", C.verde)} title={`Assinado em ${fmtDataHora(f.assinadoEm)}${f.assinaturaSha256 ? ` · SHA-256: ${f.assinaturaSha256}` : ""}`}>
+                              ✓ Assinado
+                            </span>
+                            <div style={{ fontSize: 10, color: C.cinza, marginTop: 2 }}>{fmtData(f.assinadoEm)}</div>
+                            <a href="https://validar.iti.gov.br" target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: C.azul, textDecoration: "underline", display: "block" }}>
+                              Conferir assinatura
+                            </a>
+                          </div>
+                        ) : (
+                          <span style={S.tag("#3A2A08", C.amarelo)}>Falta assinar</span>
+                        )}
+                      </td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         <button title="Recibo em PDF" style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => pdfRecibos([f])}>🖨</button>{" "}
                         {f.status === "rascunho" && <button title="Editar valores" style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow({ id: f.id, salario: f.salario, faltas: f.faltas, atrasos: f.atrasos, inss: f.inss, irrf: f.irrf, vt: f.vt, adiantamento: f.adiantamento })}>✎</button>}
@@ -8280,7 +8524,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                 <td>{brl(doMes.reduce((s, f) => s + f.irrf, 0))}</td>
                 <td>{brl(doMes.reduce((s, f) => s + f.vt, 0))}</td>
                 <td>{brl(doMes.reduce((s, f) => s + f.adiantamento, 0))}</td>
-                <td style={{ color: C.verde }}>{brl(doMes.reduce((s, f) => s + f.liquido, 0))}</td><td></td>
+                <td style={{ color: C.verde }}>{brl(doMes.reduce((s, f) => s + f.liquido, 0))}</td><td></td><td></td>
               </tr>
             </tbody>
           </table>
@@ -8760,7 +9004,162 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
     </div>
   );
 }
-function TelaHolerite({ user, folhasPg, adiantamentos }) {
+function CardHoleriteItem({ f, user, onAssinarFolha }) {
+  const [etapaAssinatura, setEtapaAssinatura] = useState(null); // null | "aguardando_arquivo"
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [sucesso, setSucesso] = useState(null);
+
+  const iniciarAssinaturaGovBr = async () => {
+    setEtapaAssinatura("aguardando_arquivo");
+    setErro(null);
+    setSucesso(null);
+    try {
+      const conteudoPdf = pdfArquivo([pdfReciboFolha(f, user, f.competencia)]);
+      const compStr = f.competencia.slice(0, 7);
+      const primeiro = user?.nome ? user.nome.split(" ")[0].toLowerCase() : "colaborador";
+      const nomeArquivo = `contracheque-${primeiro}-${compStr}.pdf`;
+      const bytes = new Uint8Array(conteudoPdf.length);
+      for (let i = 0; i < conteudoPdf.length; i++) bytes[i] = conteudoPdf.charCodeAt(i) & 255;
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const arquivoPdf = new File([blob], nomeArquivo, { type: "application/pdf" });
+
+      let compartilhou = false;
+      if (typeof navigator !== "undefined" && navigator.canShare && navigator.canShare({ files: [arquivoPdf] })) {
+        try {
+          await navigator.share({
+            files: [arquivoPdf],
+            title: `Contracheque ${compStr} — ${user.nome}`,
+            text: "Contracheque para assinar no gov.br",
+          });
+          compartilhou = true;
+        } catch (eShare) {
+          if (eShare.name !== "AbortError") {
+            console.warn("[share contracheque]", eShare);
+          }
+        }
+      }
+      if (!compartilhou) {
+        baixarPDF(conteudoPdf, nomeArquivo);
+      }
+      if (typeof window !== "undefined") {
+        window.open("https://assinador.iti.gov.br", "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      setErro(mensagemAmigavel(e, "ao gerar o contracheque"));
+    }
+  };
+
+  const receberArquivoAssinado = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
+      setErro("O arquivo precisa ser um documento em PDF.");
+      return;
+    }
+    setCarregando(true);
+    setErro(null);
+    try {
+      const hash = await sha256Arquivo(file);
+      await onAssinarFolha(f.id, file, hash);
+      setSucesso("Contracheque assinado pelo gov.br enviado com sucesso!");
+      setEtapaAssinatura(null);
+    } catch (err) {
+      setErro(mensagemAmigavel(err, "ao enviar o contracheque"));
+    } finally {
+      setCarregando(false);
+    }
+  };
+
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ ...S.display, fontSize: 16, color: C.amarelo }}>{EMPRESA.nome} · competência {f.competencia.slice(0, 7)}</div>
+        <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {f.status === "fechada" ? <span style={S.tag("#123B24", C.verde)}>FECHADA</span> : <span style={S.tag("#3A2A08", C.amarelo)}>RASCUNHO — sujeito a ajustes</span>}
+          {f.assinadoEm ? <span style={S.tag("#123B24", C.verde)}>ASSINADO PELO GOV.BR</span> : <span style={S.tag("#3A2A08", C.amarelo)}>ASSINATURA PENDENTE</span>}
+          <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => window.print()}>🖨 Imprimir</button>
+        </span>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+        <tbody>
+          {[["Salário bruto", f.salario, C.branco],
+            [`Desconto faltas (${f.diasFaltas} dia(s) + DSR)`, -f.faltas],
+            [`Desconto atrasos (${f.horasAtraso}h)`, -f.atrasos],
+            ["INSS", -f.inss], ["IRRF", -f.irrf], ["Vale-transporte", -f.vt], ["Adiantamento", -f.adiantamento]]
+            .filter(([, v]) => v !== 0)
+            .map(([l, v, cor]) => (
+              <tr key={l} style={{ borderTop: "1px solid #1A2F4A" }}>
+                <td style={{ padding: 6 }}>{l}</td>
+                <td style={{ padding: 6, textAlign: "right", color: cor || (v < 0 ? C.vermelho : C.branco) }}>{brl(v)}</td>
+              </tr>
+            ))}
+          <tr style={{ borderTop: "2px solid #2A4568", fontWeight: 700 }}>
+            <td style={{ padding: 6 }}>LÍQUIDO A RECEBER</td>
+            <td style={{ padding: 6, textAlign: "right", color: C.verde, fontSize: 16 }}>{brl(f.liquido)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {f.assinadoEm ? (
+        <div style={{ marginTop: 14, background: "#10281E", border: "1px solid #1E5035", borderRadius: 12, padding: 14, textAlign: "left" }}>
+          <div style={{ color: C.verde, fontWeight: 700, fontSize: 14 }}>
+            ✔ Assinado pelo gov.br em {fmtDataHora(f.assinadoEm)}
+          </div>
+          {f.assinaturaSha256 && (
+            <div style={{ fontSize: 11.5, color: C.cinza, marginTop: 4, wordBreak: "break-all" }}>
+              Resumo criptográfico (SHA-256): <span style={{ color: C.branco, fontFamily: "monospace" }}>{f.assinaturaSha256}</span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <a href="https://validar.iti.gov.br" target="_blank" rel="noopener noreferrer" style={{ ...S.btnGhost, fontSize: 12, padding: "7px 12px", textDecoration: "none", color: C.branco, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              🔗 Conferir assinatura
+            </a>
+            <button style={{ ...S.btnGhost, fontSize: 12, padding: "7px 12px" }} onClick={() => setEtapaAssinatura("aguardando_arquivo")}>
+              Substituir arquivo assinado
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button style={{ ...S.btn, fontSize: 13, padding: "10px 18px" }} onClick={iniciarAssinaturaGovBr}>
+              ✍ Assinar pelo gov.br
+            </button>
+            <a href="https://validar.iti.gov.br" target="_blank" rel="noopener noreferrer" style={{ ...S.btnGhost, fontSize: 12, padding: "9px 14px", textDecoration: "none", color: C.branco, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              🔗 Conferir assinatura
+            </a>
+          </div>
+        </div>
+      )}
+
+      {etapaAssinatura === "aguardando_arquivo" && (
+        <div style={{ marginTop: 12, background: C.grafite, border: "1px solid " + C.bordaForte, borderRadius: 12, padding: 14, textAlign: "left" }}>
+          <div style={{ ...S.display, fontSize: 13, color: C.amarelo }}>Passo a passo para assinar no gov.br</div>
+          <ol style={{ fontSize: 13, color: C.branco, margin: "8px 0 12px", paddingLeft: 20, lineHeight: 1.7 }}>
+            <li>Entre com sua conta gov.br</li>
+            <li>Escolha o arquivo baixado</li>
+            <li>Assine</li>
+            <li>Volte aqui e envie o arquivo assinado</li>
+          </ol>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ ...S.btn, padding: "9px 16px", fontSize: 13, cursor: "pointer", display: "inline-block" }}>
+              {carregando ? "⏳ Gravando arquivo…" : "📤 Enviar contracheque assinado"}
+              <input type="file" accept="application/pdf,.pdf" style={{ display: "none" }} disabled={carregando} onChange={receberArquivoAssinado} />
+            </label>
+            <button style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 12 }} onClick={() => setEtapaAssinatura(null)}>Cancelar</button>
+          </div>
+          {erro && <p style={{ fontSize: 12, color: C.vermelho, marginTop: 8 }}>{erro}</p>}
+        </div>
+      )}
+      {sucesso && <p style={{ fontSize: 12, color: C.verde, marginTop: 8 }}>{sucesso}</p>}
+
+      <p style={{ fontSize: 11, color: C.cinza, marginTop: 10 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>
+    </div>
+  );
+}
+
+function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha }) {
   const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
   return (
     <div>
@@ -8768,35 +9167,7 @@ function TelaHolerite({ user, folhasPg, adiantamentos }) {
       <p style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{AVISO_FOLHA}</p>
       {minhas.length === 0 && <div style={{ ...S.card, marginTop: 14, fontSize: 13, color: C.cinza }}>Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada mês.</div>}
       {minhas.map(f => (
-        <div key={f.id} style={{ ...S.card, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ ...S.display, fontSize: 16, color: C.amarelo }}>{EMPRESA.nome} · competência {f.competencia.slice(0, 7)}</div>
-            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              {f.status === "fechada" ? <span style={S.tag("#123B24", C.verde)}>FECHADA</span> : <span style={S.tag("#3A2A08", C.amarelo)}>RASCUNHO — sujeito a ajustes</span>}
-              <button style={{ ...S.btnGhost, padding: "5px 12px", fontSize: 12 }} onClick={() => window.print()}>🖨 Imprimir</button>
-            </span>
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
-            <tbody>
-              {[["Salário bruto", f.salario, C.branco],
-                [`Desconto faltas (${f.diasFaltas} dia(s) + DSR)`, -f.faltas],
-                [`Desconto atrasos (${f.horasAtraso}h)`, -f.atrasos],
-                ["INSS", -f.inss], ["IRRF", -f.irrf], ["Vale-transporte", -f.vt], ["Adiantamento", -f.adiantamento]]
-                .filter(([, v]) => v !== 0)
-                .map(([l, v, cor]) => (
-                  <tr key={l} style={{ borderTop: "1px solid #1A2F4A" }}>
-                    <td style={{ padding: 6 }}>{l}</td>
-                    <td style={{ padding: 6, textAlign: "right", color: cor || (v < 0 ? C.vermelho : C.branco) }}>{brl(v)}</td>
-                  </tr>
-                ))}
-              <tr style={{ borderTop: "2px solid #2A4568", fontWeight: 700 }}>
-                <td style={{ padding: 6 }}>LÍQUIDO A RECEBER</td>
-                <td style={{ padding: 6, textAlign: "right", color: C.verde, fontSize: 16 }}>{brl(f.liquido)}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p style={{ fontSize: 11, color: C.cinza, marginTop: 8 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>
-        </div>
+        <CardHoleriteItem key={f.id} f={f} user={user} onAssinarFolha={onAssinarFolha} />
       ))}
       {adiantamentos.some(a => a.status === "pendente") && (
         <div style={{ ...S.card, marginTop: 14, fontSize: 13 }}>

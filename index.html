@@ -326,9 +326,16 @@ const MUDANCA_INTERVALO = {
   jornadaNova: 9 * 60
 };
 const JORNADA_MIN = 9 * 60; // dia cheio do horário ANTIGO (até 01/10/2026); hoje use jornadaDiaCheioMin(dt)
-// Horário atual da loja (decisão da gestão, em vigor desde 02/10/2026). Os dias antes disso NÃO são recalculados.
+// Horário da loja:
+// 1) Até 01/10/2026: seg-sex 8h-18h (9h), sábado 8h-13h (5h)
+// 2) De 02/10/2026 a 01/11/2026: seg-sex 9h-18h (8h, 1h almoço), sábado 8h-12h (4h)
+// 3) A partir de 02/11/2026 (pedido do dono, 30/10/2026, NÃO DESFAZER):
+//    seg-sex: 8h30 às 18h, 1h almoço e 30min lanche da tarde entre 15h e 17h (total 8h trabalhadas)
+//    sábado: 8h às 12h (4h), sem almoço e sem lanche
 const HORARIO_NOVO_DESDE = "2026-10-02";
+const HORARIO_LANCHE_DESDE = "2026-11-02";
 const horarioNovo = dataIso => String(dataIso) >= HORARIO_NOVO_DESDE;
+const horarioLanche = dataIso => String(dataIso) >= HORARIO_LANCHE_DESDE;
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = lista => {
@@ -343,6 +350,8 @@ function expedienteDoDia(dt) {
     entradaMin: null,
     saidaMin: null,
     intervaloMin: 0,
+    almocoMin: 0,
+    lancheMin: 0,
     rotulo: "domingo — fechado"
   };
   const feriado = FERIADOS_NOMES[dataISO(dt)];
@@ -351,27 +360,49 @@ function expedienteDoDia(dt) {
     entradaMin: null,
     saidaMin: null,
     intervaloMin: 0,
+    almocoMin: 0,
+    lancheMin: 0,
     rotulo: `feriado — ${feriado}`
   };
-  const novo = horarioNovo(dataISO(dt));
-  if (dow === 6) return novo ? {
+  const dIso = dataISO(dt);
+  const novoLanche = horarioLanche(dIso);
+  const novoOut = horarioNovo(dIso);
+  if (dow === 6) return novoOut ? {
     jornadaMin: 4 * 60,
     entradaMin: 8 * 60,
     saidaMin: 12 * 60,
     intervaloMin: 0,
+    almocoMin: 0,
+    lancheMin: 0,
     rotulo: "sábado 8:00–12:00"
   } : {
     jornadaMin: 5 * 60,
     entradaMin: 8 * 60,
     saidaMin: 13 * 60,
     intervaloMin: 0,
+    almocoMin: 0,
+    lancheMin: 0,
     rotulo: "sábado 8:00–13:00"
   };
-  if (novo) return {
+  if (novoLanche) return {
+    jornadaMin: 8 * 60,
+    entradaMin: 8 * 60 + 30,
+    // 8h30 (510 min)
+    saidaMin: 18 * 60,
+    // 18h00 (1080 min)
+    intervaloMin: 90,
+    // 1h de almoço + 30min de lanche
+    almocoMin: 60,
+    lancheMin: 30,
+    rotulo: "8:30–18:00 (8h + 1h almoço + 30min lanche)"
+  };
+  if (novoOut) return {
     jornadaMin: 8 * 60,
     entradaMin: 9 * 60,
     saidaMin: 18 * 60,
     intervaloMin: EXPEDIENTE.intervaloMin,
+    almocoMin: 60,
+    lancheMin: 0,
     rotulo: "9:00–18:00 (8h + 1h de intervalo)"
   };
   // Jornada contratual de 9h/dia (decisão da empresa): presença 8h→18h menos 1h de intervalo.
@@ -381,7 +412,37 @@ function expedienteDoDia(dt) {
     entradaMin: 8 * 60,
     saidaMin: 18 * 60,
     intervaloMin: EXPEDIENTE.intervaloMin,
+    almocoMin: 60,
+    lancheMin: 0,
     rotulo: "8:00–18:00 (9h + 1h de intervalo)"
+  };
+}
+// Validação do intervalo do lanche (só pode começar depois das 15h e terminar até as 17h; sábado não tem lanche)
+function validarJanelaLanche(dt = new Date()) {
+  const d = new Date(dt);
+  if (d.getDay() === 6) {
+    return {
+      valido: false,
+      msg: "Aos sábados a jornada é das 8h às 12h (4 horas), sem almoço e sem lanche."
+    };
+  }
+  const min = d.getHours() * 60 + d.getMinutes();
+  const min15 = 15 * 60; // 15:00
+  const min17 = 17 * 60; // 17:00
+  if (min < min15) {
+    return {
+      valido: false,
+      msg: "A pausa para o lanche da tarde só pode começar depois das 15h. Horário atual: " + fmtHora(d) + "."
+    };
+  }
+  if (min > min17) {
+    return {
+      valido: false,
+      msg: "A pausa para o lanche da tarde tem que terminar até as 17h. Horário atual: " + fmtHora(d) + "."
+    };
+  }
+  return {
+    valido: true
   };
 }
 // Minutos após o horário de entrada do dia (negativo = chegou antes). Dia fechado não tem entrada: devolve 0.
@@ -447,13 +508,21 @@ const HORARIOS_CONTRATUAIS = [{
   cod: "H0812",
   durMin: 240,
   pares: [["0800", "1200"]]
-} // sábado desde 02/10/2026: turno único de 4h
+},
+// sábado desde 02/10/2026: turno único de 4h
+{
+  cod: "H083018",
+  durMin: 480,
+  pares: [["0830", "1200"], ["1300", "1600"], ["1630", "1800"]]
+} // seg-sex desde 02/11/2026: 8h, almoço 12-13 e lanche 16-16:30
 ];
 const codHorarioDe = dt => {
   const d = new Date(dt),
-    novo = horarioNovo(dataISO(d)),
     sab = d.getDay() === 6;
-  return novo ? sab ? "H0812" : "H0918" : sab ? "H0813" : "H0818";
+  const dIso = dataISO(d);
+  if (horarioLanche(dIso)) return sab ? "H0812" : "H083018";
+  if (horarioNovo(dIso)) return sab ? "H0812" : "H0918";
+  return sab ? "H0813" : "H0818";
 };
 // Texto curto da jornada contratual pro cabeçalho dos PDFs; comp = "AAAA-MM". Outubro/2026 tem os dois horários.
 const jornadaContratualTxt = comp => {
@@ -1412,7 +1481,7 @@ const CONF = {
 // Minutos produtivos do dia: presença menos o intervalo descontado (mesma regra do banco de horas)
 function produtivasDoDia(regs, exp) {
   const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-  const desconto = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+  const desconto = exp.intervaloMin > 0 ? pares <= 1 ? exp.intervaloMin : pares === 2 && exp.lancheMin ? exp.lancheMin : 0 : 0;
   return {
     pares,
     min: minutosDia(regs) - desconto
@@ -1884,7 +1953,10 @@ const mapFolhaPg = r => ({
   diasFaltas: r.dias_faltas_nao_justificadas,
   horasAtraso: +r.horas_atraso_total,
   status: r.status,
-  fechadoEm: r.fechado_em
+  fechadoEm: r.fechado_em,
+  assinadoEm: r.assinado_em || null,
+  assinaturaSha256: r.assinatura_sha256 || null,
+  arquivoAssinadoUrl: r.arquivo_assinado_url || null
 });
 const mapAdiant = r => ({
   id: r.id,
@@ -2142,6 +2214,48 @@ const ACEITES_SEED = [{
   obs: 'A saída do dia 20 foi preenchida pelo sistema; saí às 18h20.',
   em: iso(d(-1))
 }];
+
+/* Folhas de pagamento no modo demonstracao: Marina com contracheque assinado pelo gov.br
+   (com data, hash SHA-256 e arquivo), Rafael com assinatura pendente (falta assinar). */
+const FOLHAS_PG_SEED = [{
+  id: "fpg-demo-1",
+  userId: "u2",
+  competencia: "2026-10-01",
+  salario: 3200,
+  inss: 270.60,
+  irrf: 0,
+  vt: 192,
+  faltas: 0,
+  atrasos: 0,
+  adiantamento: 0,
+  liquido: 2737.40,
+  diasFaltas: 0,
+  horasAtraso: 0,
+  status: "fechada",
+  fechadoEm: iso(d(-2)),
+  assinadoEm: iso(d(-1, 16, 30)),
+  assinaturaSha256: "3d4f8a9b1c2e5d6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f",
+  arquivoAssinadoUrl: "u2/contracheque_assinado_2026-10.pdf"
+}, {
+  id: "fpg-demo-2",
+  userId: "u3",
+  competencia: "2026-10-01",
+  salario: 2400,
+  inss: 194.60,
+  irrf: 0,
+  vt: 144,
+  faltas: 160,
+  atrasos: 30,
+  adiantamento: 0,
+  liquido: 1871.40,
+  diasFaltas: 1,
+  horasAtraso: 0.5,
+  status: "fechada",
+  fechadoEm: iso(d(-2)),
+  assinadoEm: null,
+  assinaturaSha256: null,
+  arquivoAssinadoUrl: null
+}];
 const REGISTROS_SEED = [];
 let NSR = 1;
 const pushDia = (uid, off, entradaH, entradaM, saidaH, saidaM, falta = false) => {
@@ -2368,7 +2482,7 @@ function analisarAssiduidade(userId, registros, faltas) {
     // Desconto do intervalo: só em dia com intervalo previsto (seg-sex) e batida em par único que o engloba;
     // sábado (turno único) e dom/feriado não têm intervalo. Dia fechado: tudo trabalhado vira crédito.
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const descontoIntervalo = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    const descontoIntervalo = exp.intervaloMin > 0 ? pares <= 1 ? exp.intervaloMin : pares === 2 && exp.lancheMin ? exp.lancheMin : 0 : 0;
     saldoMin += minutosDia(regs) - descontoIntervalo - exp.jornadaMin;
   });
   const nFaltas = faltas.filter(f => f.userId === userId && !f.justificada).length;
@@ -2767,6 +2881,11 @@ async function sha256Hex(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+async function sha256Arquivo(fileOuBlob) {
+  const buf = await fileOuBlob.arrayBuffer();
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
 async function gerarAFDReal(config, marcacoes, eventos = []) {
   const linhas = [];
   const datas = marcacoes.map(m => new Date(m.tsMarcacao));
@@ -3076,8 +3195,8 @@ function pdfEspelhoPonto(u, dias, comp, aceite) {
     const exp = expedienteDoDia(dt);
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
-    const rot = exp.jornadaMin === 0 ? exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO" : exp.jornadaMin <= 300 ? horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h" : horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h";
+    const desc = exp.intervaloMin > 0 ? pares <= 1 ? exp.intervaloMin : pares === 2 && exp.lancheMin ? exp.lancheMin : 0 : 0;
+    const rot = exp.jornadaMin === 0 ? exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO" : exp.jornadaMin <= 300 ? horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h" : horarioLanche(dataISO(dt)) ? "SEG-SEX 8:30-18h" : horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h";
     const marcas = regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "A" : "") + (r.metodo === "sem_verificacao" ? "!" : "") + (r.offline ? "F" : "") + (r.geoStatus === "dispensado_por_falha" ? "G" : "")).join("  ");
     return {
       dia,
@@ -6144,7 +6263,7 @@ function AppInterno() {
     setLocais([]);
     setFolgas([]);
     setSaidasPend([]);
-    setFolhasPg([]);
+    setFolhasPg(FOLHAS_PG_SEED);
     setAdiantamentos([]);
     setGuias([]);
     setCredenciais([]);
@@ -7067,6 +7186,50 @@ function AppInterno() {
       setFolgas(fs => [mapFolga(row), ...fs]);
     }
     log("folga", `Solicitou converter ${h}h do banco em folga em ${fmtData(dataFolga + "T00:00:00")}`);
+  };
+
+  /* ---------- assinar contracheque pelo gov.br ---------- */
+  const assinarContrachequeGovBr = async (folhaId, arquivo, hash) => {
+    const agoraIso = new Date().toISOString();
+    if (demo) {
+      const pathDemo = `${user.id}/${arquivo.name}`;
+      setFolhasPg(fps => fps.map(f => f.id === folhaId ? {
+        ...f,
+        assinadoEm: agoraIso,
+        assinaturaSha256: hash,
+        arquivoAssinadoUrl: pathDemo
+      } : f));
+      log("contracheque", `${user.nome} assinou o contracheque pelo gov.br (modo demonstração)`);
+      return {
+        ok: true,
+        assinadoEm: agoraIso,
+        hash,
+        path: pathDemo
+      };
+    }
+    const path = await sbUpload(sessao.token, user.id, arquivo);
+    await sbUpdate(sessao.token, "folha_pagamento", `id=eq.${folhaId}`, {
+      assinado_em: agoraIso,
+      assinatura_sha256: hash,
+      arquivo_assinado_url: path
+    });
+    setFolhasPg(fps => fps.map(f => f.id === folhaId ? {
+      ...f,
+      assinadoEm: agoraIso,
+      assinaturaSha256: hash,
+      arquivoAssinadoUrl: path
+    } : f));
+    try {
+      await auditar("contracheque_assinado_govbr", `${user.nome} assinou o contracheque pelo gov.br (SHA-256: ${hash})`);
+    } catch (e) {
+      console.warn("[auditoria folha]", e.message);
+    }
+    return {
+      ok: true,
+      assinadoEm: agoraIso,
+      hash,
+      path
+    };
   };
   const decidirFolga = async (id, aprovar) => {
     const f = folgas.find(x => x.id === id);
@@ -8693,7 +8856,8 @@ function AppInterno() {
   }), tela === "holerite" && /*#__PURE__*/React.createElement(TelaHolerite, {
     user: user,
     folhasPg: folhasPg.filter(f => f.userId === user.id),
-    adiantamentos: adiantamentos.filter(a => a.userId === user.id)
+    adiantamentos: adiantamentos.filter(a => a.userId === user.id),
+    onAssinarFolha: assinarContrachequeGovBr
   }), tela === "premio" && /*#__PURE__*/React.createElement(TelaPremio, {
     user: user,
     registros: registros,
@@ -9893,6 +10057,37 @@ function TelaPonto({
   const temLocais = locais.some(l => l.ativo);
   const doDia = agruparPorDia(registros, user.id)[new Date().toLocaleDateString("pt-BR")] || [];
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
+  const expHoje = expedienteDoDia(new Date());
+  const temLancheHoje = expHoje.lancheMin > 0;
+  const mostrarBotoesLanche = temLancheHoje || demo || horarioLanche(dataISO(new Date()));
+  const [avisoLanche, setAvisoLanche] = useState(null);
+  let rotuloBatida = `Registrar ${proxTipo}`;
+  if (temLancheHoje) {
+    const rotulosSequenciais = ["Registrar Entrada (08:30)", "Registrar Saída para Almoço", "Registrar Retorno do Almoço", "Registrar Início do Lanche da Tarde", "Registrar Retorno do Lanche da Tarde", "Registrar Saída Final (18:00)"];
+    rotuloBatida = rotulosSequenciais[doDia.length] || `Registrar ${proxTipo}`;
+  } else if (expHoje.entradaMin != null && expHoje.jornadaMin <= 240) {
+    if (doDia.length === 0) rotuloBatida = "Registrar Entrada (08:00)";else if (doDia.length === 1) rotuloBatida = "Registrar Saída (12:00)";
+  }
+  const acionarBatidaPrincipal = () => {
+    setAvisoLanche(null);
+    if (temLancheHoje && (doDia.length === 3 || doDia.length === 4)) {
+      const v = validarJanelaLanche(new Date());
+      if (!v.valido) {
+        setAvisoLanche(v.msg);
+        return;
+      }
+    }
+    iniciarBatida();
+  };
+  const acionarLanche = tipo => {
+    setAvisoLanche(null);
+    const v = validarJanelaLanche(new Date());
+    if (!v.valido) {
+      setAvisoLanche(v.msg);
+      return;
+    }
+    iniciarBatida();
+  };
   const a = analisarAssiduidade(user.id, registros, faltas);
   const eleg = elegibilidadePremio(user.id, registros, faltas);
   const emAlerta = eleg.medidores.filter(m => m.estourou || m.limite && m.valor / m.limite >= 0.7);
@@ -9902,7 +10097,28 @@ function TelaPonto({
       fontSize: 26,
       margin: 0
     }
-  }, "Registro de ponto"), /*#__PURE__*/React.createElement(CartaoMomento, {
+  }, "Registro de ponto"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 12,
+      padding: 12,
+      borderLeft: "4px solid " + C.amarelo,
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: C.amarelo,
+      fontWeight: 700
+    }
+  }, "\u23F0 Jornada de trabalho"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.branco,
+      margin: "4px 0 0",
+      lineHeight: 1.5
+    }
+  }, horarioLanche(dataISO(new Date())) ? "Segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)." : "A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche). Até 01/11 vigora: seg-sex 9h às 18h; sáb 8h às 12h.")), /*#__PURE__*/React.createElement(CartaoMomento, {
     nome: user.nome,
     doDia: doDia
   }), /*#__PURE__*/React.createElement(CartaoReuniao, {
@@ -10119,7 +10335,7 @@ function TelaPonto({
       textAlign: "center",
       padding: 34
     }
-  }, /*#__PURE__*/React.createElement(RelogioVivo, null), !fluxoPonto && /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement(RelogioVivo, null), !fluxoPonto && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btn,
       marginTop: 24,
@@ -10128,9 +10344,62 @@ function TelaPonto({
       opacity: batidaRecente ? 0.5 : 1
     },
     disabled: !!batidaRecente,
-    onClick: iniciarBatida,
-    "aria-label": batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `Registrar ${proxTipo} agora`
-  }, batidaRecente ? `Aguarde ${batidaRecente}s` : `Registrar ${proxTipo}`), batidaRecente > 0 && /*#__PURE__*/React.createElement("p", {
+    onClick: acionarBatidaPrincipal,
+    "aria-label": batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `${rotuloBatida} agora`
+  }, batidaRecente ? `Aguarde ${batidaRecente}s` : rotuloBatida), mostrarBotoesLanche && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      display: "flex",
+      gap: 10,
+      justifyContent: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: {
+      ...S.btnGhost,
+      borderColor: C.amarelo,
+      color: C.amarelo,
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    disabled: !!batidaRecente,
+    onClick: () => acionarLanche("inicio")
+  }, "\uD83E\uDD6A In\xEDcio do lanche da tarde"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    style: {
+      ...S.btnGhost,
+      borderColor: C.verde,
+      color: C.verde,
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    disabled: !!batidaRecente,
+    onClick: () => acionarLanche("fim")
+  }, "\u2615 Fim do lanche da tarde")), avisoLanche && /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    style: {
+      marginTop: 14,
+      background: "#3A1A1A",
+      border: "1px solid " + C.vermelho,
+      borderRadius: 10,
+      padding: 12,
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.vermelho,
+      fontWeight: 700,
+      fontSize: 13
+    }
+  }, "\u26A0\uFE0F Hor\xE1rio da pausa para o lanche"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: C.branco,
+      fontSize: 12.5,
+      margin: "4px 0 0",
+      lineHeight: 1.5
+    }
+  }, avisoLanche))), batidaRecente > 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.cinza,
@@ -10242,18 +10511,35 @@ function TelaPonto({
       color: C.cinza,
       marginBottom: 4
     }
-  }, "expediente de hoje: ", expedienteDoDia(new Date()).rotulo), doDia.length === 0 ? /*#__PURE__*/React.createElement("p", {
+  }, "expediente de hoje: ", expHoje.rotulo), doDia.length === 0 ? /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 14,
       color: C.cinza
     }
-  }, "Nenhuma marca\xE7\xE3o ainda.") : doDia.map(r => /*#__PURE__*/React.createElement("div", {
-    key: r.nsr,
-    style: {
-      fontSize: 14,
-      marginTop: 6
+  }, "Nenhuma marca\xE7\xE3o ainda.") : doDia.map((r, idx) => {
+    let etapaNome = r.tipo;
+    if (temLancheHoje) {
+      const etapas = ["Entrada (início)", "Saída para almoço", "Retorno do almoço", "Início do lanche", "Fim do lanche", "Saída final"];
+      etapaNome = etapas[idx] || (r.tipo === "entrada" ? "Entrada extra" : "Saída extra");
+    } else if (expHoje.almocoMin > 0) {
+      const etapas = ["Entrada", "Saída almoço", "Retorno almoço", "Saída final"];
+      etapaNome = etapas[idx] || (r.tipo === "entrada" ? "Entrada extra" : "Saída extra");
     }
-  }, r.tipo === "entrada" ? "🟢" : "🔴", " ", r.tipo, " \u2014 ", fmtHora(r.ts)))), /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/React.createElement("div", {
+      key: r.nsr,
+      style: {
+        fontSize: 13.5,
+        marginTop: 6,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }
+    }, /*#__PURE__*/React.createElement("span", null, r.tipo === "entrada" ? "🟢" : "🔴", " ", /*#__PURE__*/React.createElement("b", null, etapaNome)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.branco
+      }
+    }, fmtHora(r.ts)));
+  })), /*#__PURE__*/React.createElement("div", {
     style: S.card
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -10308,10 +10594,10 @@ function TelaEspelho({
     const exp = expedienteDoDia(new Date(regs[0].ts));
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const desc = exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0;
+    const desc = exp.intervaloMin > 0 ? pares <= 1 ? exp.intervaloMin : pares === 2 && exp.lancheMin ? exp.lancheMin : 0 : 0;
     return {
       dias: ac.dias + 1,
-      trab: ac.trab + min,
+      trab: ac.trab + Math.max(0, min - desc),
       prev: ac.prev + exp.jornadaMin,
       saldo: ac.saldo + (min - desc - exp.jornadaMin)
     };
@@ -10366,7 +10652,28 @@ function TelaEspelho({
   }, "\uD83D\uDDA8 Espelho em PDF"))), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
-      marginTop: 16
+      marginTop: 12,
+      padding: 12,
+      borderLeft: "4px solid " + C.amarelo,
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: C.amarelo,
+      fontWeight: 700
+    }
+  }, "\u23F0 Jornada de trabalho"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.branco,
+      margin: "4px 0 0",
+      lineHeight: 1.5
+    }
+  }, "A partir de 02/11/2026: segunda a sexta das 8h30 \xE0s 18h00 (com 1h de almo\xE7o e 30min de lanche da tarde das 15h \xE0s 17h \u2014 total 8h trabalhadas); s\xE1bado das 8h \xE0s 12h (4h, sem almo\xE7o e sem lanche). Dias anteriores seguem as regras contratuais da \xE9poca sem recalcular o passado.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14
     }
   }, /*#__PURE__*/React.createElement("table", {
     style: {
@@ -10389,7 +10696,8 @@ function TelaEspelho({
     const exp = expedienteDoDia(new Date(regs[0].ts));
     const min = minutosDia(regs);
     const pares = Math.min(regs.filter(r => r.tipo === "entrada").length, regs.filter(r => r.tipo === "saida").length);
-    const saldo = min - (exp.intervaloMin > 0 && pares <= 1 ? exp.intervaloMin : 0) - exp.jornadaMin;
+    const desc = exp.intervaloMin > 0 ? pares <= 1 ? exp.intervaloMin : pares === 2 && exp.lancheMin ? exp.lancheMin : 0 : 0;
+    const saldo = min - desc - exp.jornadaMin;
     return /*#__PURE__*/React.createElement("tr", {
       key: dia,
       style: {
@@ -10406,7 +10714,7 @@ function TelaEspelho({
         color: C.cinza,
         fontWeight: 400
       }
-    }, exp.rotulo)), /*#__PURE__*/React.createElement("td", null, regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "ᴬ" : "") + (r.metodo === "sem_verificacao" ? "⚠" : "") + (r.pendente ? "⏳" : r.offline ? "ᶠ" : "") + (r.geoStatus === "dispensado_por_falha" ? "📍" : "")).join(" · ")), /*#__PURE__*/React.createElement("td", null, hmm(min)), /*#__PURE__*/React.createElement("td", {
+    }, exp.rotulo)), /*#__PURE__*/React.createElement("td", null, regs.map(r => fmtHora(r.ts) + (r.ajustada ? "*" : r.automatica ? "ᴬ" : "") + (r.metodo === "sem_verificacao" ? "⚠" : "") + (r.pendente ? "⏳" : r.offline ? "ᶠ" : "") + (r.geoStatus === "dispensado_por_falha" ? "📍" : "")).join(" · ")), /*#__PURE__*/React.createElement("td", null, hmm(Math.max(0, min - desc))), /*#__PURE__*/React.createElement("td", {
       style: {
         color: saldo >= 0 ? C.verde : C.vermelho,
         fontWeight: 700
@@ -16053,6 +16361,33 @@ function SecaoFolha({
       setConfirmandoFechar(false);
     }
   }), doMes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 12,
+      alignItems: "center",
+      flexWrap: "wrap",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.cinza
+    }
+  }, "Assinaturas do contracheque (gov.br):"), /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#123B24", C.verde)
+  }, doMes.filter(f => f.assinadoEm).length, " assinada(s)"), /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3A2A08", C.amarelo)
+  }, doMes.filter(f => !f.assinadoEm).length, " pendente(s)"), /*#__PURE__*/React.createElement("a", {
+    href: "https://validar.iti.gov.br",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    style: {
+      color: C.azul,
+      fontSize: 12,
+      textDecoration: "underline",
+      marginLeft: 6
+    }
+  }, "\uD83D\uDD17 Conferir assinatura no ITI")), doMes.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "rolagem-x",
     style: {
       marginTop: 10
@@ -16073,7 +16408,11 @@ function SecaoFolha({
       textAlign: "left",
       padding: 6
     }
-  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Bruto"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "INSS"), /*#__PURE__*/React.createElement("th", null, "IRRF"), /*#__PURE__*/React.createElement("th", null, "VT"), /*#__PURE__*/React.createElement("th", null, "Adiant."), /*#__PURE__*/React.createElement("th", null, "L\xEDquido"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, doMes.map(f => /*#__PURE__*/React.createElement("tr", {
+  }, "Colaborador"), /*#__PURE__*/React.createElement("th", null, "Bruto"), /*#__PURE__*/React.createElement("th", null, "Faltas"), /*#__PURE__*/React.createElement("th", null, "Atrasos"), /*#__PURE__*/React.createElement("th", null, "INSS"), /*#__PURE__*/React.createElement("th", null, "IRRF"), /*#__PURE__*/React.createElement("th", null, "VT"), /*#__PURE__*/React.createElement("th", null, "Adiant."), /*#__PURE__*/React.createElement("th", null, "L\xEDquido"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      textAlign: "center"
+    }
+  }, "Assinatura gov.br"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, doMes.map(f => /*#__PURE__*/React.createElement("tr", {
     key: f.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -16109,7 +16448,7 @@ function SecaoFolha({
     style: {
       fontWeight: 700
     }
-  }, brl((+editRow.salario || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))), /*#__PURE__*/React.createElement("td", {
+  }, brl((+editRow.salario || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", {
     style: {
       whiteSpace: "nowrap"
     }
@@ -16137,6 +16476,32 @@ function SecaoFolha({
       color: C.verde
     }
   }, brl(f.liquido)), /*#__PURE__*/React.createElement("td", {
+    style: {
+      textAlign: "center",
+      whiteSpace: "nowrap"
+    }
+  }, f.assinadoEm ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#123B24", C.verde),
+    title: `Assinado em ${fmtDataHora(f.assinadoEm)}${f.assinaturaSha256 ? ` · SHA-256: ${f.assinaturaSha256}` : ""}`
+  }, "\u2713 Assinado"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: C.cinza,
+      marginTop: 2
+    }
+  }, fmtData(f.assinadoEm)), /*#__PURE__*/React.createElement("a", {
+    href: "https://validar.iti.gov.br",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    style: {
+      fontSize: 10,
+      color: C.azul,
+      textDecoration: "underline",
+      display: "block"
+    }
+  }, "Conferir assinatura")) : /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3A2A08", C.amarelo)
+  }, "Falta assinar")), /*#__PURE__*/React.createElement("td", {
     style: {
       whiteSpace: "nowrap"
     }
@@ -16180,7 +16545,7 @@ function SecaoFolha({
     style: {
       color: C.verde
     }
-  }, brl(doMes.reduce((s, f) => s + f.liquido, 0))), /*#__PURE__*/React.createElement("td", null))))), guiasMes.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, brl(doMes.reduce((s, f) => s + f.liquido, 0))), /*#__PURE__*/React.createElement("td", null), /*#__PURE__*/React.createElement("td", null))))), guiasMes.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 12
     }
@@ -18135,33 +18500,80 @@ function SecaoContabilidade({
     }
   }, AVISO_FOLHA, " As provis\xF5es seguem a regra geral (1/12 do bruto para o 13\xBA, 1/12 para f\xE9rias e 1/36 para o ter\xE7o) e servem pra voc\xEA saber quanto guardar \u2014 o lan\xE7amento cont\xE1bil \xE9 feito pela contabilidade."));
 }
-function TelaHolerite({
+function CardHoleriteItem({
+  f,
   user,
-  folhasPg,
-  adiantamentos
+  onAssinarFolha
 }) {
-  const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
-    style: {
-      ...S.display,
-      fontSize: 26,
-      margin: 0
+  const [etapaAssinatura, setEtapaAssinatura] = useState(null); // null | "aguardando_arquivo"
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [sucesso, setSucesso] = useState(null);
+  const iniciarAssinaturaGovBr = async () => {
+    setEtapaAssinatura("aguardando_arquivo");
+    setErro(null);
+    setSucesso(null);
+    try {
+      const conteudoPdf = pdfArquivo([pdfReciboFolha(f, user, f.competencia)]);
+      const compStr = f.competencia.slice(0, 7);
+      const primeiro = user?.nome ? user.nome.split(" ")[0].toLowerCase() : "colaborador";
+      const nomeArquivo = `contracheque-${primeiro}-${compStr}.pdf`;
+      const bytes = new Uint8Array(conteudoPdf.length);
+      for (let i = 0; i < conteudoPdf.length; i++) bytes[i] = conteudoPdf.charCodeAt(i) & 255;
+      const blob = new Blob([bytes], {
+        type: "application/pdf"
+      });
+      const arquivoPdf = new File([blob], nomeArquivo, {
+        type: "application/pdf"
+      });
+      let compartilhou = false;
+      if (typeof navigator !== "undefined" && navigator.canShare && navigator.canShare({
+        files: [arquivoPdf]
+      })) {
+        try {
+          await navigator.share({
+            files: [arquivoPdf],
+            title: `Contracheque ${compStr} — ${user.nome}`,
+            text: "Contracheque para assinar no gov.br"
+          });
+          compartilhou = true;
+        } catch (eShare) {
+          if (eShare.name !== "AbortError") {
+            console.warn("[share contracheque]", eShare);
+          }
+        }
+      }
+      if (!compartilhou) {
+        baixarPDF(conteudoPdf, nomeArquivo);
+      }
+      if (typeof window !== "undefined") {
+        window.open("https://assinador.iti.gov.br", "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      setErro(mensagemAmigavel(e, "ao gerar o contracheque"));
     }
-  }, "Holerite"), /*#__PURE__*/React.createElement("p", {
-    style: {
-      fontSize: 11,
-      color: C.cinza,
-      marginTop: 6
+  };
+  const receberArquivoAssinado = async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
+      setErro("O arquivo precisa ser um documento em PDF.");
+      return;
     }
-  }, AVISO_FOLHA), minhas.length === 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...S.card,
-      marginTop: 14,
-      fontSize: 13,
-      color: C.cinza
+    setCarregando(true);
+    setErro(null);
+    try {
+      const hash = await sha256Arquivo(file);
+      await onAssinarFolha(f.id, file, hash);
+      setSucesso("Contracheque assinado pelo gov.br enviado com sucesso!");
+      setEtapaAssinatura(null);
+    } catch (err) {
+      setErro(mensagemAmigavel(err, "ao enviar o contracheque"));
+    } finally {
+      setCarregando(false);
     }
-  }, "Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada m\xEAs."), minhas.map(f => /*#__PURE__*/React.createElement("div", {
-    key: f.id,
+  };
+  return /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14
@@ -18170,7 +18582,9 @@ function TelaHolerite({
     style: {
       display: "flex",
       justifyContent: "space-between",
-      alignItems: "center"
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 8
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -18182,13 +18596,18 @@ function TelaHolerite({
     style: {
       display: "flex",
       gap: 8,
-      alignItems: "center"
+      alignItems: "center",
+      flexWrap: "wrap"
     }
   }, f.status === "fechada" ? /*#__PURE__*/React.createElement("span", {
     style: S.tag("#123B24", C.verde)
   }, "FECHADA") : /*#__PURE__*/React.createElement("span", {
     style: S.tag("#3A2A08", C.amarelo)
-  }, "RASCUNHO \u2014 sujeito a ajustes"), /*#__PURE__*/React.createElement("button", {
+  }, "RASCUNHO \u2014 sujeito a ajustes"), f.assinadoEm ? /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#123B24", C.verde)
+  }, "ASSINADO PELO GOV.BR") : /*#__PURE__*/React.createElement("span", {
+    style: S.tag("#3A2A08", C.amarelo)
+  }, "ASSINATURA PENDENTE"), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       padding: "5px 12px",
@@ -18233,13 +18652,199 @@ function TelaHolerite({
       color: C.verde,
       fontSize: 16
     }
-  }, brl(f.liquido))))), /*#__PURE__*/React.createElement("p", {
+  }, brl(f.liquido))))), f.assinadoEm ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      background: "#10281E",
+      border: "1px solid #1E5035",
+      borderRadius: 12,
+      padding: 14,
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.verde,
+      fontWeight: 700,
+      fontSize: 14
+    }
+  }, "\u2714 Assinado pelo gov.br em ", fmtDataHora(f.assinadoEm)), f.assinaturaSha256 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: C.cinza,
+      marginTop: 4,
+      wordBreak: "break-all"
+    }
+  }, "Resumo criptogr\xE1fico (SHA-256): ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.branco,
+      fontFamily: "monospace"
+    }
+  }, f.assinaturaSha256)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginTop: 10,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("a", {
+    href: "https://validar.iti.gov.br",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    style: {
+      ...S.btnGhost,
+      fontSize: 12,
+      padding: "7px 12px",
+      textDecoration: "none",
+      color: C.branco,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, "\uD83D\uDD17 Conferir assinatura"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      fontSize: 12,
+      padding: "7px 12px"
+    },
+    onClick: () => setEtapaAssinatura("aguardando_arquivo")
+  }, "Substituir arquivo assinado"))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      fontSize: 13,
+      padding: "10px 18px"
+    },
+    onClick: iniciarAssinaturaGovBr
+  }, "\u270D Assinar pelo gov.br"), /*#__PURE__*/React.createElement("a", {
+    href: "https://validar.iti.gov.br",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    style: {
+      ...S.btnGhost,
+      fontSize: 12,
+      padding: "9px 14px",
+      textDecoration: "none",
+      color: C.branco,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, "\uD83D\uDD17 Conferir assinatura"))), etapaAssinatura === "aguardando_arquivo" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12,
+      background: C.grafite,
+      border: "1px solid " + C.bordaForte,
+      borderRadius: 12,
+      padding: 14,
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.amarelo
+    }
+  }, "Passo a passo para assinar no gov.br"), /*#__PURE__*/React.createElement("ol", {
+    style: {
+      fontSize: 13,
+      color: C.branco,
+      margin: "8px 0 12px",
+      paddingLeft: 20,
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("li", null, "Entre com sua conta gov.br"), /*#__PURE__*/React.createElement("li", null, "Escolha o arquivo baixado"), /*#__PURE__*/React.createElement("li", null, "Assine"), /*#__PURE__*/React.createElement("li", null, "Volte aqui e envie o arquivo assinado")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      ...S.btn,
+      padding: "9px 16px",
+      fontSize: 13,
+      cursor: "pointer",
+      display: "inline-block"
+    }
+  }, carregando ? "⏳ Gravando arquivo…" : "📤 Enviar contracheque assinado", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "application/pdf,.pdf",
+    style: {
+      display: "none"
+    },
+    disabled: carregando,
+    onChange: receberArquivoAssinado
+  })), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 14px",
+      fontSize: 12
+    },
+    onClick: () => setEtapaAssinatura(null)
+  }, "Cancelar")), erro && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.vermelho,
+      marginTop: 8
+    }
+  }, erro)), sucesso && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.verde,
+      marginTop: 8
+    }
+  }, sucesso), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: C.cinza,
-      marginTop: 8
+      marginTop: 10
     }
-  }, EMPRESA.nome, " \xB7 CNPJ ", EMPRESA.cnpj, " \xB7 ", EMPRESA.endereco))), adiantamentos.some(a => a.status === "pendente") && /*#__PURE__*/React.createElement("div", {
+  }, EMPRESA.nome, " \xB7 CNPJ ", EMPRESA.cnpj, " \xB7 ", EMPRESA.endereco));
+}
+function TelaHolerite({
+  user,
+  folhasPg,
+  adiantamentos,
+  onAssinarFolha
+}) {
+  const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    style: {
+      ...S.display,
+      fontSize: 26,
+      margin: 0
+    }
+  }, "Holerite"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: C.cinza,
+      marginTop: 6
+    }
+  }, AVISO_FOLHA), minhas.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      marginTop: 14,
+      fontSize: 13,
+      color: C.cinza
+    }
+  }, "Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada m\xEAs."), minhas.map(f => /*#__PURE__*/React.createElement(CardHoleriteItem, {
+    key: f.id,
+    f: f,
+    user: user,
+    onAssinarFolha: onAssinarFolha
+  })), adiantamentos.some(a => a.status === "pendente") && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       marginTop: 14,
