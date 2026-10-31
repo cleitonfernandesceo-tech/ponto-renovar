@@ -4692,11 +4692,9 @@ function AppInterno() {
       return { ok: true, assinadoEm: agoraIso, hash, path: pathDemo };
     }
     const path = await sbUpload(sessao.token, user.id, arquivo);
-    await sbUpdate(sessao.token, "folha_pagamento", `id=eq.${folhaId}`, {
-      assinado_em: agoraIso,
-      assinatura_sha256: hash,
-      arquivo_assinado_url: path
-    });
+    // 31/10/2026: grava so pela funcao do banco (assinar_contracheque), que mexe apenas
+    // nos campos da assinatura. O colaborador nunca pode editar valores da folha.
+    await sbRpc(sessao.token, "assinar_contracheque", { p_folha_id: folhaId, p_sha256: hash, p_arquivo: path });
     setFolhasPg(fps => fps.map(f => f.id === folhaId ? { ...f, assinadoEm: agoraIso, assinaturaSha256: hash, arquivoAssinadoUrl: path } : f));
     try {
       await auditar("contracheque_assinado_govbr", `${user.nome} assinou o contracheque pelo gov.br (SHA-256: ${hash})`);
@@ -5953,7 +5951,6 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
   const expHoje = expedienteDoDia(new Date());
   const temLancheHoje = expHoje.lancheMin > 0;
-  const mostrarBotoesLanche = temLancheHoje || demo || horarioLanche(dataISO(new Date()));
   const [avisoLanche, setAvisoLanche] = useState(null);
 
   let rotuloBatida = `Registrar ${proxTipo}`;
@@ -5974,25 +5971,15 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
 
   const acionarBatidaPrincipal = () => {
     setAvisoLanche(null);
+    // 31/10/2026: o ponto registra SEMPRE o horario real (nunca trava a batida).
+    // Fora da janela do lanche (15h-17h) so mostra um aviso.
     if (temLancheHoje && (doDia.length === 3 || doDia.length === 4)) {
       const v = validarJanelaLanche(new Date());
-      if (!v.valido) {
-        setAvisoLanche(v.msg);
-        return;
-      }
+      if (!v.valido) setAvisoLanche(v.msg);
     }
     iniciarBatida();
   };
 
-  const acionarLanche = (tipo) => {
-    setAvisoLanche(null);
-    const v = validarJanelaLanche(new Date());
-    if (!v.valido) {
-      setAvisoLanche(v.msg);
-      return;
-    }
-    iniciarBatida();
-  };
 
   const a = analisarAssiduidade(user.id, registros, faltas);
   const eleg = elegibilidadePremio(user.id, registros, faltas);
@@ -6089,29 +6076,9 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
               >
                 {batidaRecente ? `Aguarde ${batidaRecente}s` : rotuloBatida}
               </button>
-              {mostrarBotoesLanche && (
-                <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    style={{ ...S.btnGhost, borderColor: C.amarelo, color: C.amarelo, fontSize: 13, padding: "8px 14px" }}
-                    disabled={!!batidaRecente}
-                    onClick={() => acionarLanche("inicio")}
-                  >
-                    🥪 Início do lanche da tarde
-                  </button>
-                  <button
-                    type="button"
-                    style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, fontSize: 13, padding: "8px 14px" }}
-                    disabled={!!batidaRecente}
-                    onClick={() => acionarLanche("fim")}
-                  >
-                    ☕ Fim do lanche da tarde
-                  </button>
-                </div>
-              )}
               {avisoLanche && (
                 <div role="alert" style={{ marginTop: 14, background: "#3A1A1A", border: "1px solid " + C.vermelho, borderRadius: 10, padding: 12, textAlign: "left" }}>
-                  <div style={{ color: C.vermelho, fontWeight: 700, fontSize: 13 }}>⚠️ Horário da pausa para o lanche</div>
+                  <div style={{ color: C.vermelho, fontWeight: 700, fontSize: 13 }}>⚠️ Ponto registrado — lembrete do lanche</div>
                   <p style={{ color: C.branco, fontSize: 12.5, margin: "4px 0 0", lineHeight: 1.5 }}>{avisoLanche}</p>
                 </div>
               )}
@@ -9011,6 +8978,7 @@ function CardHoleriteItem({ f, user, onAssinarFolha }) {
   const [sucesso, setSucesso] = useState(null);
 
   const iniciarAssinaturaGovBr = async () => {
+    if (f.status !== "fechada") { setErro("O contracheque fica pronto para assinar depois que a folha do mês é fechada."); return; }
     setEtapaAssinatura("aguardando_arquivo");
     setErro(null);
     setSucesso(null);
@@ -9152,6 +9120,7 @@ function CardHoleriteItem({ f, user, onAssinarFolha }) {
           {erro && <p style={{ fontSize: 12, color: C.vermelho, marginTop: 8 }}>{erro}</p>}
         </div>
       )}
+      {erro && etapaAssinatura !== "aguardando_arquivo" && <p style={{ fontSize: 12, color: C.vermelho, marginTop: 8 }}>{erro}</p>}
       {sucesso && <p style={{ fontSize: 12, color: C.verde, marginTop: 8 }}>{sucesso}</p>}
 
       <p style={{ fontSize: 11, color: C.cinza, marginTop: 10 }}>{EMPRESA.nome} · CNPJ {EMPRESA.cnpj} · {EMPRESA.endereco}</p>

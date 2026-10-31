@@ -7208,10 +7208,12 @@ function AppInterno() {
       };
     }
     const path = await sbUpload(sessao.token, user.id, arquivo);
-    await sbUpdate(sessao.token, "folha_pagamento", `id=eq.${folhaId}`, {
-      assinado_em: agoraIso,
-      assinatura_sha256: hash,
-      arquivo_assinado_url: path
+    // 31/10/2026: grava so pela funcao do banco (assinar_contracheque), que mexe apenas
+    // nos campos da assinatura. O colaborador nunca pode editar valores da folha.
+    await sbRpc(sessao.token, "assinar_contracheque", {
+      p_folha_id: folhaId,
+      p_sha256: hash,
+      p_arquivo: path
     });
     setFolhasPg(fps => fps.map(f => f.id === folhaId ? {
       ...f,
@@ -10059,7 +10061,6 @@ function TelaPonto({
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
   const expHoje = expedienteDoDia(new Date());
   const temLancheHoje = expHoje.lancheMin > 0;
-  const mostrarBotoesLanche = temLancheHoje || demo || horarioLanche(dataISO(new Date()));
   const [avisoLanche, setAvisoLanche] = useState(null);
   let rotuloBatida = `Registrar ${proxTipo}`;
   if (temLancheHoje) {
@@ -10070,21 +10071,11 @@ function TelaPonto({
   }
   const acionarBatidaPrincipal = () => {
     setAvisoLanche(null);
+    // 31/10/2026: o ponto registra SEMPRE o horario real (nunca trava a batida).
+    // Fora da janela do lanche (15h-17h) so mostra um aviso.
     if (temLancheHoje && (doDia.length === 3 || doDia.length === 4)) {
       const v = validarJanelaLanche(new Date());
-      if (!v.valido) {
-        setAvisoLanche(v.msg);
-        return;
-      }
-    }
-    iniciarBatida();
-  };
-  const acionarLanche = tipo => {
-    setAvisoLanche(null);
-    const v = validarJanelaLanche(new Date());
-    if (!v.valido) {
-      setAvisoLanche(v.msg);
-      return;
+      if (!v.valido) setAvisoLanche(v.msg);
     }
     iniciarBatida();
   };
@@ -10346,37 +10337,7 @@ function TelaPonto({
     disabled: !!batidaRecente,
     onClick: acionarBatidaPrincipal,
     "aria-label": batidaRecente ? `Aguarde ${batidaRecente} segundos para registrar novamente` : `${rotuloBatida} agora`
-  }, batidaRecente ? `Aguarde ${batidaRecente}s` : rotuloBatida), mostrarBotoesLanche && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 14,
-      display: "flex",
-      gap: 10,
-      justifyContent: "center",
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    style: {
-      ...S.btnGhost,
-      borderColor: C.amarelo,
-      color: C.amarelo,
-      fontSize: 13,
-      padding: "8px 14px"
-    },
-    disabled: !!batidaRecente,
-    onClick: () => acionarLanche("inicio")
-  }, "\uD83E\uDD6A In\xEDcio do lanche da tarde"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    style: {
-      ...S.btnGhost,
-      borderColor: C.verde,
-      color: C.verde,
-      fontSize: 13,
-      padding: "8px 14px"
-    },
-    disabled: !!batidaRecente,
-    onClick: () => acionarLanche("fim")
-  }, "\u2615 Fim do lanche da tarde")), avisoLanche && /*#__PURE__*/React.createElement("div", {
+  }, batidaRecente ? `Aguarde ${batidaRecente}s` : rotuloBatida), avisoLanche && /*#__PURE__*/React.createElement("div", {
     role: "alert",
     style: {
       marginTop: 14,
@@ -10392,7 +10353,7 @@ function TelaPonto({
       fontWeight: 700,
       fontSize: 13
     }
-  }, "\u26A0\uFE0F Hor\xE1rio da pausa para o lanche"), /*#__PURE__*/React.createElement("p", {
+  }, "\u26A0\uFE0F Ponto registrado \u2014 lembrete do lanche"), /*#__PURE__*/React.createElement("p", {
     style: {
       color: C.branco,
       fontSize: 12.5,
@@ -18510,6 +18471,10 @@ function CardHoleriteItem({
   const [erro, setErro] = useState(null);
   const [sucesso, setSucesso] = useState(null);
   const iniciarAssinaturaGovBr = async () => {
+    if (f.status !== "fechada") {
+      setErro("O contracheque fica pronto para assinar depois que a folha do mês é fechada.");
+      return;
+    }
     setEtapaAssinatura("aguardando_arquivo");
     setErro(null);
     setSucesso(null);
@@ -18799,7 +18764,13 @@ function CardHoleriteItem({
       color: C.vermelho,
       marginTop: 8
     }
-  }, erro)), sucesso && /*#__PURE__*/React.createElement("p", {
+  }, erro)), erro && etapaAssinatura !== "aguardando_arquivo" && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.vermelho,
+      marginTop: 8
+    }
+  }, erro), sucesso && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.verde,
