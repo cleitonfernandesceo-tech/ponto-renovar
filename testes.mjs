@@ -27,7 +27,7 @@ const secao = (nome) => console.log(`\n── ${nome} ${"─".repeat(Math.max(0,
 
 // ---------- extrai e transpila os motores do arquivo real ----------
 const dir = mkdtempSync(join(tmpdir(), "ponto-teste-"));
-const src = readFileSync(ARQUIVO, "utf8");
+const src = readFileSync(ARQUIVO, "utf8").replace(/\r\n/g, "\n");
 const ini = src.indexOf("const EMPRESA");
 const fim = src.indexOf("/* ================= UI base");
 if (ini < 0 || fim < 0) { console.error("Não achei os marcadores do bloco de motores em", ARQUIVO); process.exit(1); }
@@ -53,12 +53,13 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   aplicarAjustes, validarAjuste, ajustesPendentes, resumoAjuste, AJUSTE_ACOES,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
   gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
-  hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin };`;
+  hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin,
+  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
 try {
-  execFileSync("npx", ["esbuild", entrada, "--loader:.jsx=jsx", "--format=esm", `--outfile=${saida}`, "--log-level=error"], { stdio: "pipe" });
+  execFileSync(process.platform === "win32" ? "npx.cmd" : "npx", ["esbuild", entrada, "--loader:.jsx=jsx", "--format=esm", `--outfile=${saida}`, "--log-level=error"], { stdio: "pipe", shell: true });
 } catch (e) {
   console.error("Falha ao transpilar (esbuild instalado?):", e.stderr?.toString() || e.message);
   process.exit(1);
@@ -228,7 +229,7 @@ t('semana dentro do contratual não acusa excesso', !conf([1, 2, 3].flatMap((d) 
 
 // ==============================================================
 secao('PWA: instalar no celular e abrir sem internet');
-const leia = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : '');
+const leia = (f) => (existsSync(f) ? readFileSync(f, 'utf8').replace(/\r\n/g, '\n') : '');
 const htmlPub = leia('index.html');
 const manifestTxt = leia('manifest.json');
 let manifest = null;
@@ -1205,6 +1206,95 @@ secao("Data de hoje depois das 21h (horário de Brasília)");
   t("às 23h30 de 20/10 o app ainda diz que hoje é 20/10", hoje === "2026-10-20", hoje);
   t("(prova do problema antigo: toISOString diria 21/10)", comTzUtc === "2026-10-21", comTzUtc);
 }
+
+
+// ==============================================================
+secao("Jornada nova desde 02/11/2026 (seg-sex 8h30-18h com 1h almoço e 30min lanche, sábado 8h-12h)");
+t("o marco do horário com lanche é 02/11/2026", m.HORARIO_LANCHE_DESDE === "2026-11-02");
+t("dias anteriores seguem a regra antiga (01/11 não é horário de lanche)", !m.horarioLanche("2026-11-01"));
+t("02/11 em diante já é a regra nova de lanche", m.horarioLanche("2026-11-02"));
+const expTerca = m.expedienteDoDia(new Date("2026-11-03T10:00:00"));
+t("terça-feira 03/11: entrada 8h30 e saída 18h", expTerca.entradaMin === 510 && expTerca.saidaMin === 1080);
+t("terça-feira 03/11: 8h de jornada e 90 min de intervalos (60min almoço + 30min lanche)",
+  expTerca.jornadaMin === 480 && expTerca.intervaloMin === 90 && expTerca.almocoMin === 60 && expTerca.lancheMin === 30);
+t("rótulo da jornada nova explica a divisão de 8h + 1h almoço + 30min lanche",
+  expTerca.rotulo === "8:30–18:00 (8h + 1h almoço + 30min lanche)");
+const expSabNov = m.expedienteDoDia(new Date("2026-11-07T10:00:00"));
+t("sábado novo 07/11: das 8h às 12h (4h), sem almoço e sem lanche",
+  expSabNov.jornadaMin === 240 && expSabNov.entradaMin === 480 && expSabNov.saidaMin === 720 &&
+  expSabNov.intervaloMin === 0 && expSabNov.lancheMin === 0 && expSabNov.almocoMin === 0);
+t("tolerância de atraso segue 10 min: 8:40 é pontual", m.entradaPontual(new Date("2026-11-03T08:40:00")));
+t("8:41 deixa de ser pontual", !m.entradaPontual(new Date("2026-11-03T08:41:00")));
+t("8:55 conta 15 min de atraso excedente", m.minutosAtrasoDia(new Date("2026-11-03T08:55:00")) === 15);
+t("chegar às 8h25 antes do expediente não gera atraso nem desconto", m.minutosAtrasoDia(new Date("2026-11-03T08:25:00")) === 0);
+
+// Validação da janela do lanche (15h às 17h em dia de semana, nunca sábado)
+const vlAntes15 = m.validarJanelaLanche(new Date(2026, 10, 3, 14, 55));
+t("lanche às 14h55 é bloqueado com aviso amigável que só começa após 15h",
+  !vlAntes15.valido && vlAntes15.msg.includes("depois das 15h"));
+const vl15 = m.validarJanelaLanche(new Date(2026, 10, 3, 15, 0));
+t("lanche às 15h00 em dia útil é permitido", vl15.valido === true);
+const vl16 = m.validarJanelaLanche(new Date(2026, 10, 3, 16, 15));
+t("lanche às 16h15 em dia útil é permitido", vl16.valido === true);
+const vl17 = m.validarJanelaLanche(new Date(2026, 10, 3, 17, 0));
+t("lanche às 17h00 em dia útil é permitido", vl17.valido === true);
+const vlDepois17 = m.validarJanelaLanche(new Date(2026, 10, 3, 17, 5));
+t("lanche às 17h05 é bloqueado com aviso amigável que termina até 17h",
+  !vlDepois17.valido && vlDepois17.msg.includes("até as 17h"));
+const vlSabado = m.validarJanelaLanche(new Date(2026, 10, 7, 15, 30));
+t("lanche no sábado é bloqueado com aviso de jornada de 4h sem almoço/lanche",
+  !vlSabado.valido && vlSabado.msg.includes("sem almoço e sem lanche"));
+
+// Banco de horas com a jornada nova
+const diaNov = (iso, hE, mE, hS, mS) => [
+  { userId: "u", tipo: "entrada", ts: `${iso}T${String(hE).padStart(2, "0")}:${String(mE).padStart(2, "0")}:00`, nsr: 1 },
+  { userId: "u", tipo: "saida", ts: `${iso}T${String(hS).padStart(2, "0")}:${String(mS).padStart(2, "0")}:00`, nsr: 2 }];
+const saldoNov = (regs) => m.analisarAssiduidade("u", regs, []).saldoMin;
+t("dia novo com par único 8h30-18h fecha em ZERO (desconto dos 90 min de intervalos)",
+  saldoNov(diaNov("2026-11-03", 8, 30, 18, 0)) === 0);
+const diaComAlmoco = [
+  ...diaNov("2026-11-03", 8, 30, 12, 0),
+  ...diaNov("2026-11-03", 13, 0, 18, 0).map(r => ({ ...r, nsr: r.nsr + 2 }))
+];
+t("dia novo com almoço batido (2 pares) desconta 30 min de lanche e fecha em ZERO",
+  saldoNov(diaComAlmoco) === 0);
+const diaComAlmocoELanche = [
+  ...diaNov("2026-11-03", 8, 30, 12, 0),
+  ...diaNov("2026-11-03", 13, 0, 16, 0).map(r => ({ ...r, nsr: r.nsr + 2 })),
+  ...diaNov("2026-11-03", 16, 30, 18, 0).map(r => ({ ...r, nsr: r.nsr + 4 }))
+];
+t("dia novo com almoço e lanche batidos (3 pares) fecha em ZERO",
+  saldoNov(diaComAlmocoELanche) === 0);
+t("dia novo com saída às 19h gera +60 min de horas extras",
+  saldoNov(diaNov("2026-11-03", 8, 30, 19, 0)) === 60);
+t("dia novo com saída às 17h gera -60 min de débito no banco",
+  saldoNov(diaNov("2026-11-03", 8, 30, 17, 0)) === -60);
+t("sábado novo 07/11 das 8h às 12h fecha em ZERO",
+  saldoNov(diaNov("2026-11-07", 8, 0, 12, 0)) === 0);
+t("sábado novo trabalhado até as 13h gera +60 min",
+  saldoNov(diaNov("2026-11-07", 8, 0, 13, 0)) === 60);
+t("código do horário novo seg-sex no AEJ é H083018",
+  m.codHorarioDe("2026-11-03T10:00:00") === "H083018");
+t("código do sábado novo no AEJ é H0812",
+  m.codHorarioDe("2026-11-07T10:00:00") === "H0812");
+
+// ==============================================================
+secao("Assinatura do contracheque pelo gov.br (ITI)");
+t("o app traz o botão 'Assinar pelo gov.br'", src.includes("Assinar pelo gov.br"));
+t("o app traz o endereço oficial do assinador gov.br", src.includes("https://assinador.iti.gov.br"));
+t("o app exibe o passo a passo com os 4 passos pedidos pelo dono",
+  src.includes("Entre com sua conta gov.br") &&
+  src.includes("Escolha o arquivo baixado") &&
+  src.includes("Assine") &&
+  src.includes("Volte aqui e envie o arquivo assinado"));
+t("o app traz o campo 'Enviar contracheque assinado'", src.includes("Enviar contracheque assinado"));
+t("o app traz o link 'Conferir assinatura' apontando para https://validar.iti.gov.br",
+  src.includes("https://validar.iti.gov.br") && src.includes("Conferir assinatura"));
+t("função sha256Arquivo calcula hash SHA-256 de arquivo/blob", typeof m.sha256Arquivo === "function");
+t("o painel do gestor exibe o resumo de quem assinou e quem falta assinar",
+  src.includes("Assinaturas do contracheque (gov.br)") && src.includes("pendente(s)"));
+t("o painel do gestor traz a coluna de assinatura gov.br na folha",
+  src.includes("Assinatura gov.br"));
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
