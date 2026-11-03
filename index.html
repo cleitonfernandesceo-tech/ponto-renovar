@@ -532,6 +532,50 @@ const jornadaContratualTxt = comp => {
   return "8h/dia seg-sex + sabado 4h";
 };
 
+/* ---------- Lógica JARVIS: Voz Nativa, Proatividade e Memória Operacional ----------
+   Voz (Web Speech API nativa): acessível, leve e sem dependências externas.
+   Telegram: formatação pura sem envio de dados pessoais sensíveis (anonimizado/operacional). */
+function falarTexto(texto) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(String(texto || ""));
+    u.lang = "pt-BR";
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+    return true;
+  } catch (e) {
+    console.warn("[voz]", e?.message);
+    return false;
+  }
+}
+function falarConfirmacaoBatida(tipo, nome) {
+  const primeiroNome = (nome || "").trim().split(" ")[0];
+  const t = String(tipo || "").toLowerCase();
+  const rotulo = t === "entrada" ? "Entrada registrada" : t === "saida" ? "Saída registrada" : "Ponto registrado";
+  const saudacao = primeiroNome ? `, ${primeiroNome}` : "";
+  return falarTexto(`${rotulo} com sucesso${saudacao}. Tenha um ótimo trabalho.`);
+}
+function formatarMensagemTelegramResumo({
+  periodo = "Semana",
+  totalHorasTrabalhadas = 0,
+  saldoMinutos = 0,
+  colaboradoresAtivos = 0
+} = {}) {
+  const sinal = saldoMinutos >= 0 ? "+" : "-";
+  const abs = Math.abs(saldoMinutos);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  const saldoTxt = `${sinal}${h}h${m ? String(m).padStart(2, "0") + "min" : ""}`;
+  return [`📊 *Ponto Renovar — Resumo Semanal do Banco de Horas*`, `Período: ${periodo}`, `Equipe ativa: ${colaboradoresAtivos} colaboradores`, `Total produzido: ${Math.round(totalHorasTrabalhadas)}h`, `Saldo da semana: ${saldoTxt} no banco`, `_Resumo operacional sem identificação individual (Diretriz JARVIS)._`].join("\n");
+}
+function formatarAvisoBatidasEsquecidas(pendencias = []) {
+  const qtd = Array.isArray(pendencias) ? pendencias.length : Number(pendencias) || 0;
+  if (!qtd) return "⏰ *Ponto Renovar*: todas as saídas de hoje foram registradas normalmente.";
+  return [`⚠️ *Ponto Renovar — Alerta de Fim de Expediente*`, `Constatamos ${qtd} colaborador(es) com entrada registrada hoje mas sem batida de saída final.`, `Por favor, lembre a equipe de conferir o espelho de ponto.`].join("\n");
+}
+
 /* ============================================================
    SUPABASE — backend real
    Client leve via REST (PostgREST + GoTrue): mesmas chamadas HTTP
@@ -6592,6 +6636,9 @@ function AppInterno() {
           setComprovante(regPend);
           setFluxoPonto("comprovante");
           log("batida", `Batida ${tipo} registrada SEM REDE (na fila, será enviada automaticamente) · ${tsLocal}`);
+          try {
+            falarConfirmacaoBatida(tipo, user?.nome);
+          } catch {}
           setSalvando(false);
           return;
         }
@@ -6637,6 +6684,9 @@ function AppInterno() {
       setLembrete(null); // a batida resolve o lembrete pendente
       setComprovante(reg);
       setFluxoPonto("comprovante");
+      try {
+        falarConfirmacaoBatida(tipo, user?.nome);
+      } catch {}
     } catch (e) {
       avisar(mensagemAmigavel(e, "ao registrar a batida"));
       setFluxoPonto(null);
@@ -6857,6 +6907,14 @@ function AppInterno() {
         // almoço só seg-sex (sábado é turno único)
         if (h === 12 && total === 1) disparar("alm12", "🍽 Saída pro almoço", "Lembre de registrar a saída pro intervalo.");
         if (h === 13 && total === 2) disparar("alm13", "🍽 Volta do almoço", "Lembre de registrar o retorno do intervalo.");
+        // Lembretes proativos JARVIS de lanche (15h-17h se a jornada do dia tiver lanche) e saída final (18h)
+        if (exp.lancheMin > 0) {
+          if (h === 15 && total === 2) disparar("lan15", "🥪 Início da pausa do lanche", "Janela de lanche da tarde aberta (15h às 17h). Lembre de registrar.");
+          if (h === 17 && total === 3) disparar("lan17", "🥪 Fim da pausa do lanche", "A janela do lanche termina às 17h. Lembre de registrar seu retorno.");
+        }
+        if (h === 18 && total >= 1 && total % 2 === 1) {
+          disparar("sai18", "🏁 Fim do expediente", "Seu horário contratual encerra às 18h. Lembre de bater sua saída final.");
+        }
       }
     };
     checar();
@@ -19677,9 +19735,24 @@ function SecaoDiagnostico({
     });
     const fila = lerFila().length;
     l.push({
-      t: "Batidas na fila",
+      t: "Batidas na fila (autocura offline)",
       ok: fila === 0,
-      msg: fila === 0 ? "nenhuma pendente" : `${fila} esperando conexão`
+      msg: fila === 0 ? "nenhuma pendente" : `${fila} aguardando envio automático`
+    });
+    let pushStatus = "não disponível";
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator && "PushManager" in window) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = reg ? await reg.pushManager.getSubscription() : null;
+        pushStatus = sub ? "ativo e inscrito no servidor" : "service worker pronto, sem inscrição ativa";
+      } catch {
+        pushStatus = "erro ao checar inscrição";
+      }
+    }
+    l.push({
+      t: "Lembretes push (autocura)",
+      ok: pushStatus.startsWith("ativo"),
+      msg: pushStatus
     });
     if (demo) {
       l.push({
