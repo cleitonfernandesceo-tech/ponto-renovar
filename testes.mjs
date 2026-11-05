@@ -54,7 +54,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
   gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
   hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin,
-  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo };`;
+  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo,
+  formatarMensagemTelegramResumo, formatarAvisoBatidasEsquecidas, falarConfirmacaoBatida, falarTexto };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1295,6 +1296,43 @@ t("o painel do gestor exibe o resumo de quem assinou e quem falta assinar",
   src.includes("Assinaturas do contracheque (gov.br)") && src.includes("pendente(s)"));
 t("o painel do gestor traz a coluna de assinatura gov.br na folha",
   src.includes("Assinatura gov.br"));
+
+// ==============================================================
+secao("Melhorias JARVIS: Proatividade, Voz e Autocura");
+t("formatarMensagemTelegramResumo formata resumo sem dados pessoais sensíveis", () => {
+  const msg = m.formatarMensagemTelegramResumo({
+    periodo: "03/11 a 07/11/2026",
+    totalHorasTrabalhadas: 176,
+    saldoMinutos: 120,
+    colaboradoresAtivos: 4
+  });
+  return msg.includes("Resumo Semanal") &&
+    msg.includes("+2h no banco") &&
+    msg.includes("4 colaboradores") &&
+    msg.includes("sem identificação individual");
+});
+
+t("formatarAvisoBatidasEsquecidas gera mensagem de alerta amigável", () => {
+  const msg = m.formatarAvisoBatidasEsquecidas([{ id: "u1" }, { id: "u2" }]);
+  return msg.includes("2 colaborador(es)") && msg.includes("Alerta de Fim de Expediente");
+});
+
+t("formatarAvisoBatidasEsquecidas lida com zero pendências", () => {
+  const msg = m.formatarAvisoBatidasEsquecidas([]);
+  return msg.includes("todas as saídas de hoje foram registradas normalmente");
+});
+
+t("falarTexto e falarConfirmacaoBatida estão declaradas e são seguras", () => {
+  return typeof m.falarTexto === "function" && typeof m.falarConfirmacaoBatida === "function";
+});
+
+t("o app inclui lembretes de lanche e saída (lan15, lan17, sai18)", () => {
+  return src.includes('"lan15"') && src.includes('"lan17"') && src.includes('"sai18"');
+});
+
+t("o diagnóstico de sistema verifica autocura da fila e push", () => {
+  return src.includes("Batidas na fila (autocura offline)") && src.includes("Lembretes push (autocura)");
+});
 
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0

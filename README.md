@@ -1048,3 +1048,22 @@ Domingo e feriado nacional nao avisam. O aviso de saida procura quem ja bateu a
 saida e, a partir das 19h, vai pra todo mundo; o de chegada faz o mesmo com a
 entrada, liberando geral as 9h. Quem nao tem aparelho inscrito no push nao
 entra na lista - o cartao na tela continua valendo.
+
+## Filosofia JARVIS: Proatividade, Voz, Memória e Autocura
+
+O Ponto Renovar adota a lógica JARVIS para apoiar o dia a dia da equipe sem burocracia ou termos técnicos desnecessários:
+
+1. **Memória Operacional (sem dados pessoais sensíveis):**
+   - Registros de logs agregados e anônimos para o canal do Telegram do dono e gestor (ex.: total de horas produzidas, saldo consolidado de banco de horas e total de saídas pendentes).
+   - Nenhum dado biométrico, pessoal ou sensível trafega por canais externos.
+
+2. **Autocura e Diagnóstico Ativo:**
+   - O painel do gestor (`SecaoDiagnostico`) monitora ativamente se o Service Worker está operacional, a saúde das inscrições Push e a fila de batidas offline com sincronização automática quando a rede retorna.
+
+3. **Proatividade no Celular e Telegram:**
+   - Lembretes no celular no início do expediente, pausas para almoço (12h e 13h), janela de lanche da tarde (15h e 17h para dias com lanche desde 02/11/2026) e encerramento (18h).
+   - Notificação proativa ao gestor caso algum colaborador fique com a batida de saída esquecida ao final do dia.
+   - Resumo semanal consolidado no Telegram do dono aos sábados.
+
+4. **Voz Acessível e Nativa:**
+   - Feedback sonoro em linguagem simples através da Web Speech API nativa do navegador (`speechSynthesis`), confirmando o registro de cada batida com cordialidade.

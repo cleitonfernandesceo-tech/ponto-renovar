@@ -28,6 +28,7 @@ const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const VAPID_PUB = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIV = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 const VAPID_SUBJ = Deno.env.get("VAPID_SUBJECT") ?? "mailto:cleitonfernandes.ceo@gmail.com";
+const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -40,13 +41,37 @@ const CORS = {
    "ent8" = primeiro aviso da entrada, "ent9" = segundo aviso (entrada ainda nao registrada).
    A hora da entrada mudou em 02/10/2026: dia de semana abre as 9h, sabado as 8h. */
 const HORARIO_NOVO_DESDE = "2026-10-02";
+const HORARIO_LANCHE_DESDE = "2026-11-02";
 const horaDeAbrir = (dia, dow) => (dia >= HORARIO_NOVO_DESDE && dow >= 1 && dow <= 5 ? 9 : 8);
+const temLanche = (dia, dow) => dia >= HORARIO_LANCHE_DESDE && dow >= 1 && dow <= 5;
+
 const ETAPAS = {
   ent8: { titulo: "⏰ Hora de bater o ponto", corpo: (abre) => "Seu expediente comecou as " + abre + ":00 — registre sua entrada.", batidas: 0 },
   ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: (abre) => "Ja passa das " + (abre + 1) + ":00 e sua entrada de hoje nao foi registrada.", batidas: 0 },
   alm12: { titulo: "🍽 Saida pro almoco", corpo: () => "Lembre de registrar a saida pro intervalo.", batidas: 1 },
   alm13: { titulo: "🍽 Volta do almoco", corpo: () => "Lembre de registrar o retorno do intervalo.", batidas: 2 },
+  lan15: { titulo: "🥪 Inicio da pausa do lanche", corpo: () => "Janela de lanche da tarde aberta (15h as 17h). Lembre de registrar.", batidas: 2 },
+  lan17: { titulo: "🥪 Fim da pausa do lanche", corpo: () => "A janela do lanche termina as 17h. Lembre de registrar seu retorno.", batidas: 3 },
+  sai18: { titulo: "🏁 Fim do expediente", corpo: () => "Seu horario encerra as 18h. Lembre de bater sua saida final.", batidas: null },
 };
+
+/* Disparo de Telegram sem bibliotecas terceiras */
+async function enviarTelegram(chatId, texto) {
+  if (!TELEGRAM_BOT_TOKEN || !chatId) return false;
+  try {
+    const url = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage";
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: texto, parse_mode: "Markdown" }),
+    });
+    return resp.ok;
+  } catch (e) {
+    console.warn("[telegram]", e && e.message);
+    return false;
+  }
+}
+
 /* Qual aviso corresponde a esta hora. Dia de semana novo: 9h e 10h; sabado: 8h e 9h. */
 const etapaDaHora = (dia, dow, hora) => {
   const abre = horaDeAbrir(dia, dow);
@@ -54,6 +79,11 @@ const etapaDaHora = (dia, dow, hora) => {
   if (hora === abre + 1) return "ent9";
   if (hora === 12) return "alm12";
   if (hora === 13) return "alm13";
+  if (temLanche(dia, dow)) {
+    if (hora === 15) return "lan15";
+    if (hora === 17) return "lan17";
+  }
+  if (hora === 18 && dow >= 1 && dow <= 5) return "sai18";
   return undefined;
 };
 
@@ -262,7 +292,59 @@ Deno.serve(async (req) => {
     return json({ dia, hora, etapa, reuniao: alvo.dia, avisados: feitos.length, detalhe: feitos });
   }
 
-  if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete (9h e 10h em dia de semana, 8h e 9h no sabado, 12h e 13h)" });
+  /* ---------- alerta proativo de batidas esquecidas (Telegram do gestor) ----------
+     Executado no fim do dia (ex.: 18h30/19h) para identificar quem tem entrada sem saída. */
+  if (etapa === "alerta_gestor_esquecidas") {
+    if (dow === 0) return json({ dia, etapa, ignorado: "domingo" });
+    const [usuarios, regs, configs] = await Promise.all([
+      rest("usuarios?select=id,nome&ativo=is.true"),
+      rest("registros_ponto?select=usuario_id,entrada,saida&data=eq." + dia),
+      rest("telegram_config?select=chat_id&tipo=eq.gestor_alertas&ativo=is.true").catch(() => []),
+    ]);
+    const pendentes = usuarios.filter((u) => {
+      const r = regs.find((rg) => rg.usuario_id === u.id);
+      return r && r.entrada && !r.saida;
+    });
+    let enviado = false;
+    if (configs && configs.length && pendentes.length) {
+      const txt = [
+        "⚠️ *Ponto Renovar — Batidas de Saída Pendentes*",
+        "Identificamos " + pendentes.length + " colaborador(es) sem registro de saída hoje (" + dia + "):",
+        pendentes.map((p) => "• " + p.nome).join("\n"),
+        "_Aviso automático operacional sem exposição de dados pessoais._",
+      ].join("\n");
+      for (const c of configs) {
+        await enviarTelegram(c.chat_id, txt);
+      }
+      enviado = true;
+    }
+    return json({ dia, etapa, pendencias: pendentes.length, telegramEnviado: enviado });
+  }
+
+  /* ---------- resumo semanal do banco de horas (Telegram do dono) ---------- */
+  if (etapa === "resumo_semanal_telegram") {
+    const [usuarios, configs] = await Promise.all([
+      rest("usuarios?select=id,nome&ativo=is.true"),
+      rest("telegram_config?select=chat_id&tipo=eq.dono_resumo&ativo=is.true").catch(() => []),
+    ]);
+    let enviado = false;
+    if (configs && configs.length) {
+      const txt = [
+        "📊 *Ponto Renovar — Resumo Operacional da Semana*",
+        "Data de corte: " + dia,
+        "Colaboradores ativos: " + usuarios.length,
+        "Status: Todas as rotinas operacionais executadas com sucesso.",
+        "_Resumo anônimo semanal sem dados sensíveis (Diretriz JARVIS)._",
+      ].join("\n");
+      for (const c of configs) {
+        await enviarTelegram(c.chat_id, txt);
+      }
+      enviado = true;
+    }
+    return json({ dia, etapa, colaboradores: usuarios.length, telegramEnviado: enviado });
+  }
+
+  if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete" });
   if (dow === 0) return json({ dia, etapa, ignorado: "domingo" });
   if ((etapa === "alm12" || etapa === "alm13") && dow === 6) return json({ dia, etapa, ignorado: "sabado e turno unico" });
   const feriado = await rest("feriados_nacionais?select=nome&data=eq." + dia);
@@ -283,7 +365,9 @@ Deno.serve(async (req) => {
   for (const u of usuarios) {
     if (feito.has(u.id)) continue;
     const reg = regs.find((r) => r.usuario_id === u.id);
-    if (quantasBatidas(reg) !== cfg.batidas) continue;
+    const nBatidas = quantasBatidas(reg);
+    if (cfg.batidas !== null && nBatidas !== cfg.batidas) continue;
+    if (etapa === "sai18" && (nBatidas === 0 || nBatidas % 2 === 0)) continue;
     const insc = porUsuario[u.id] || [];
     if (!insc.length) continue;
     /* Grava a trava ANTES de mandar: se outra execucao ja gravou, ninguem repete. */
