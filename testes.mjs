@@ -1296,6 +1296,33 @@ t("o painel do gestor exibe o resumo de quem assinou e quem falta assinar",
 t("o painel do gestor traz a coluna de assinatura gov.br na folha",
   src.includes("Assinatura gov.br"));
 
+secao("Jornada de 42h desde 15/12/2026 (fim da escala 6x1, pedido do dono 06/11/2026)");
+{
+  const seg = m.expedienteDoDia(new Date("2026-12-21T10:00:00")); // segunda
+  const ter = m.expedienteDoDia(new Date("2026-12-22T10:00:00"));
+  const qua = m.expedienteDoDia(new Date("2026-12-16T10:00:00"));
+  const sex = m.expedienteDoDia(new Date("2026-12-18T10:00:00"));
+  const sab = m.expedienteDoDia(new Date("2026-12-19T10:00:00"));
+  t("segunda: 7h30 às 18h, 9h trabalhadas", seg.entradaMin === 450 && seg.saidaMin === 1080 && seg.jornadaMin === 540 && seg.intervaloMin === 90);
+  t("terça: 7h30 às 18h, 9h trabalhadas", ter.entradaMin === 450 && ter.jornadaMin === 540);
+  t("quarta a sexta: 8h30 às 18h, 8h trabalhadas", qua.entradaMin === 510 && qua.jornadaMin === 480 && sex.entradaMin === 510 && sex.jornadaMin === 480);
+  t("sábado sem expediente", sab.jornadaMin === 0 && sab.entradaMin === null);
+  const semana = ["2026-12-21", "2026-12-22", "2026-12-23", "2026-12-24", "2026-12-25", "2026-12-26", "2026-12-27"].map((d) => m.expedienteDoDia(new Date(d + "T10:00:00")).jornadaMin);
+  t("semana cheia sem feriado = 42h", [450, 510, 510, 510, 510].length && ["2027-01-11","2027-01-12","2027-01-13","2027-01-14","2027-01-15","2027-01-16","2027-01-17"].map((d) => m.expedienteDoDia(new Date(d + "T10:00:00")).jornadaMin).reduce((a, b) => a + b, 0) === 42 * 60);
+  const sab12 = m.expedienteDoDia(new Date("2026-12-05T10:00:00"));
+  const sex12 = m.expedienteDoDia(new Date("2026-12-11T10:00:00"));
+  t("até 14/12 continua a jornada antiga (sábado 8h-12h, sexta 8h30)", sab12.jornadaMin === 240 && sex12.entradaMin === 510, JSON.stringify([sab12.jornadaMin, sex12.entradaMin]));
+  t("segunda 15/12 já é 7h30", m.expedienteDoDia(new Date("2026-12-15T10:00:00")).entradaMin === 450);
+  t("atraso conta a partir das 7h30 na segunda (7h45 = 5 min além da tolerância)", m.minutosAtrasoDia(new Date("2026-12-21T07:45:00")) === 5);
+  t("atraso conta a partir das 8h30 na quarta (8h35 dentro da tolerância)", m.minutosAtrasoDia(new Date("2026-12-23T08:35:00")) === 0);
+  t("divisor de horas 210 a partir de jan/2027 e 220 em dez/2026", src.includes('> JORNADA_42H_DESDE.slice(0, 7) ? 210 : TABELAS_2026.divisorHoras') && src.includes("(sal / divisorHorasDe(comp))"));
+  t("tela explica a jornada nova", src.includes("Sem expediente aos sábados — 42h por semana."));
+  t("servidor: segunda nova abre às 7h30 (aviso 7h35 e 8h35)", srv.etapaDaHora("2026-12-21", 1, 7, 35) === "ent8" && srv.etapaDaHora("2026-12-21", 1, 8, 35) === "ent9" && srv.etapaDaHora("2026-12-21", 1, 7, 5) === undefined);
+  t("servidor: quarta nova abre às 8h30 (aviso 8h35 e 9h35)", srv.etapaDaHora("2026-12-23", 3, 8, 35) === "ent8" && srv.etapaDaHora("2026-12-23", 3, 9, 35) === "ent9" && srv.etapaDaHora("2026-12-23", 3, 8, 5) === undefined);
+  t("servidor: sábado novo não avisa entrada", srv.etapaDaHora("2026-12-19", 6, 8, 5) === undefined);
+  t("servidor: dia sem expediente não manda lembrete", fnPush.includes('ignorado: "dia sem expediente"'));
+}
+
 console.log(`\n${"═".repeat(62)}`);
 console.log(falhas.length === 0
   ? `✅ TUDO CERTO — ${ok} testes passaram. Pode publicar.`
