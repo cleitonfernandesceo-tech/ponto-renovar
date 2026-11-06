@@ -40,10 +40,10 @@ const CORS = {
    "ent8" = primeiro aviso da entrada, "ent9" = segundo aviso (entrada ainda nao registrada).
    A hora da entrada mudou em 02/10/2026: dia de semana abre as 9h, sabado as 8h. */
 const HORARIO_NOVO_DESDE = "2026-10-02";
-/* 02/11/2026: dia de semana abre as 8h30. 15/12/2026 (fim da 6x1, pedido do dono, NAO DESFAZER):
+/* 02/11/2026: dia de semana abre as 8h30. 16/12/2026 (fim da 6x1, pedido do dono, NAO DESFAZER):
    segunda e terca abrem as 7h30, quarta a sexta as 8h30 e sabado nao tem expediente. */
 const HORARIO_LANCHE_DESDE = "2026-11-02";
-const JORNADA_42H_DESDE = "2026-12-15";
+const JORNADA_42H_DESDE = "2026-12-16";
 /* Minuto do dia em que o expediente abre (null = sem expediente). */
 const aberturaMin = (dia, dow) => {
   if (dow === 0) return null;

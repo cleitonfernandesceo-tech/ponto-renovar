@@ -1296,7 +1296,7 @@ t("o painel do gestor exibe o resumo de quem assinou e quem falta assinar",
 t("o painel do gestor traz a coluna de assinatura gov.br na folha",
   src.includes("Assinatura gov.br"));
 
-secao("Jornada de 42h desde 15/12/2026 (fim da escala 6x1, pedido do dono 06/11/2026)");
+secao("Jornada de 42h desde 16/12/2026 (fim da escala 6x1, pedido do dono 06/11/2026)");
 {
   const seg = m.expedienteDoDia(new Date("2026-12-21T10:00:00")); // segunda
   const ter = m.expedienteDoDia(new Date("2026-12-22T10:00:00"));
@@ -1311,8 +1311,9 @@ secao("Jornada de 42h desde 15/12/2026 (fim da escala 6x1, pedido do dono 06/11/
   t("semana cheia sem feriado = 42h", [450, 510, 510, 510, 510].length && ["2027-01-11","2027-01-12","2027-01-13","2027-01-14","2027-01-15","2027-01-16","2027-01-17"].map((d) => m.expedienteDoDia(new Date(d + "T10:00:00")).jornadaMin).reduce((a, b) => a + b, 0) === 42 * 60);
   const sab12 = m.expedienteDoDia(new Date("2026-12-05T10:00:00"));
   const sex12 = m.expedienteDoDia(new Date("2026-12-11T10:00:00"));
-  t("até 14/12 continua a jornada antiga (sábado 8h-12h, sexta 8h30)", sab12.jornadaMin === 240 && sex12.entradaMin === 510, JSON.stringify([sab12.jornadaMin, sex12.entradaMin]));
-  t("segunda 15/12 já é 7h30", m.expedienteDoDia(new Date("2026-12-15T10:00:00")).entradaMin === 450);
+  t("até 15/12 continua a jornada antiga (sábado 8h-12h, sexta 8h30)", sab12.jornadaMin === 240 && sex12.entradaMin === 510, JSON.stringify([sab12.jornadaMin, sex12.entradaMin]));
+  t("segunda 15/12 ainda é a jornada antiga (8h30, 8h)", m.expedienteDoDia(new Date("2026-12-15T10:00:00")).entradaMin === 510 && m.expedienteDoDia(new Date("2026-12-15T10:00:00")).jornadaMin === 480);
+  t("quarta 16/12 já é a jornada nova (8h30) e o sábado 19/12 não tem expediente", m.expedienteDoDia(new Date("2026-12-16T10:00:00")).entradaMin === 510 && m.expedienteDoDia(new Date("2026-12-19T10:00:00")).jornadaMin === 0);
   t("atraso conta a partir das 7h30 na segunda (7h45 = 5 min além da tolerância)", m.minutosAtrasoDia(new Date("2026-12-21T07:45:00")) === 5);
   t("atraso conta a partir das 8h30 na quarta (8h35 dentro da tolerância)", m.minutosAtrasoDia(new Date("2026-12-23T08:35:00")) === 0);
   t("divisor de horas 210 a partir de jan/2027 e 220 em dez/2026", src.includes('> JORNADA_42H_DESDE.slice(0, 7) ? 210 : TABELAS_2026.divisorHoras') && src.includes("(sal / divisorHorasDe(comp))"));

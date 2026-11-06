@@ -332,13 +332,13 @@ const JORNADA_MIN = 9 * 60; // dia cheio do horário ANTIGO (até 01/10/2026); h
 // 3) A partir de 02/11/2026 (pedido do dono, 30/10/2026, NÃO DESFAZER):
 //    seg-sex: 8h30 às 18h, 1h almoço e 30min lanche da tarde entre 15h e 17h (total 8h trabalhadas)
 //    sábado: 8h às 12h (4h), sem almoço e sem lanche
-// 4) A partir de 15/12/2026 (pedido do dono, 06/11/2026, NÃO DESFAZER; fim da escala 6x1, EC 141/2026):
+// 4) A partir de 16/12/2026 (pedido do dono, 06/11/2026, NÃO DESFAZER; fim da escala 6x1, EC 141/2026):
 //    42h semanais, sem expediente de funcionário aos sábados.
 //    segunda e terça: 7h30 às 18h, 1h almoço + 30min lanche (9h trabalhadas)
 //    quarta a sexta: 8h30 às 18h, 1h almoço + 30min lanche (8h trabalhadas)   → 2×9 + 3×8 = 42h
 const HORARIO_NOVO_DESDE = "2026-10-02";
 const HORARIO_LANCHE_DESDE = "2026-11-02";
-const JORNADA_42H_DESDE = "2026-12-15";
+const JORNADA_42H_DESDE = "2026-12-16";
 const horarioNovo = dataIso => String(dataIso) >= HORARIO_NOVO_DESDE;
 const horarioLanche = dataIso => String(dataIso) >= HORARIO_LANCHE_DESDE;
 const jornada42h = dataIso => String(dataIso) >= JORNADA_42H_DESDE;
@@ -381,7 +381,7 @@ function expedienteDoDia(dt) {
       intervaloMin: 0,
       almocoMin: 0,
       lancheMin: 0,
-      rotulo: "sábado — sem expediente (5x2 desde 15/12/2026)"
+      rotulo: "sábado — sem expediente (5x2 desde 16/12/2026)"
     };
     const cedo = dow === 1 || dow === 2; // segunda e terça entram às 7h30
     return {
@@ -450,7 +450,7 @@ function validarJanelaLanche(dt = new Date()) {
   if (d.getDay() === 6) {
     if (jornada42h(dataISO(d))) return {
       valido: false,
-      msg: "Desde 15/12/2026 não há expediente aos sábados."
+      msg: "Desde 16/12/2026 não há expediente aos sábados."
     };
     return {
       valido: false,
@@ -482,7 +482,7 @@ const minutosAposEntrada = dt => {
   return e == null ? 0 : dt.getHours() * 60 + dt.getMinutes() - e;
 };
 // Jornada de um dia cheio de semana (conversão de folga: 1 dia = 8h hoje, 9h no horário antigo)
-// Desde 15/12/2026: segunda e terça valem 9h, quarta a sexta 8h (sábado e domingo não são dia de folga a converter: vale 8h).
+// Desde 16/12/2026: segunda e terça valem 9h, quarta a sexta 8h (sábado e domingo não são dia de folga a converter: vale 8h).
 const jornadaDiaCheioMin = dt => {
   const d = dt || new Date();
   if (jornada42h(dataISO(d))) {
@@ -559,7 +559,7 @@ const HORARIOS_CONTRATUAIS = [{
   cod: "H073018",
   durMin: 540,
   pares: [["0730", "1200"], ["1300", "1600"], ["1630", "1800"]]
-} // seg e ter desde 15/12/2026: 9h, almoço 12-13 e lanche 16-16:30
+} // seg e ter desde 16/12/2026: 9h, almoço 12-13 e lanche 16-16:30
 ];
 const codHorarioDe = dt => {
   const d = new Date(dt),
@@ -578,7 +578,7 @@ const jornadaContratualTxt = comp => {
   const c = String(comp || "").slice(0, 7);
   if (c && c < HORARIO_NOVO_DESDE.slice(0, 7)) return "9h/dia seg-sex + sabado 5h";
   if (c === HORARIO_NOVO_DESDE.slice(0, 7)) return "8h/dia seg-sex + sabado 4h (desde 02/10; antes 9h e 5h)";
-  if (c === JORNADA_42H_DESDE.slice(0, 7)) return "42h: seg-ter 9h, qua-sex 8h, sem sabado (desde 15/12; antes 8h/dia + sabado 4h)";
+  if (c === JORNADA_42H_DESDE.slice(0, 7)) return "42h: seg-ter 9h, qua-sex 8h, sem sabado (desde 16/12; antes 8h/dia + sabado 4h)";
   if (c > JORNADA_42H_DESDE.slice(0, 7)) return "42h: seg-ter 9h (7h30-18h), qua-sex 8h (8h30-18h), sem sabado";
   return "8h/dia seg-sex + sabado 4h";
 };
@@ -1670,7 +1670,7 @@ const TABELAS_2026 = {
   // encargo do empregador (não desconta do colaborador; só vai na guia)
   divisorHoras: 220 // salário-hora = salário/220 (CLT, jornada 44h semanais)
 };
-// 15/12/2026 (fim da 6x1): 42h semanais → divisor 210. Dezembro/2026 fica com 220 (a maior parte do mês ainda foi de
+// 16/12/2026 (fim da 6x1): 42h semanais → divisor 210. Dezembro/2026 fica com 220 (a maior parte do mês ainda foi de
 // 44h e o divisor maior deixa o desconto de atraso menor, mais favorável ao colaborador).
 const divisorHorasDe = comp => String(comp || "").slice(0, 7) > JORNADA_42H_DESDE.slice(0, 7) ? 210 : TABELAS_2026.divisorHoras;
 const r2 = v => Math.round((+v + Number.EPSILON) * 100) / 100;
@@ -10163,7 +10163,7 @@ function TelaPonto({
       margin: "4px 0 0",
       lineHeight: 1.5
     }
-  }, jornada42h(dataISO(new Date())) ? "Segunda e terça das 7h30 às 18h00 (9h trabalhadas); quarta a sexta das 8h30 às 18h00 (8h trabalhadas). Todos os dias com 1h de almoço e 30min de lanche da tarde entre 15h e 17h. Sem expediente aos sábados — 42h por semana." : horarioLanche(dataISO(new Date())) ? "A partir de 15/12/2026 (fim da escala 6x1): segunda e terça das 7h30 às 18h, quarta a sexta das 8h30 às 18h e sem expediente aos sábados (42h por semana). Até 14/12 vigora: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)." : "A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche). Até 01/11 vigora: seg-sex 9h às 18h; sáb 8h às 12h.")), /*#__PURE__*/React.createElement(CartaoMomento, {
+  }, jornada42h(dataISO(new Date())) ? "Segunda e terça das 7h30 às 18h00 (9h trabalhadas); quarta a sexta das 8h30 às 18h00 (8h trabalhadas). Todos os dias com 1h de almoço e 30min de lanche da tarde entre 15h e 17h. Sem expediente aos sábados — 42h por semana." : horarioLanche(dataISO(new Date())) ? "A partir de 16/12/2026 (fim da escala 6x1): segunda e terça das 7h30 às 18h, quarta a sexta das 8h30 às 18h e sem expediente aos sábados (42h por semana). Até 15/12 vigora: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)." : "A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche). Até 01/11 vigora: seg-sex 9h às 18h; sáb 8h às 12h.")), /*#__PURE__*/React.createElement(CartaoMomento, {
     nome: user.nome,
     doDia: doDia
   }), /*#__PURE__*/React.createElement(CartaoReuniao, {
@@ -20685,7 +20685,7 @@ function TelaGestor({
       paddingLeft: 18,
       lineHeight: 1.6
     }
-  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Desde 15/12/2026 (fim da escala 6x1, EC 141/2026): 42h semanais"), " \u2014 segunda e ter\xE7a 7h30\u201318h (9h), quarta a sexta 8h30\u201318h (8h), sem expediente aos s\xE1bados. A segunda e a ter\xE7a de 9h compensam o s\xE1bado; o acordo de compensa\xE7\xE3o precisa estar assinado no regulamento."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 8h/dia"), " (9h \xE0s 18h com 1h de intervalo) + s\xE1bado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constitui\xE7\xE3o (art. 7\xBA XIII). At\xE9 01/10/2026 eram 9h/dia + s\xE1bado de 5h = 50h semanais; as horas acima de 44h naquele per\xEDodo dependem de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam mesmo com o app fechado, porque o aviso \xE9 enviado pelo servidor."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h em dia de semana, 12h no s\xE1bado desde 02/10/2026; antes 13h)"), " depende de uma rotina autom\xE1tica agendada no servidor. Confirme com quem cuida do sistema se a rotina das 23h est\xE1 ligada."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (Face ID ou digital)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Confer\xEAncia no servidor"), " antes de gravar a marca\xE7\xE3o: o servidor confirma que o pedido veio do aparelho cadastrado, que a biometria foi feita na hora e que ele n\xE3o \xE9 uma c\xF3pia de um pedido antigo.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Desde 16/12/2026 (fim da escala 6x1, EC 141/2026): 42h semanais"), " \u2014 segunda e ter\xE7a 7h30\u201318h (9h), quarta a sexta 8h30\u201318h (8h), sem expediente aos s\xE1bados. A segunda e a ter\xE7a de 9h compensam o s\xE1bado; o acordo de compensa\xE7\xE3o precisa estar assinado no regulamento."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Jornada de 8h/dia"), " (9h \xE0s 18h com 1h de intervalo) + s\xE1bado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constitui\xE7\xE3o (art. 7\xBA XIII). At\xE9 01/10/2026 eram 9h/dia + s\xE1bado de 5h = 50h semanais; as horas acima de 44h naquele per\xEDodo dependem de acordo de compensa\xE7\xE3o/banco de horas ou pagamento como extraordin\xE1rias. Confirme o enquadramento com o advogado trabalhista."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Lembretes de batida"), " viram aviso do celular quando voc\xEA autoriza (no iPhone \xE9 preciso adicionar o app \xE0 tela de in\xEDcio) e chegam mesmo com o app fechado, porque o aviso \xE9 enviado pelo servidor."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Sa\xEDda autom\xE1tica (18h em dia de semana, 12h no s\xE1bado desde 02/10/2026; antes 13h)"), " depende de uma rotina autom\xE1tica agendada no servidor. Confirme com quem cuida do sistema se a rotina das 23h est\xE1 ligada."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Biometria (Face ID ou digital)"), " comprova que quem bateu est\xE1 com o aparelho cadastrado e passou pelo Face ID/digital ", /*#__PURE__*/React.createElement("b", null, "daquele aparelho"), ". N\xE3o \xE9 reconhecimento facial contra foto de refer\xEAncia da empresa: qualquer rosto ou digital cadastrado naquele celular consegue bater o ponto."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Confer\xEAncia no servidor"), " antes de gravar a marca\xE7\xE3o: o servidor confirma que o pedido veio do aparelho cadastrado, que a biometria foi feita na hora e que ele n\xE3o \xE9 uma c\xF3pia de um pedido antigo.")), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11.5,
       color: C.cinza,
