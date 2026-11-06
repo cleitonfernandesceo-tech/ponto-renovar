@@ -40,18 +40,35 @@ const CORS = {
    "ent8" = primeiro aviso da entrada, "ent9" = segundo aviso (entrada ainda nao registrada).
    A hora da entrada mudou em 02/10/2026: dia de semana abre as 9h, sabado as 8h. */
 const HORARIO_NOVO_DESDE = "2026-10-02";
-const horaDeAbrir = (dia, dow) => (dia >= HORARIO_NOVO_DESDE && dow >= 1 && dow <= 5 ? 9 : 8);
+/* 02/11/2026: dia de semana abre as 8h30. 15/12/2026 (fim da 6x1, pedido do dono, NAO DESFAZER):
+   segunda e terca abrem as 7h30, quarta a sexta as 8h30 e sabado nao tem expediente. */
+const HORARIO_LANCHE_DESDE = "2026-11-02";
+const JORNADA_42H_DESDE = "2026-12-15";
+/* Minuto do dia em que o expediente abre (null = sem expediente). */
+const aberturaMin = (dia, dow) => {
+  if (dow === 0) return null;
+  if (dia >= JORNADA_42H_DESDE) return dow === 6 ? null : (dow <= 2 ? 450 : 510);
+  if (dia >= HORARIO_LANCHE_DESDE) return dow === 6 ? 480 : 510;
+  if (dia >= HORARIO_NOVO_DESDE) return dow >= 1 && dow <= 5 ? 540 : 480;
+  return 480;
+};
+const horaDeAbrir = (dia, dow) => Math.floor((aberturaMin(dia, dow) ?? 480) / 60);
+const hhmm = (m) => Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
 const ETAPAS = {
-  ent8: { titulo: "⏰ Hora de bater o ponto", corpo: (abre) => "Seu expediente comecou as " + abre + ":00 — registre sua entrada.", batidas: 0 },
-  ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: (abre) => "Ja passa das " + (abre + 1) + ":00 e sua entrada de hoje nao foi registrada.", batidas: 0 },
+  ent8: { titulo: "⏰ Hora de bater o ponto", corpo: (abre) => "Seu expediente comecou as " + hhmm(abre) + " — registre sua entrada.", batidas: 0 },
+  ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: (abre) => "Ja passa das " + hhmm(abre + 60) + " e sua entrada de hoje nao foi registrada.", batidas: 0 },
   alm12: { titulo: "🍽 Saida pro almoco", corpo: () => "Lembre de registrar a saida pro intervalo.", batidas: 1 },
   alm13: { titulo: "🍽 Volta do almoco", corpo: () => "Lembre de registrar o retorno do intervalo.", batidas: 2 },
 };
-/* Qual aviso corresponde a esta hora. Dia de semana novo: 9h e 10h; sabado: 8h e 9h. */
-const etapaDaHora = (dia, dow, hora) => {
-  const abre = horaDeAbrir(dia, dow);
-  if (hora === abre) return "ent8";
-  if (hora === abre + 1) return "ent9";
+/* Qual aviso corresponde a esta hora. O cron passa aos :05 e :35; o 1o aviso sai na meia hora
+   depois da abertura e o 2o uma hora depois (a trava do push_lembretes_log impede repetir). */
+const etapaDaHora = (dia, dow, hora, minuto = 0) => {
+  const abre = aberturaMin(dia, dow);
+  if (abre != null) {
+    const agora = hora * 60 + minuto;
+    if (agora >= abre && agora < abre + 30) return "ent8";
+    if (agora >= abre + 60 && agora < abre + 90) return "ent9";
+  }
   if (hora === 12) return "alm12";
   if (hora === 13) return "alm13";
   return undefined;
@@ -197,8 +214,8 @@ Deno.serve(async (req) => {
     return json({ modo: "teste", aparelhos: insc.length, enviados });
   }
 
-  const { dia, hora, dow } = agoraSP();
-  const etapa = (corpo && corpo.etapa) || etapaDaHora(dia, dow, hora);
+  const { dia, hora, minuto, dow } = agoraSP();
+  const etapa = (corpo && corpo.etapa) || etapaDaHora(dia, dow, hora, minuto);
 
   /* ---------- aviso das reunioes do time ----------
      Cada reuniao avisa duas vezes: ao sair no dia anterior e ao chegar no
@@ -265,6 +282,7 @@ Deno.serve(async (req) => {
   if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete (9h e 10h em dia de semana, 8h e 9h no sabado, 12h e 13h)" });
   if (dow === 0) return json({ dia, etapa, ignorado: "domingo" });
   if ((etapa === "alm12" || etapa === "alm13") && dow === 6) return json({ dia, etapa, ignorado: "sabado e turno unico" });
+  if (aberturaMin(dia, dow) == null) return json({ dia, etapa, ignorado: "dia sem expediente" });
   const feriado = await rest("feriados_nacionais?select=nome&data=eq." + dia);
   if (feriado.length) return json({ dia, etapa, ignorado: "feriado: " + feriado[0].nome });
 
@@ -293,7 +311,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify([{ usuario_id: u.id, dia, etapa, aparelhos: insc.length }]),
     });
     if (!gravou.length) continue;
-    const enviados = await enviar(insc, { titulo: cfg.titulo, corpo: cfg.corpo(horaDeAbrir(dia, dow)), etapa, url: "./" });
+    const enviados = await enviar(insc, { titulo: cfg.titulo, corpo: cfg.corpo(aberturaMin(dia, dow) ?? 480), etapa, url: "./" });
     detalhe.push({ nome: u.nome, aparelhos: insc.length, enviados });
   }
   return json({ dia, hora, etapa, avisados: detalhe.length, detalhe });

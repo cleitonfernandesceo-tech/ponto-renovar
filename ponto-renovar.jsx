@@ -44,10 +44,16 @@ const JORNADA_MIN = 9 * 60; // dia cheio do horário ANTIGO (até 01/10/2026); h
 // 3) A partir de 02/11/2026 (pedido do dono, 30/10/2026, NÃO DESFAZER):
 //    seg-sex: 8h30 às 18h, 1h almoço e 30min lanche da tarde entre 15h e 17h (total 8h trabalhadas)
 //    sábado: 8h às 12h (4h), sem almoço e sem lanche
+// 4) A partir de 15/12/2026 (pedido do dono, 06/11/2026, NÃO DESFAZER; fim da escala 6x1, EC 141/2026):
+//    42h semanais, sem expediente de funcionário aos sábados.
+//    segunda e terça: 7h30 às 18h, 1h almoço + 30min lanche (9h trabalhadas)
+//    quarta a sexta: 8h30 às 18h, 1h almoço + 30min lanche (8h trabalhadas)   → 2×9 + 3×8 = 42h
 const HORARIO_NOVO_DESDE = "2026-10-02";
 const HORARIO_LANCHE_DESDE = "2026-11-02";
+const JORNADA_42H_DESDE = "2026-12-15";
 const horarioNovo = (dataIso) => String(dataIso) >= HORARIO_NOVO_DESDE;
 const horarioLanche = (dataIso) => String(dataIso) >= HORARIO_LANCHE_DESDE;
+const jornada42h = (dataIso) => String(dataIso) >= JORNADA_42H_DESDE;
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = (lista) => { FERIADOS_SET = new Set(lista.map(f => f.data)); FERIADOS_NOMES = Object.fromEntries(lista.map(f => [f.data, f.nome])); };
@@ -60,6 +66,19 @@ function expedienteDoDia(dt) {
   const dIso = dataISO(dt);
   const novoLanche = horarioLanche(dIso);
   const novoOut = horarioNovo(dIso);
+  if (jornada42h(dIso)) {
+    if (dow === 6) return { jornadaMin: 0, entradaMin: null, saidaMin: null, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "sábado — sem expediente (5x2 desde 15/12/2026)" };
+    const cedo = dow === 1 || dow === 2; // segunda e terça entram às 7h30
+    return {
+      jornadaMin: (cedo ? 9 : 8) * 60,
+      entradaMin: cedo ? 7 * 60 + 30 : 8 * 60 + 30,
+      saidaMin: 18 * 60,
+      intervaloMin: 90,
+      almocoMin: 60,
+      lancheMin: 30,
+      rotulo: cedo ? "7:30–18:00 (9h + 1h almoço + 30min lanche)" : "8:30–18:00 (8h + 1h almoço + 30min lanche)"
+    };
+  }
   if (dow === 6) return novoOut
     ? { jornadaMin: 4 * 60, entradaMin: 8 * 60, saidaMin: 12 * 60, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "sábado 8:00–12:00" }
     : { jornadaMin: 5 * 60, entradaMin: 8 * 60, saidaMin: 13 * 60, intervaloMin: 0, almocoMin: 0, lancheMin: 0, rotulo: "sábado 8:00–13:00" };
@@ -81,6 +100,7 @@ function expedienteDoDia(dt) {
 function validarJanelaLanche(dt = new Date()) {
   const d = new Date(dt);
   if (d.getDay() === 6) {
+    if (jornada42h(dataISO(d))) return { valido: false, msg: "Desde 15/12/2026 não há expediente aos sábados." };
     return { valido: false, msg: "Aos sábados a jornada é das 8h às 12h (4 horas), sem almoço e sem lanche." };
   }
   const min = d.getHours() * 60 + d.getMinutes();
@@ -103,7 +123,12 @@ function validarJanelaLanche(dt = new Date()) {
 // Minutos após o horário de entrada do dia (negativo = chegou antes). Dia fechado não tem entrada: devolve 0.
 const minutosAposEntrada = (dt) => { const e = expedienteDoDia(dt).entradaMin; return e == null ? 0 : dt.getHours() * 60 + dt.getMinutes() - e; };
 // Jornada de um dia cheio de semana (conversão de folga: 1 dia = 8h hoje, 9h no horário antigo)
-const jornadaDiaCheioMin = (dt) => (horarioNovo(dataISO(dt || new Date())) ? 8 : 9) * 60;
+// Desde 15/12/2026: segunda e terça valem 9h, quarta a sexta 8h (sábado e domingo não são dia de folga a converter: vale 8h).
+const jornadaDiaCheioMin = (dt) => {
+  const d = dt || new Date();
+  if (jornada42h(dataISO(d))) { const dow = d.getDay(); return (dow === 1 || dow === 2 ? 9 : 8) * 60; }
+  return (horarioNovo(dataISO(d)) ? 8 : 9) * 60;
+};
 // Dia sem expediente nunca gera atraso
 const entradaPontual = (dt) => expedienteDoDia(dt).jornadaMin === 0 ? true : minutosAposEntrada(dt) <= EXPEDIENTE.toleranciaMin;
 // FONTE ÚNICA do atraso computável (usada pelo Prêmio E pela folha — nunca duplicar essa regra):
@@ -131,10 +156,12 @@ const HORARIOS_CONTRATUAIS = [
   { cod: "H0918", durMin: 480, pares: [["0900", "1200"], ["1300", "1800"]] }, // seg-sex desde 02/10/2026: 8h de jornada, intervalo 12-13
   { cod: "H0812", durMin: 240, pares: [["0800", "1200"]] },                    // sábado desde 02/10/2026: turno único de 4h
   { cod: "H083018", durMin: 480, pares: [["0830", "1200"], ["1300", "1600"], ["1630", "1800"]] }, // seg-sex desde 02/11/2026: 8h, almoço 12-13 e lanche 16-16:30
+  { cod: "H073018", durMin: 540, pares: [["0730", "1200"], ["1300", "1600"], ["1630", "1800"]] }, // seg e ter desde 15/12/2026: 9h, almoço 12-13 e lanche 16-16:30
 ];
 const codHorarioDe = (dt) => {
   const d = new Date(dt), sab = d.getDay() === 6;
   const dIso = dataISO(d);
+  if (jornada42h(dIso)) { const dow = d.getDay(); return dow === 1 || dow === 2 ? "H073018" : "H083018"; }
   if (horarioLanche(dIso)) return sab ? "H0812" : "H083018";
   if (horarioNovo(dIso)) return sab ? "H0812" : "H0918";
   return sab ? "H0813" : "H0818";
@@ -144,6 +171,8 @@ const jornadaContratualTxt = (comp) => {
   const c = String(comp || "").slice(0, 7);
   if (c && c < HORARIO_NOVO_DESDE.slice(0, 7)) return "9h/dia seg-sex + sabado 5h";
   if (c === HORARIO_NOVO_DESDE.slice(0, 7)) return "8h/dia seg-sex + sabado 4h (desde 02/10; antes 9h e 5h)";
+  if (c === JORNADA_42H_DESDE.slice(0, 7)) return "42h: seg-ter 9h, qua-sex 8h, sem sabado (desde 15/12; antes 8h/dia + sabado 4h)";
+  if (c > JORNADA_42H_DESDE.slice(0, 7)) return "42h: seg-ter 9h (7h30-18h), qua-sex 8h (8h30-18h), sem sabado";
   return "8h/dia seg-sex + sabado 4h";
 };
 
@@ -838,6 +867,9 @@ const TABELAS_2026 = {
   fgtsPatronal: 0.08, // encargo do empregador (não desconta do colaborador; só vai na guia)
   divisorHoras: 220,  // salário-hora = salário/220 (CLT, jornada 44h semanais)
 };
+// 15/12/2026 (fim da 6x1): 42h semanais → divisor 210. Dezembro/2026 fica com 220 (a maior parte do mês ainda foi de
+// 44h e o divisor maior deixa o desconto de atraso menor, mais favorável ao colaborador).
+const divisorHorasDe = (comp) => (String(comp || "").slice(0, 7) > JORNADA_42H_DESDE.slice(0, 7) ? 210 : TABELAS_2026.divisorHoras);
 const r2 = (v) => Math.round((+v + Number.EPSILON) * 100) / 100;
 const brl = (v) => (+v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -1004,7 +1036,7 @@ function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos) {
     if (ent) atrasoMin += minutosAtrasoDia(new Date(ent.ts));
   });
   const horasAtraso = r2(atrasoMin / 60);
-  const descAtrasos = r2((sal / TABELAS_2026.divisorHoras) * horasAtraso);
+  const descAtrasos = r2((sal / divisorHorasDe(comp)) * horasAtraso);
   // Rendimento tributável do mês = salário − faltas − atrasos
   const rendimento = Math.max(0, r2(sal - descFaltas - descAtrasos));
   const inss = calcINSS(rendimento);
@@ -1743,7 +1775,7 @@ function pdfEspelhoPonto(u, dias, comp, aceite) {
     const desc = exp.intervaloMin > 0
       ? (pares <= 1 ? exp.intervaloMin : (pares === 2 && exp.lancheMin ? exp.lancheMin : 0))
       : 0;
-    const rot = exp.jornadaMin === 0 ? (exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : "DOMINGO") : (exp.jornadaMin <= 300 ? (horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h") : (horarioLanche(dataISO(dt)) ? "SEG-SEX 8:30-18h" : (horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h")));
+    const rot = exp.jornadaMin === 0 ? (exp.rotulo.indexOf("feriado") === 0 ? "FERIADO" : (dt.getDay() === 6 ? "SABADO SEM EXPEDIENTE" : "DOMINGO")) : jornada42h(dataISO(dt)) ? (exp.entradaMin === 450 ? "SEG-TER 7:30-18h" : "QUA-SEX 8:30-18h") : (exp.jornadaMin <= 300 ? (horarioNovo(dataISO(dt)) ? "SABADO 8-12h" : "SABADO 8-13h") : (horarioLanche(dataISO(dt)) ? "SEG-SEX 8:30-18h" : (horarioNovo(dataISO(dt)) ? "SEG-SEX 9-18h" : "SEG-SEX 8-18h")));
     const marcas = regs.map((r) => fmtHora(r.ts)
       + (r.ajustada ? "*" : r.automatica ? "A" : "")
       + (r.metodo === "sem_verificacao" ? "!" : "")
@@ -5990,8 +6022,10 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       <div style={{ ...S.card, marginTop: 12, padding: 12, borderLeft: "4px solid " + C.amarelo, textAlign: "left" }}>
         <div style={{ fontSize: 13, color: C.amarelo, fontWeight: 700 }}>⏰ Jornada de trabalho</div>
         <p style={{ fontSize: 12, color: C.branco, margin: "4px 0 0", lineHeight: 1.5 }}>
-          {horarioLanche(dataISO(new Date()))
-            ? "Segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)."
+          {jornada42h(dataISO(new Date()))
+            ? "Segunda e terça das 7h30 às 18h00 (9h trabalhadas); quarta a sexta das 8h30 às 18h00 (8h trabalhadas). Todos os dias com 1h de almoço e 30min de lanche da tarde entre 15h e 17h. Sem expediente aos sábados — 42h por semana."
+            : horarioLanche(dataISO(new Date()))
+            ? "A partir de 15/12/2026 (fim da escala 6x1): segunda e terça das 7h30 às 18h, quarta a sexta das 8h30 às 18h e sem expediente aos sábados (42h por semana). Até 14/12 vigora: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche)."
             : "A partir de 02/11/2026: segunda a sexta das 8h30 às 18h00 (1h de almoço e 30min de lanche da tarde entre 15h e 17h — total 8h trabalhadas por dia); Sábado das 8h às 12h (4h, sem almoço e sem lanche). Até 01/11 vigora: seg-sex 9h às 18h; sáb 8h às 12h."}
         </p>
       </div>
@@ -10169,6 +10203,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
       })()}
       <Detalhes titulo="⚠️ Limites e transparência do sistema">
         <ul style={{ fontSize: 12.5, color: C.branco, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
+          <li><b>Desde 15/12/2026 (fim da escala 6x1, EC 141/2026): 42h semanais</b> — segunda e terça 7h30–18h (9h), quarta a sexta 8h30–18h (8h), sem expediente aos sábados. A segunda e a terça de 9h compensam o sábado; o acordo de compensação precisa estar assinado no regulamento.</li>
           <li><b>Jornada de 8h/dia</b> (9h às 18h com 1h de intervalo) + sábado de 4h = 44h semanais desde 02/10/2026, dentro do limite da Constituição (art. 7º XIII). Até 01/10/2026 eram 9h/dia + sábado de 5h = 50h semanais; as horas acima de 44h naquele período dependem de acordo de compensação/banco de horas ou pagamento como extraordinárias. Confirme o enquadramento com o advogado trabalhista.</li>
           <li><b>Lembretes de batida</b> viram aviso do celular quando você autoriza (no iPhone é preciso adicionar o app à tela de início) e chegam mesmo com o app fechado, porque o aviso é enviado pelo servidor.</li>
           <li><b>Saída automática (18h em dia de semana, 12h no sábado desde 02/10/2026; antes 13h)</b> depende de uma rotina automática agendada no servidor. Confirme com quem cuida do sistema se a rotina das 23h está ligada.</li>
