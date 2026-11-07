@@ -1,0 +1,2 @@
+﻿"File","Line","Text","Match"
+"C:\renovar\trab\supabase\functions\lembretes-push\index.ts","191","if (!uid) return json({ erro: ""o teste exige o token de um usuario logado"" }, 401);","401"
