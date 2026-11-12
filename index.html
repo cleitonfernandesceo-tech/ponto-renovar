@@ -35,7 +35,7 @@
   style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob:;
   font-src 'self' data:;
-  connect-src 'self' https://bdbxjdkjeeobaxulfqkb.supabase.co https://*.supabase.co;
+  connect-src 'self' https://bdbxjdkjeeobaxulfqkb.supabase.co https://*.supabase.co https://viacep.com.br;
   media-src 'self' blob:;
   object-src 'none';
   base-uri 'none';
@@ -270,6 +270,7 @@ if (typeof React === "undefined" || typeof ReactDOM === "undefined") {
 <noscript><p style="color:#F5F7FA;background:#0D1B2A;font:16px system-ui;padding:24px">O Ponto Renovar precisa de JavaScript ativado.</p></noscript>
 <script>
 /* __APP_INICIO__ */
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 const {
   useState,
   useEffect,
@@ -1936,8 +1937,9 @@ const chaveSemana = dt => {
   d.setDate(d.getDate() - (d.getDay() + 6) % 7);
   return dataISO(d);
 };
-function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, compras) {
-  const salContratual = +u.salario || 0;
+function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, compras, historicoSalario) {
+  // Com historico de salario (tabela salario_historico), vale o salario vigente em cada dia do mes. Sem historico, nada muda.
+  const salContratual = Array.isArray(historicoSalario) ? salarioDoMes(historicoSalario, u.id, comp, +u.salario || 0) : +u.salario || 0;
   // Admissão no meio da competência: o mês é proporcional aos dias de vínculo (salário/30 × dias),
   // prática padrão da folha brasileira. Sem isso, quem entrou no dia 16 recebia mês cheio.
   const [anoC, mesC] = comp.split("-").map(Number);
@@ -5620,6 +5622,35 @@ function montarResumo(evento, titulo, dataFato, linhas, empresaCnpj) {
   };
 }
 
+/* ASO (atestado de saúde ocupacional): validade a partir do último exame realizado.
+   Regra geral do exame periódico: 12 meses (NR-7); o médico do trabalho pode definir 24 meses
+   em casos específicos — por isso o aviso é sempre "confirme com o médico". */
+const ASO_VALIDADE_MESES = 12;
+const ASO_AVISO_DIAS = 30;
+function asoDoColaborador(exames = [], userId, hoje = new Date()) {
+  const feitos = (exames || []).filter(e => e.userId === userId && e.status !== "agendado" && e.data && e.tipo !== "demissional").sort((a, b) => a.data < b.data ? 1 : -1);
+  const agendado = (exames || []).filter(e => e.userId === userId && e.status === "agendado" && e.dataPrevista).sort((a, b) => a.dataPrevista > b.dataPrevista ? 1 : -1)[0] || null;
+  if (!feitos.length) return {
+    ultimo: null,
+    validade: null,
+    dias: null,
+    situacao: "sem_exame",
+    agendado
+  };
+  const ultimo = feitos[0];
+  const v = addMeses(dataLocal(ultimo.data), ASO_VALIDADE_MESES);
+  const validade = dataISO(v);
+  const ref = dataLocal(dataISO(hoje));
+  const dias = Math.round((v - ref) / 86400000);
+  return {
+    ultimo,
+    validade,
+    dias,
+    situacao: dias < 0 ? "vencido" : dias <= ASO_AVISO_DIAS ? "vencendo" : "em_dia",
+    agendado
+  };
+}
+
 /* ================= UI base ================= */
 /* Paleta "alta performance" v2 — azul-marinho (base), laranja neon (ações/destaque),
    marrom escuro (superfícies secundárias: inputs/painéis internos), branco (texto).
@@ -6140,6 +6171,13 @@ function AppInterno() {
   // Compras do colaborador: tabela opcional (compras_colaborador). comprasNoBanco = a tabela existe.
   const [compras, setCompras] = useState([]);
   const [comprasNoBanco, setComprasNoBanco] = useState(false);
+  // Cadastro completo do colaborador: tabelas opcionais. cadastroNoBanco = a migração foi aplicada.
+  const [cadastros, setCadastros] = useState([]);
+  const [salHist, setSalHist] = useState([]);
+  const [vtLinhas, setVtLinhas] = useState([]);
+  const [dependentes, setDependentes] = useState([]);
+  const [esocialRegs, setEsocialRegs] = useState([]);
+  const [cadastroNoBanco, setCadastroNoBanco] = useState(false);
   const [guias, setGuias] = useState([]);
   const [rescisoes, setRescisoes] = useState([]);
   const [examesOcupacionais, setExamesOcupacionais] = useState([]);
@@ -6448,6 +6486,28 @@ function AppInterno() {
         } catch (e) {
           console.warn("[compras]", e.message);
           setComprasNoBanco(false);
+        }
+      })();
+      // Cadastro completo (colaborador_cadastro e tabelas irmas). Cada colaborador so recebe as
+      // proprias linhas (RLS); o gestor recebe todas. Sem a migracao o app segue como sempre.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "colaborador_cadastro", "select=*");
+          setCadastros(rows.map(mapCadastro));
+          setCadastroNoBanco(true);
+        } catch (e) {
+          console.warn("[cadastro]", e.message);
+          setCadastroNoBanco(false);
+          return;
+        }
+        const outras = [["salario_historico", setSalHist, mapSalHist, "&order=vigencia.desc"], ["vale_transporte_linhas", setVtLinhas, mapVtLinha, ""], ["dependentes", setDependentes, mapDependente, ""], ["esocial_registros", setEsocialRegs, mapEsocialReg, "&order=data_fato.desc"]];
+        for (const [tab, setar, mapa, ordem] of outras) {
+          try {
+            const rows = await sbSelect(token, tab, "select=*" + ordem);
+            setar(rows.map(mapa));
+          } catch (e) {
+            console.warn("[cadastro/" + tab + "]", e.message);
+          }
         }
       })();
       // Combinados das reunioes: tabela opcional (combinados). Sem ela o app
@@ -6817,6 +6877,12 @@ function AppInterno() {
     setAdiantamentos([]);
     setCompras([]);
     setComprasNoBanco(false);
+    setCadastros([]);
+    setSalHist([]);
+    setVtLinhas([]);
+    setDependentes([]);
+    setEsocialRegs([]);
+    setCadastroNoBanco(false);
     setGuias([]);
     setCredenciais([]);
     setConsImagem(CONS_IMAGEM_SEED);
@@ -8025,7 +8091,7 @@ function AppInterno() {
     if (!alvo.length) throw new Error("Nenhum colaborador ativo com salário cadastrado — preencha os salários na seção Equipe.");
     const jaFechadas = folhasPg.filter(f => f.competencia === comp && f.status === "fechada").map(f => f.userId);
     const linhas = alvo.filter(u => !jaFechadas.includes(u.id)).map(u => {
-      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, comprasNoBanco || demo ? compras : undefined);
+      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, comprasNoBanco || demo ? compras : undefined, cadastroNoBanco || demo ? salHist : undefined);
       if (r.proporcional) log("folha", `${u.nome}: salário proporcional à admissão (${r.diasProporcionais}/30 dias) — ${brl(r.row.salario_bruto)} de ${brl(r.salarioContratual)}`);
       return {
         usuario_id: u.id,
@@ -8180,6 +8246,433 @@ function AppInterno() {
     } catch (e) {
       console.warn("[auditoria adiantamento]", e.message);
     }
+  };
+
+  /* ---------- cadastro completo do colaborador ---------- */
+  // Tabelas opcionais (colaborador_cadastro, salario_historico, vale_transporte_linhas, dependentes,
+  // esocial_registros). Sem a migração o app roda como sempre rodou; as telas novas só avisam.
+  const CAMPOS_CADASTRO = {
+    nascimento: "data_nascimento",
+    sexo: "sexo",
+    racaCor: "raca_cor",
+    estadoCivil: "estado_civil",
+    grauInstrucao: "grau_instrucao",
+    pis: "pis_nis",
+    cbo: "cbo",
+    jornadaHoras: "jornada_horas_semana",
+    jornadaTexto: "jornada_descricao",
+    cep: "cep",
+    logradouro: "logradouro",
+    numero: "numero",
+    complemento: "complemento",
+    bairro: "bairro",
+    cidade: "cidade",
+    uf: "uf",
+    codigoIbge: "codigo_ibge",
+    banco: "banco",
+    agencia: "agencia",
+    conta: "conta",
+    pixTipo: "pix_tipo",
+    pixChave: "pix_chave",
+    emergNome: "emergencia_nome",
+    emergParentesco: "emergencia_parentesco",
+    emergTelefone: "emergencia_telefone",
+    vtDias: "vt_dias_mes"
+  };
+  const CAMPOS_DO_PROPRIO = ["cep", "logradouro", "numero", "complemento", "bairro", "cidade", "uf", "codigoIbge", "banco", "agencia", "conta", "pixTipo", "pixChave", "emergNome", "emergParentesco", "emergTelefone"];
+  const exigeCadastro = () => {
+    if (!demo && !cadastroNoBanco) throw new Error("O cadastro completo ainda não foi ligado no banco. Peça ao gestor para aplicar a atualização (cadastro do colaborador).");
+  };
+  const soGestor = () => {
+    if (user.papel !== "gestor") throw new Error("Só o gestor faz essa alteração.");
+  };
+  const salvarCadastro = async (userId, campos) => {
+    const proprio = userId === user.id;
+    if (!proprio && user.papel !== "gestor") throw new Error("Você só altera o seu próprio cadastro.");
+    exigeCadastro();
+    const patch = {};
+    for (const [k, v] of Object.entries(campos)) {
+      if (!(k in CAMPOS_CADASTRO)) continue;
+      if (user.papel !== "gestor" && !CAMPOS_DO_PROPRIO.includes(k)) continue;
+      patch[k] = v;
+    }
+    if (patch.pis && !pisValido(patch.pis)) throw new Error("PIS/NIS inválido. Confira os 11 números.");
+    if (patch.cep && !cepValido(patch.cep)) throw new Error("CEP inválido. São 8 números.");
+    if (patch.uf && !/^[A-Za-z]{2}$/.test(patch.uf)) throw new Error("Estado inválido (use a sigla, ex.: MG).");
+    if (patch.cbo && soDigitos(patch.cbo).length !== 6) throw new Error("O CBO tem 6 números.");
+    if (patch.nascimento && !dataValida(patch.nascimento)) throw new Error("Data de nascimento inválida.");
+    if (patch.jornadaHoras !== undefined && patch.jornadaHoras !== "" && !(+patch.jornadaHoras > 0 && +patch.jornadaHoras <= 44)) throw new Error("Jornada semanal deve ficar entre 1 e 44 horas.");
+    if (patch.pixTipo === "cpf" && patch.pixChave && !cpfValido(patch.pixChave)) throw new Error("A chave Pix (CPF) não é um CPF válido.");
+    const linha = {
+      usuario_id: userId,
+      atualizado_em: iso(new Date())
+    };
+    for (const [k, v] of Object.entries(patch)) {
+      const col = CAMPOS_CADASTRO[k];
+      let x = v;
+      if (["pis", "cep", "cbo", "codigoIbge"].includes(k)) x = soDigitos(v) || null;else if (k === "uf") x = String(v || "").toUpperCase() || null;else if (k === "jornadaHoras" || k === "vtDias") x = v === "" || v == null ? null : +v;else if (k === "pixChave" && patch.pixTipo === "cpf") x = soDigitos(v) || null;else if (typeof v === "string") x = limparTexto(v, 200) || null;
+      linha[col] = x === "" ? null : x;
+    }
+    const existe = cadastros.some(c => c.userId === userId);
+    let salvo = {
+      ...linha
+    };
+    if (!demo) {
+      if (existe) {
+        const r = await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, linha);
+        if (Array.isArray(r) && r[0]) salvo = r[0];
+      } else {
+        const r = await sbInsert(sessao.token, "colaborador_cadastro", [linha]);
+        if (Array.isArray(r) && r[0]) salvo = r[0];
+      }
+    }
+    setCadastros(cs => existe ? cs.map(c => c.userId === userId ? {
+      ...c,
+      ...mapCadastro({
+        ...CAMPOS_REVERSOS(c),
+        ...salvo
+      })
+    } : c) : [...cs, mapCadastro(salvo)]);
+    // Auditoria só com os NOMES dos campos: CPF, Pix, endereço e telefones nunca vão para o log.
+    log("cadastro_ficha", `Ficha de ${usuarios.find(u => u.id === userId)?.nome || "colaborador"} atualizada por ${user.nome} (campos: ${Object.keys(patch).join(", ") || "nenhum"})`);
+  };
+  const CAMPOS_REVERSOS = c => ({
+    usuario_id: c.userId,
+    data_nascimento: c.nascimento || null,
+    sexo: c.sexo || null,
+    raca_cor: c.racaCor || null,
+    estado_civil: c.estadoCivil || null,
+    grau_instrucao: c.grauInstrucao || null,
+    pis_nis: c.pis || null,
+    cbo: c.cbo || null,
+    jornada_horas_semana: c.jornadaHoras === "" ? null : c.jornadaHoras,
+    jornada_descricao: c.jornadaTexto || null,
+    cep: c.cep || null,
+    logradouro: c.logradouro || null,
+    numero: c.numero || null,
+    complemento: c.complemento || null,
+    bairro: c.bairro || null,
+    cidade: c.cidade || null,
+    uf: c.uf || null,
+    codigo_ibge: c.codigoIbge || null,
+    banco: c.banco || null,
+    agencia: c.agencia || null,
+    conta: c.conta || null,
+    pix_tipo: c.pixTipo || null,
+    pix_chave: c.pixChave || null,
+    emergencia_nome: c.emergNome || null,
+    emergencia_parentesco: c.emergParentesco || null,
+    emergencia_telefone: c.emergTelefone || null,
+    vt_dias_mes: c.vtDias,
+    desligado_em: c.desligadoEm || null,
+    motivo_desligamento: c.motivoDesligamento || null
+  });
+
+  // CPF mora na tabela de usuários (já existia): só o gestor altera, com validação.
+  const salvarCpf = async (userId, cpf) => {
+    soGestor();
+    const c = soDigitos(cpf);
+    if (!cpfValido(c)) throw new Error("CPF inválido. Confira os 11 números.");
+    if (!demo) await sbUpdate(sessao.token, "usuarios", `id=eq.${userId}`, {
+      cpf: c
+    });
+    setUsuarios(us => us.map(u => u.id === userId ? {
+      ...u,
+      cpf: c
+    } : u));
+    log("cadastro_cpf", `CPF de ${usuarios.find(x => x.id === userId)?.nome || "colaborador"} atualizado por ${user.nome}`);
+  };
+
+  // Pendência de carteira (eSocial): fica "pendente" até o gestor confirmar que enviou.
+  const criarPendenciaESocial = async (userId, evento, dataFato, descricao) => {
+    if (!demo && !cadastroNoBanco) return null;
+    const ja = esocialRegs.find(r => r.userId === userId && r.evento === evento && r.dataFato === dataFato);
+    if (ja) return ja;
+    const linha = {
+      usuario_id: userId,
+      evento,
+      data_fato: dataFato,
+      descricao: limparTexto(descricao || "", 200) || null,
+      status: "pendente"
+    };
+    let salvo = {
+      ...linha,
+      id: "local-" + Date.now()
+    };
+    if (!demo) {
+      try {
+        const r = await sbInsert(sessao.token, "esocial_registros", [linha]);
+        if (Array.isArray(r) && r[0]) salvo = r[0];
+      } catch (e) {
+        console.warn("[esocial]", e.message);
+        return null;
+      }
+    }
+    const novo = mapEsocialReg(salvo);
+    setEsocialRegs(rs => [novo, ...rs]);
+    return novo;
+  };
+  const confirmarESocial = async (id, recibo) => {
+    soGestor();
+    exigeCadastro();
+    const agora = iso(new Date());
+    const patch = {
+      status: "enviado",
+      recibo: limparTexto(recibo || "", 60) || null,
+      enviado_em: agora,
+      enviado_por: user.id
+    };
+    if (!demo) await sbUpdate(sessao.token, "esocial_registros", `id=eq.${id}`, patch);
+    setEsocialRegs(rs => rs.map(r => r.id === id ? {
+      ...r,
+      status: "enviado",
+      recibo: patch.recibo || "",
+      enviadoEm: agora
+    } : r));
+    const r = esocialRegs.find(x => x.id === id);
+    log("esocial_enviado", `${r?.evento || "eSocial"} de ${usuarios.find(u => u.id === r?.userId)?.nome || "colaborador"} marcado como enviado por ${user.nome}`);
+  };
+  const registrarNaCarteira = async (userId, evento, dataFato, descricao) => {
+    soGestor();
+    exigeCadastro();
+    return criarPendenciaESocial(userId, evento, dataFato, descricao);
+  };
+
+  // Salário com histórico. Reduzir é bloqueado (CF art. 7º VI / CLT art. 468) salvo acordo/convenção coletiva marcado.
+  const lancarSalario = async (userId, {
+    valor,
+    vigencia,
+    motivo,
+    acordo
+  }) => {
+    soGestor();
+    exigeCadastro();
+    const u = usuarios.find(x => x.id === userId);
+    if (!u) throw new Error("Colaborador não encontrado.");
+    const v = validarAlteracaoSalario({
+      hist: salHist,
+      userId,
+      valor,
+      vigencia,
+      motivo,
+      acordo: !!acordo,
+      salarioAtual: u.salario
+    });
+    if (!v.ok) throw new Error(v.erro);
+    if (folhaDoMesFechada(userId, vigencia.slice(0, 7) + "-01") && vigencia.slice(0, 7) <= hojeStr().slice(0, 7)) throw new Error("A folha desse mês já foi fechada. Escolha uma data de início em um mês ainda aberto.");
+    const agora = iso(new Date());
+    const novasLinhas = [];
+    // Primeira vez: guarda o salário que já valia como ponto de partida, para a folha antiga não mudar.
+    if (!salHist.some(h => h.userId === userId) && +u.salario > 0) novasLinhas.push({
+      usuario_id: userId,
+      valor: +u.salario,
+      vigencia: (u.admissao || "2020-01-01").slice(0, 10),
+      motivo: "Salário que já valia antes deste histórico",
+      acordo_coletivo: false,
+      alterado_por: user.id
+    });
+    novasLinhas.push({
+      usuario_id: userId,
+      valor: numeroValido(valor, {
+        min: 0.01,
+        max: 1000000
+      }),
+      vigencia,
+      motivo: limparTexto(motivo, 200),
+      acordo_coletivo: !!acordo,
+      alterado_por: user.id
+    });
+    let salvas = novasLinhas.map((l, i) => ({
+      ...l,
+      id: "local-" + Date.now() + i,
+      criado_em: agora
+    }));
+    if (!demo) {
+      const r = await sbInsert(sessao.token, "salario_historico", novasLinhas);
+      if (Array.isArray(r) && r.length) salvas = r;
+    }
+    const novasH = salvas.map(mapSalHist);
+    const histNovo = [...novasH, ...salHist];
+    setSalHist(histNovo);
+    // O salário "de hoje" também vai para o cadastro de sempre (usuarios.salario_bruto), que a folha e os relatórios já usam.
+    const vigente = salarioVigenteEm(histNovo, userId, hojeStr(), +u.salario || 0);
+    if (vigente !== +u.salario) await salvarUsuario(userId, {
+      salario_bruto: vigente
+    });
+    await auditar("salario_historico", `Salário de ${u.nome}: ${brl(+u.salario || 0)} → ${brl(+valor)} a partir de ${fmtData(vigencia)} (${limparTexto(motivo, 80)})${v.reducao ? " · redução com acordo/convenção coletiva" : ""} · por ${user.nome}`);
+    if (+valor !== +u.salario) await criarPendenciaESocial(userId, "S-2206", vigencia, `Alteração salarial a partir de ${fmtData(vigencia)}`);
+  };
+
+  // Vale-transporte: linhas de ônibus (ida/volta) + dias por mês. O custo mensal sincroniza com o cadastro de sempre.
+  const sincronizarVT = async (userId, linhas, dias) => {
+    const c = custoVT(linhas, dias);
+    await salvarUsuario(userId, {
+      vale_transporte_ativo: c.linhas > 0,
+      vale_transporte_valor_mensal: c.custoMensal
+    });
+  };
+  const adicionarLinhaVT = async (userId, {
+    sentido,
+    linha,
+    valor
+  }) => {
+    soGestor();
+    exigeCadastro();
+    const nome = limparTexto(linha, 60);
+    const v = numeroValido(valor, {
+      min: 0.01,
+      max: 200
+    });
+    if (!["ida", "volta"].includes(sentido) || !nome || v === null) throw new Error("Informe a linha (nome ou número) e o valor da passagem.");
+    const l = {
+      usuario_id: userId,
+      sentido,
+      linha: nome,
+      valor_passagem: v,
+      ativo: true
+    };
+    let salvo = {
+      ...l,
+      id: "local-" + Date.now()
+    };
+    if (!demo) {
+      const r = await sbInsert(sessao.token, "vale_transporte_linhas", [l]);
+      if (Array.isArray(r) && r[0]) salvo = r[0];
+    }
+    const todas = [...vtLinhas, mapVtLinha(salvo)];
+    setVtLinhas(todas);
+    const dias = cadastros.find(c => c.userId === userId)?.vtDias ?? VT_DIAS_PADRAO;
+    await sincronizarVT(userId, todas.filter(x => x.userId === userId), dias);
+  };
+  const removerLinhaVT = async id => {
+    soGestor();
+    exigeCadastro();
+    const alvo = vtLinhas.find(x => x.id === id);
+    if (!alvo) return;
+    if (!demo) await sbUpdate(sessao.token, "vale_transporte_linhas", `id=eq.${id}`, {
+      ativo: false
+    });
+    const todas = vtLinhas.map(x => x.id === id ? {
+      ...x,
+      ativo: false
+    } : x);
+    setVtLinhas(todas);
+    const dias = cadastros.find(c => c.userId === alvo.userId)?.vtDias ?? VT_DIAS_PADRAO;
+    await sincronizarVT(alvo.userId, todas.filter(x => x.userId === alvo.userId), dias);
+  };
+  const mudarDiasVT = async (userId, dias) => {
+    soGestor();
+    const n = numeroValido(dias, {
+      min: 0,
+      max: 31
+    });
+    if (n === null) throw new Error("Dias por mês: número de 0 a 31.");
+    await salvarCadastro(userId, {
+      vtDias: Math.floor(n)
+    });
+    await sincronizarVT(userId, vtLinhas.filter(x => x.userId === userId), Math.floor(n));
+  };
+
+  // Dependentes (salário-família e IRRF). O número de dependentes do IRRF sincroniza com o cadastro de sempre.
+  const salvarDependente = async (userId, d) => {
+    soGestor();
+    exigeCadastro();
+    const nome = limparTexto(d.nome, 100);
+    if (nome.length < 2) throw new Error("Informe o nome do dependente.");
+    if (!PARENTESCO_DEP[d.parentesco]) throw new Error("Escolha o parentesco.");
+    if (!dataValida(d.nascimento)) throw new Error("Informe a data de nascimento do dependente.");
+    if (d.cpf && !cpfValido(d.cpf)) throw new Error("CPF do dependente inválido.");
+    const linha = {
+      usuario_id: userId,
+      nome,
+      parentesco: d.parentesco,
+      data_nascimento: d.nascimento,
+      cpf: soDigitos(d.cpf) || null,
+      irrf: !!d.irrf,
+      salario_familia: !!d.salarioFamilia,
+      ativo: true
+    };
+    let salvo = {
+      ...linha,
+      id: "local-" + Date.now()
+    };
+    if (!demo) {
+      const r = await sbInsert(sessao.token, "dependentes", [linha]);
+      if (Array.isArray(r) && r[0]) salvo = r[0];
+    }
+    const todos = [...dependentes, mapDependente(salvo)];
+    setDependentes(todos);
+    await salvarUsuario(userId, {
+      dependentes_irrf: dependentesIRRF(todos.filter(x => x.userId === userId))
+    });
+  };
+  const removerDependente = async id => {
+    soGestor();
+    exigeCadastro();
+    const alvo = dependentes.find(x => x.id === id);
+    if (!alvo) return;
+    if (!demo) await sbUpdate(sessao.token, "dependentes", `id=eq.${id}`, {
+      ativo: false
+    });
+    const todos = dependentes.map(x => x.id === id ? {
+      ...x,
+      ativo: false
+    } : x);
+    setDependentes(todos);
+    await salvarUsuario(alvo.userId, {
+      dependentes_irrf: dependentesIRRF(todos.filter(x => x.userId === alvo.userId))
+    });
+  };
+
+  // Desligar: marca data e motivo, esconde das listas. NADA é apagado (cadastro, ponto, folha e histórico ficam guardados).
+  const desligarColaborador = async (userId, {
+    data,
+    motivo,
+    detalhe
+  }) => {
+    soGestor();
+    exigeCadastro();
+    if (userId === user.id) throw new Error("Você não pode desligar a si mesmo.");
+    if (!dataValida(data)) throw new Error("Informe a data do desligamento.");
+    if (!MOTIVOS_DESLIGAMENTO[motivo]) throw new Error("Escolha o motivo do desligamento.");
+    const texto = motivo === "outro" ? limparTexto(detalhe || "", 150) : MOTIVOS_DESLIGAMENTO[motivo];
+    if (!texto || texto.length < 3) throw new Error("Descreva o motivo.");
+    await salvarCadastro(userId, {});
+    const patch = {
+      desligado_em: data,
+      motivo_desligamento: texto,
+      atualizado_em: iso(new Date())
+    };
+    if (!demo) await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, patch);
+    setCadastros(cs => cs.map(c => c.userId === userId ? {
+      ...c,
+      desligadoEm: data,
+      motivoDesligamento: texto
+    } : c));
+    await salvarUsuario(userId, {
+      ativo: false
+    });
+    await auditar("colaborador_desligado", `${usuarios.find(u => u.id === userId)?.nome || "Colaborador"} desligado em ${fmtData(data)} (${texto}) por ${user.nome}. Nada foi apagado.`);
+    await criarPendenciaESocial(userId, "S-2299", data, `Desligamento em ${fmtData(data)}`);
+  };
+  const reativarColaborador = async userId => {
+    soGestor();
+    exigeCadastro();
+    const patch = {
+      desligado_em: null,
+      motivo_desligamento: null,
+      atualizado_em: iso(new Date())
+    };
+    if (!demo) await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, patch);
+    setCadastros(cs => cs.map(c => c.userId === userId ? {
+      ...c,
+      desligadoEm: "",
+      motivoDesligamento: ""
+    } : c));
+    await salvarUsuario(userId, {
+      ativo: true
+    });
+    await auditar("colaborador_reativado", `${usuarios.find(u => u.id === userId)?.nome || "Colaborador"} reativado por ${user.nome}.`);
   };
 
   /* ---------- compras do colaborador (desconto em folha em ate 3x) ---------- */
@@ -9049,7 +9542,7 @@ function AppInterno() {
     onAceitar: () => consentir(true),
     onSair: sair
   });
-  const menu = [["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meus horários"], ["justificar", "✍️ Explicar uma falta"], ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"], ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : [])];
+  const menu = [["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meus horários"], ["justificar", "✍️ Explicar uma falta"], ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["cadastro", "📇 Meu cadastro"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"], ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : [])];
   return /*#__PURE__*/React.createElement("div", {
     style: S.app
   }, /*#__PURE__*/React.createElement("style", null, `@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600;700&display=swap');
@@ -9546,8 +10039,15 @@ function AppInterno() {
     faltas,
     folgas,
     onSolicitar: solicitarFolga
+  }), tela === "cadastro" && /*#__PURE__*/React.createElement(TelaMeuCadastro, {
+    user: user,
+    cadastro: cadastros.find(c => c.userId === user.id) || null,
+    noBanco: cadastroNoBanco,
+    demo: demo,
+    onSalvar: salvarCadastro
   }), tela === "holerite" && /*#__PURE__*/React.createElement(TelaHolerite, {
     user: user,
+    vtCustoMensal: custoVT(vtLinhas.filter(l => l.userId === user.id), cadastros.find(c => c.userId === user.id)?.vtDias ?? VT_DIAS_PADRAO).custoMensal,
     folhasPg: folhasPg.filter(f => f.userId === user.id),
     adiantamentos: adiantamentos.filter(a => a.userId === user.id),
     compras: compras.filter(c => c.userId === user.id),
@@ -9660,7 +10160,29 @@ function AppInterno() {
     aceites,
     ajustes,
     onDecidirAjuste: decidirAjuste,
-    demo
+    demo,
+    cadastrosPack: {
+      cadastros,
+      salHist,
+      vtLinhas,
+      dependentes,
+      esocialRegs,
+      cadastroNoBanco: cadastroNoBanco || demo,
+      cadHandlers: {
+        salvarCadastro,
+        salvarCpf,
+        lancarSalario,
+        adicionarLinhaVT,
+        removerLinhaVT,
+        mudarDiasVT,
+        salvarDependente,
+        removerDependente,
+        desligarColaborador,
+        reativarColaborador,
+        registrarNaCarteira,
+        confirmarESocial
+      }
+    }
   }))));
 }
 
@@ -16162,12 +16684,1301 @@ function TelaLGPD({
     onRemover: onRemoverBio
   }));
 }
+
+/* ================= Cadastro completo do colaborador (telas) ================= */
+function CampoFicha({
+  rot,
+  children,
+  largura = 190
+}) {
+  return /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      fontSize: 12,
+      color: C.cinza,
+      width: largura,
+      maxWidth: "100%"
+    }
+  }, rot, children);
+}
+const inputFicha = {
+  ...S.input,
+  padding: "9px 11px",
+  fontSize: 14
+};
+
+/* Endereço: digitou o CEP, o resto vem sozinho (ViaCEP, serviço dos Correios/gratuito). Se falhar, preenche à mão. */
+function BlocoEndereco({
+  d,
+  set,
+  soLeitura = false
+}) {
+  const [buscando, setBuscando] = useState(false);
+  const [aviso, setAviso] = useState(null);
+  const buscar = async valor => {
+    const c = soDigitos(valor);
+    if (c.length !== 8) return;
+    setBuscando(true);
+    setAviso(null);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${c}/json/`);
+      const e = enderecoDoViaCEP(await r.json());
+      if (!e) setAviso("CEP não encontrado. Preencha o endereço à mão.");else set({
+        logradouro: e.logradouro || d.logradouro,
+        bairro: e.bairro || d.bairro,
+        cidade: e.cidade,
+        uf: e.uf,
+        codigoIbge: e.codigoIbge
+      });
+    } catch {
+      setAviso("Não consegui buscar o CEP agora. Preencha o endereço à mão.");
+    } finally {
+      setBuscando(false);
+    }
+  };
+  const alt = k => e => set({
+    [k]: e.target.value
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "CEP",
+    largura: 130
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    inputMode: "numeric",
+    maxLength: 9,
+    value: fmtCEP(d.cep || ""),
+    onChange: e => {
+      set({
+        cep: soDigitos(e.target.value)
+      });
+      if (soDigitos(e.target.value).length === 8) buscar(e.target.value);
+    },
+    placeholder: "00000-000"
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Rua / avenida",
+    largura: 260
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    value: d.logradouro || "",
+    onChange: alt("logradouro")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "N\xFAmero",
+    largura: 90
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    value: d.numero || "",
+    onChange: alt("numero")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Complemento",
+    largura: 150
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    value: d.complemento || "",
+    onChange: alt("complemento")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Bairro",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    value: d.bairro || "",
+    onChange: alt("bairro")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Cidade",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    value: d.cidade || "",
+    onChange: alt("cidade")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "UF",
+    largura: 70
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    disabled: soLeitura,
+    maxLength: 2,
+    value: d.uf || "",
+    onChange: e => set({
+      uf: e.target.value.toUpperCase()
+    })
+  })), buscando && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      alignSelf: "end"
+    }
+  }, "Buscando CEP\u2026"), aviso && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: C.dourado,
+      alignSelf: "end"
+    }
+  }, aviso));
+}
+function BlocoPagamentoEmergencia({
+  d,
+  set
+}) {
+  const alt = k => e => set({
+    [k]: e.target.value
+  });
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.amarelo,
+      marginTop: 14
+    }
+  }, "\uD83D\uDCB3 Como receber (conta e Pix)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Banco",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.banco || "",
+    onChange: alt("banco")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Ag\xEAncia",
+    largura: 100
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.agencia || "",
+    onChange: alt("agencia")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Conta",
+    largura: 130
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.conta || "",
+    onChange: alt("conta")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Tipo da chave Pix",
+    largura: 160
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: d.pixTipo || "",
+    onChange: alt("pixTipo")
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014"), Object.entries(PIX_TIPOS).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v)))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Chave Pix",
+    largura: 230
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.pixChave || "",
+    onChange: alt("pixChave")
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.amarelo,
+      marginTop: 14
+    }
+  }, "\uD83D\uDE91 Contato de emerg\xEAncia"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Nome",
+    largura: 200
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.emergNome || "",
+    onChange: alt("emergNome")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Parentesco",
+    largura: 140
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.emergParentesco || "",
+    onChange: alt("emergParentesco")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Telefone",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.emergTelefone || "",
+    onChange: alt("emergTelefone")
+  }))));
+}
+
+/* Colaborador: só endereço, pagamento e contato de emergência (o restante é do gestor). */
+function TelaMeuCadastro({
+  user,
+  cadastro,
+  noBanco,
+  demo,
+  onSalvar
+}) {
+  const [d, setD] = useState(() => ({
+    ...(cadastro || {})
+  }));
+  const [msg, setMsg] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+  const set = p => setD(x => ({
+    ...x,
+    ...p
+  }));
+  const salvar = async () => {
+    setSalvando(true);
+    setMsg(null);
+    try {
+      await onSalvar(user.id, d);
+      setMsg({
+        ok: true,
+        txt: "Pronto! Seu cadastro foi salvo."
+      });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        txt: mensagemAmigavel(e)
+      });
+    } finally {
+      setSalvando(false);
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: S.card
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 16
+    }
+  }, "\uD83D\uDCC7 Meu cadastro"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.cinza,
+      margin: "6px 0 0",
+      lineHeight: 1.6
+    }
+  }, "Mantenha seu endere\xE7o, sua conta e seu contato de emerg\xEAncia em dia. S\xF3 voc\xEA e o gestor veem estes dados."), !noBanco && !demo && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.dourado
+    }
+  }, "O cadastro completo ainda n\xE3o foi ligado no sistema. Fale com o gestor."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.amarelo,
+      marginTop: 14
+    }
+  }, "\uD83C\uDFE0 Endere\xE7o"), /*#__PURE__*/React.createElement(BlocoEndereco, {
+    d: d,
+    set: set
+  }), /*#__PURE__*/React.createElement(BlocoPagamentoEmergencia, {
+    d: d,
+    set: set
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      opacity: salvando ? 0.6 : 1
+    },
+    disabled: salvando,
+    onClick: salvar
+  }, salvando ? "Salvando…" : "Salvar meu cadastro"), msg && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: msg.ok ? C.verde : C.vermelho
+    }
+  }, msg.txt)));
+}
+const ABAS_FICHA = [["dados", "👤 Dados"], ["endereco", "🏠 Endereço"], ["contrato", "📄 Contrato"], ["salario", "💰 Salário"], ["vt", "🚌 Transporte"], ["familia", "👨‍👩‍👧 Dependentes"], ["saude", "🩺 Saúde"], ["carteira", "🪪 Carteira"], ["desligar", "🚪 Desligar"]];
+function FichaColaborador({
+  u,
+  cad,
+  deps,
+  hist,
+  vtLinhasDoUser,
+  regsESocial,
+  exames,
+  gestorId,
+  noBanco,
+  handlers,
+  onFechar
+}) {
+  const [aba, setAba] = useState("dados");
+  const [d, setD] = useState(() => ({
+    ...(cad || {})
+  }));
+  const [cpf, setCpf] = useState(() => fmtCPF(u.cpf || ""));
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const set = p => setD(x => ({
+    ...x,
+    ...p
+  }));
+  const alt = k => e => set({
+    [k]: e.target.value
+  });
+  const roda = async (fn, ok) => {
+    setOcupado(true);
+    setMsg(null);
+    try {
+      await fn();
+      setMsg({
+        ok: true,
+        txt: ok
+      });
+    } catch (e) {
+      setMsg({
+        ok: false,
+        txt: mensagemAmigavel(e)
+      });
+    } finally {
+      setOcupado(false);
+    }
+  };
+  const salvarFicha = () => roda(async () => {
+    if (cpf && soDigitos(cpf) !== soDigitos(u.cpf || "")) await handlers.salvarCpf(u.id, cpf);
+    await handlers.salvarCadastro(u.id, d);
+  }, "Salvo!");
+  const BotaoSalvar = () => /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado || !noBanco,
+    onClick: salvarFicha
+  }, ocupado ? "Salvando…" : "Salvar"));
+
+  // salário
+  const [sal, setSal] = useState({
+    valor: "",
+    vigencia: hojeStr(),
+    motivo: "",
+    acordo: false
+  });
+  const histU = salHistOrdenado(hist, u.id);
+  const testeSal = sal.valor && sal.vigencia ? validarAlteracaoSalario({
+    hist,
+    userId: u.id,
+    valor: sal.valor,
+    vigencia: sal.vigencia,
+    motivo: sal.motivo || "xxx",
+    acordo: sal.acordo,
+    salarioAtual: u.salario
+  }) : null;
+  // vale-transporte
+  const [lin, setLin] = useState({
+    sentido: "ida",
+    linha: "",
+    valor: ""
+  });
+  const vt = custoVT(vtLinhasDoUser, d.vtDias ?? VT_DIAS_PADRAO);
+  const divVT = dividirVT({
+    salarioBase: +u.salario || 0,
+    custoMensal: vt.custoMensal
+  });
+  // dependentes
+  const [dep, setDep] = useState({
+    nome: "",
+    parentesco: "filho",
+    nascimento: "",
+    cpf: "",
+    irrf: true,
+    salarioFamilia: false
+  });
+  const depsAtivos = (deps || []).filter(x => x.ativo !== false);
+  // desligar
+  const [desl, setDesl] = useState({
+    data: hojeStr(),
+    motivo: "",
+    detalhe: ""
+  });
+  // carteira
+  const [resumo, setResumo] = useState(null);
+  const falta = faltaNoCadastro(u, cad, depsAtivos);
+  const aso = asoDoColaborador(exames, u.id);
+  const copiar = async txt => {
+    try {
+      await navigator.clipboard.writeText(txt);
+      setMsg({
+        ok: true,
+        txt: "Resumo copiado! Cole no eSocial ou mande ao contador."
+      });
+    } catch {
+      setMsg({
+        ok: false,
+        txt: "Não deu para copiar automático. Selecione o texto e copie."
+      });
+    }
+  };
+  const gerarResumo = evento => {
+    const fato = evento === "S-2200" ? (u.admissao || "").slice(0, 10) : evento === "S-2299" ? cad?.desligadoEm || "" : hojeStr();
+    const r = resumoESocial(evento, {
+      u,
+      cad,
+      deps: depsAtivos,
+      hist,
+      dataFato: fato,
+      empresaCnpj: EMPRESA.cnpj
+    });
+    setResumo(r);
+  };
+  const registrar = evento => roda(async () => {
+    const fato = evento === "S-2200" ? (u.admissao || "").slice(0, 10) : evento === "S-2299" ? cad?.desligadoEm || hojeStr() : hojeStr();
+    await handlers.registrarNaCarteira(u.id, evento, fato, EVENTOS_ESOCIAL[evento.replace("-", "")]?.nome || evento);
+  }, "Registrado! Ficou como pendente até você confirmar o envio.");
+  const desligado = estaDesligado(u, cad);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.grafite,
+      border: "1px solid " + C.bordaForte,
+      borderRadius: 14,
+      padding: 14,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 15
+    }
+  }, "\uD83D\uDCCB Ficha de ", u.nome, " ", desligado && /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.vermelho, C.preto)
+  }, "DESLIGADO")), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: onFechar
+  }, "Fechar")), !noBanco && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.dourado,
+      margin: "8px 0 0"
+    }
+  }, "O cadastro completo ainda n\xE3o foi ligado no banco. Aplique a atualiza\xE7\xE3o \"cadastro do colaborador\" (veja Diagn\xF3stico) para salvar estas informa\xE7\xF5es."), falta.length > 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "8px 0 0"
+    }
+  }, "Falta preencher: ", falta.join(", "), "."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      marginTop: 10
+    }
+  }, ABAS_FICHA.map(([k, r]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    style: {
+      ...(aba === k ? S.btn : S.btnGhost),
+      padding: "6px 11px",
+      fontSize: 12
+    },
+    onClick: () => {
+      setAba(k);
+      setMsg(null);
+    }
+  }, r))), aba === "dados" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "CPF"
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    inputMode: "numeric",
+    value: cpf,
+    onChange: e => setCpf(fmtCPF(e.target.value)),
+    placeholder: "000.000.000-00"
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "PIS/NIS (se tiver)"
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    inputMode: "numeric",
+    maxLength: 11,
+    value: d.pis || "",
+    onChange: e => set({
+      pis: soDigitos(e.target.value)
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Data de nascimento"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: inputFicha,
+    value: d.nascimento || "",
+    onChange: alt("nascimento")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Sexo",
+    largura: 130
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: d.sexo || "",
+    onChange: alt("sexo")
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014"), /*#__PURE__*/React.createElement("option", {
+    value: "F"
+  }, "Feminino"), /*#__PURE__*/React.createElement("option", {
+    value: "M"
+  }, "Masculino"))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Ra\xE7a/cor (exigido pelo eSocial)",
+    largura: 200
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: d.racaCor || "",
+    onChange: alt("racaCor")
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014"), Object.entries(RACA_COR).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v)))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Estado civil"
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: d.estadoCivil || "",
+    onChange: alt("estadoCivil")
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014"), Object.entries(ESTADO_CIVIL).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v)))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Escolaridade"
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: d.grauInstrucao || "",
+    onChange: alt("grauInstrucao")
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014"), Object.entries(GRAU_INSTRUCAO).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v))))), /*#__PURE__*/React.createElement(BlocoPagamentoEmergencia, {
+    d: d,
+    set: set
+  }), /*#__PURE__*/React.createElement(BotaoSalvar, null)), aba === "endereco" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(BlocoEndereco, {
+    d: d,
+    set: set
+  }), /*#__PURE__*/React.createElement(BotaoSalvar, null)), aba === "contrato" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: C.cinza,
+      margin: "10px 0 0"
+    }
+  }, "Admiss\xE3o: ", /*#__PURE__*/React.createElement("b", null, fmtData((u.admissao || "").slice(0, 10)) || "—"), " \xB7 Cargo/fun\xE7\xE3o: ", /*#__PURE__*/React.createElement("b", null, u.cargo || "—"), " (mude em \"Editar\" na lista da equipe)."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "CBO (6 n\xFAmeros)",
+    largura: 150
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    inputMode: "numeric",
+    maxLength: 6,
+    value: d.cbo || "",
+    onChange: e => set({
+      cbo: soDigitos(e.target.value)
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Jornada (horas por semana)",
+    largura: 190
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "44",
+    step: "0.5",
+    style: inputFicha,
+    value: d.jornadaHoras ?? "",
+    onChange: alt("jornadaHoras")
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Descri\xE7\xE3o da jornada",
+    largura: 300
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: d.jornadaTexto || "",
+    onChange: alt("jornadaTexto"),
+    placeholder: "Ex.: seg a sex, 8h30 \xE0s 18h"
+  }))), /*#__PURE__*/React.createElement(BotaoSalvar, null)), aba === "salario" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      margin: "10px 0 0"
+    }
+  }, "Sal\xE1rio de hoje: ", /*#__PURE__*/React.createElement("b", null, brl(salarioVigenteEm(hist, u.id, hojeStr(), +u.salario || 0)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8,
+      alignItems: "end"
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Novo sal\xE1rio R$",
+    largura: 130
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    step: "0.01",
+    style: inputFicha,
+    value: sal.valor,
+    onChange: e => setSal({
+      ...sal,
+      valor: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Vale a partir de",
+    largura: 160
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: inputFicha,
+    value: sal.vigencia,
+    onChange: e => setSal({
+      ...sal,
+      vigencia: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Motivo (ex.: reajuste, promo\xE7\xE3o)",
+    largura: 250
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: sal.motivo,
+    onChange: e => setSal({
+      ...sal,
+      motivo: e.target.value
+    })
+  }))), testeSal && testeSal.reducao && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "rgba(248,113,113,0.12)",
+      border: "1px solid " + C.vermelho,
+      borderRadius: 10,
+      padding: 10,
+      marginTop: 8,
+      fontSize: 13
+    }
+  }, "\u26A0\uFE0F Isso reduz o sal\xE1rio (de ", brl(testeSal.anterior), "). A lei n\xE3o permite, salvo acordo ou conven\xE7\xE3o coletiva com o sindicato (Constitui\xE7\xE3o art. 7\xBA, VI \xB7 CLT art. 468).", /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: sal.acordo,
+    onChange: e => setSal({
+      ...sal,
+      acordo: e.target.checked
+    })
+  }), " Existe acordo ou conven\xE7\xE3o coletiva (guardei o documento)")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      opacity: ocupado ? 0.6 : 1
+    },
+    disabled: ocupado || !noBanco,
+    onClick: () => roda(async () => {
+      await handlers.lancarSalario(u.id, sal);
+      setSal({
+        valor: "",
+        vigencia: hojeStr(),
+        motivo: "",
+        acordo: false
+      });
+    }, "Salário registrado. A folha usa o valor certo de cada mês.")
+  }, "Registrar novo sal\xE1rio")), histU.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza,
+      marginTop: 14
+    }
+  }, "Hist\xF3rico de sal\xE1rio"), histU.map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.id,
+    style: {
+      borderTop: "1px solid " + C.borda,
+      padding: "6px 0",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("b", null, brl(h.valor)), " desde ", fmtData(h.vigencia), " \xB7 ", h.motivo, h.acordo ? " · com acordo coletivo" : "", " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.cinza
+    }
+  }, "\xB7 por ", h.por === gestorId ? "você" : "gestor"))))), aba === "vt" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "10px 0 0"
+    }
+  }, "Cadastre as linhas de \xF4nibus de ida e de volta. O colaborador paga no m\xE1ximo 6% do sal\xE1rio base; o resto \xE9 custo da empresa (Lei 7.418/85)."), vtLinhasDoUser.filter(l => l.ativo !== false).map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      borderTop: "1px solid " + C.borda,
+      padding: "6px 0",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", null, l.sentido === "ida" ? "➡️ Ida" : "⬅️ Volta", " \xB7 ", l.linha, " \xB7 ", brl(l.valor)), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "3px 9px",
+      fontSize: 11
+    },
+    onClick: () => roda(() => handlers.removerLinhaVT(l.id), "Linha removida.")
+  }, "Remover"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8,
+      alignItems: "end"
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Sentido",
+    largura: 110
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: lin.sentido,
+    onChange: e => setLin({
+      ...lin,
+      sentido: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "ida"
+  }, "Ida"), /*#__PURE__*/React.createElement("option", {
+    value: "volta"
+  }, "Volta"))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Linha (nome ou n\xFAmero)",
+    largura: 200
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: lin.linha,
+    onChange: e => setLin({
+      ...lin,
+      linha: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Passagem R$",
+    largura: 110
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    step: "0.01",
+    style: inputFicha,
+    value: lin.valor,
+    onChange: e => setLin({
+      ...lin,
+      valor: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "9px 14px",
+      fontSize: 13
+    },
+    disabled: ocupado || !noBanco,
+    onClick: () => roda(async () => {
+      await handlers.adicionarLinhaVT(u.id, lin);
+      setLin({
+        ...lin,
+        linha: "",
+        valor: ""
+      });
+    }, "Linha adicionada.")
+  }, "Adicionar linha")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      alignItems: "end",
+      marginTop: 10,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Dias de trabalho por m\xEAs",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    max: "31",
+    style: inputFicha,
+    value: d.vtDias ?? VT_DIAS_PADRAO,
+    onChange: alt("vtDias")
+  })), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "9px 14px",
+      fontSize: 13
+    },
+    disabled: ocupado || !noBanco,
+    onClick: () => roda(() => handlers.mudarDiasVT(u.id, d.vtDias ?? VT_DIAS_PADRAO), "Dias salvos.")
+  }, "Salvar dias")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.carvao,
+      borderRadius: 10,
+      padding: 10,
+      marginTop: 10,
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, "Por dia: ", /*#__PURE__*/React.createElement("b", null, brl(vt.porDia)), " \xD7 ", vt.dias, " dias = custo do m\xEAs ", /*#__PURE__*/React.createElement("b", null, brl(vt.custoMensal)), /*#__PURE__*/React.createElement("br", null), "Desconto do colaborador (at\xE9 6% de ", brl(+u.salario || 0), " = ", brl(divVT.limite), "): ", /*#__PURE__*/React.createElement("b", null, brl(divVT.descontoColaborador)), /*#__PURE__*/React.createElement("br", null), "Custo da empresa: ", /*#__PURE__*/React.createElement("b", null, brl(divVT.custoEmpresa)))), aba === "familia" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "10px 0 0"
+    }
+  }, "Dependentes que valem para o sal\xE1rio-fam\xEDlia e para o desconto do imposto de renda (IRRF)."), depsAtivos.map(x => /*#__PURE__*/React.createElement("div", {
+    key: x.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      borderTop: "1px solid " + C.borda,
+      padding: "6px 0",
+      fontSize: 13,
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, x.nome), " \xB7 ", PARENTESCO_DEP[x.parentesco], " \xB7 nasc. ", fmtData(x.nascimento), x.irrf ? " · IRRF" : "", x.salarioFamilia ? " · salário-família" : ""), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "3px 9px",
+      fontSize: 11
+    },
+    onClick: () => roda(() => handlers.removerDependente(x.id), "Dependente removido.")
+  }, "Remover"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8,
+      alignItems: "end"
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Nome",
+    largura: 200
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: dep.nome,
+    onChange: e => setDep({
+      ...dep,
+      nome: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Parentesco",
+    largura: 130
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: dep.parentesco,
+    onChange: e => setDep({
+      ...dep,
+      parentesco: e.target.value
+    })
+  }, Object.entries(PARENTESCO_DEP).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v)))), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Nascimento",
+    largura: 150
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: inputFicha,
+    value: dep.nascimento,
+    onChange: e => setDep({
+      ...dep,
+      nascimento: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "CPF",
+    largura: 150
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: dep.cpf,
+    onChange: e => setDep({
+      ...dep,
+      cpf: fmtCPF(e.target.value)
+    })
+  })), /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      display: "flex",
+      gap: 5,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: dep.irrf,
+    onChange: e => setDep({
+      ...dep,
+      irrf: e.target.checked
+    })
+  }), " IRRF"), /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      display: "flex",
+      gap: 5,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: dep.salarioFamilia,
+    onChange: e => setDep({
+      ...dep,
+      salarioFamilia: e.target.checked
+    })
+  }), " Sal\xE1rio-fam\xEDlia"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "9px 14px",
+      fontSize: 13
+    },
+    disabled: ocupado || !noBanco,
+    onClick: () => roda(async () => {
+      await handlers.salvarDependente(u.id, dep);
+      setDep({
+        nome: "",
+        parentesco: "filho",
+        nascimento: "",
+        cpf: "",
+        irrf: true,
+        salarioFamilia: false
+      });
+    }, "Dependente salvo.")
+  }, "Adicionar"))), aba === "saude" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, aso.situacao === "sem_exame" && /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0
+    }
+  }, "\uD83E\uDE7A Nenhum exame de sa\xFAde (ASO) registrado ainda. Registre em ", /*#__PURE__*/React.createElement("b", null, "Exames ocupacionais"), "."), aso.ultimo && /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0
+    }
+  }, "\xDAltimo ASO: ", /*#__PURE__*/React.createElement("b", null, aso.ultimo.tipoLabel), " em ", fmtData(aso.ultimo.data), " \xB7 vale at\xE9 ", /*#__PURE__*/React.createElement("b", null, fmtData(aso.validade)), " ", aso.situacao === "vencido" && /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.vermelho, C.preto)
+  }, "VENCIDO h\xE1 ", Math.abs(aso.dias), " dias"), aso.situacao === "vencendo" && /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.dourado, "#111")
+  }, "vence em ", aso.dias, " dias"), aso.situacao === "em_dia" && /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.verde, C.preto)
+  }, "EM DIA")), aso.agendado && /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "6px 0 0"
+    }
+  }, "Agendado: ", aso.agendado.tipoLabel, " em ", fmtData(aso.agendado.dataPrevista), "."), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      marginTop: 8
+    }
+  }, "Regra geral: o exame peri\xF3dico vale 12 meses (NR-7). O m\xE9dico do trabalho pode definir 24 meses em alguns casos \u2014 confirme com ele.")), aba === "carteira" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "A carteira de trabalho digital \xE9 atualizada pelo ", /*#__PURE__*/React.createElement("b", null, "eSocial"), ". Este bot\xE3o monta o resumo pronto para voc\xEA copiar (ou mandar ao contador) e deixa a tarefa como ", /*#__PURE__*/React.createElement("b", null, "pendente"), " at\xE9 voc\xEA confirmar que enviou. O app n\xE3o envia nada sozinho."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "8px 13px",
+      fontSize: 13
+    },
+    onClick: () => gerarResumo("S-2200")
+  }, "Admiss\xE3o (S-2200)"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 13px",
+      fontSize: 13
+    },
+    onClick: () => gerarResumo("S-2206")
+  }, "Mudan\xE7a de sal\xE1rio (S-2206)"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "8px 13px",
+      fontSize: 13
+    },
+    onClick: () => gerarResumo("S-2299"),
+    disabled: !cad?.desligadoEm
+  }, "Desligamento (S-2299)")), resumo && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.carvao,
+      borderRadius: 10,
+      padding: 10,
+      marginTop: 10
+    }
+  }, resumo.faltando.length > 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.dourado,
+      margin: "0 0 6px"
+    }
+  }, "Falta: ", resumo.faltando.join(", "), "."), /*#__PURE__*/React.createElement("pre", {
+    style: {
+      whiteSpace: "pre-wrap",
+      fontSize: 12,
+      margin: 0,
+      color: C.branco
+    }
+  }, resumo.texto), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => copiar(resumo.texto)
+  }, "\uD83D\uDCCB Copiar resumo"), /*#__PURE__*/React.createElement("a", {
+    style: {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12,
+      textDecoration: "none"
+    },
+    href: "mailto:?subject=" + encodeURIComponent("eSocial " + resumo.evento + " - " + u.nome) + "&body=" + encodeURIComponent(resumo.texto)
+  }, "\u2709\uFE0F Mandar ao contador"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    disabled: ocupado || !noBanco,
+    onClick: () => registrar(resumo.evento)
+  }, "Registrar na carteira"))), regsESocial.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.display,
+      fontSize: 13,
+      color: C.cinza,
+      marginTop: 14
+    }
+  }, "Pend\xEAncias e envios"), regsESocial.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderTop: "1px solid " + C.borda,
+      padding: "6px 0",
+      fontSize: 13,
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, r.evento), " \xB7 ", fmtData(r.dataFato), " \xB7 prazo ", fmtData(prazoESocial(r.evento, r.dataFato)), r.recibo ? ` · recibo ${r.recibo}` : ""), r.status === "enviado" ? /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.verde, C.preto)
+  }, "ENVIADO") : /*#__PURE__*/React.createElement(ConfirmarEnvio, {
+    onConfirmar: rec => roda(() => handlers.confirmarESocial(r.id, rec), "Marcado como enviado.")
+  })))), /*#__PURE__*/React.createElement(Detalhes, {
+    titulo: "Como a empresa envia ao eSocial (fonte oficial)"
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0,
+      lineHeight: 1.6
+    }
+  }, "Pelo portal do eSocial (Web Geral) \xE9 preciso certificado digital da empresa (e-CNPJ). A entrada s\xF3 com conta gov.br vale para MEI, segurado especial e empresas do Simples com at\xE9 1 empregado. Com mais empregados, o envio \xE9 pelo contador (com procura\xE7\xE3o) ou com o certificado. Prazos: admiss\xE3o at\xE9 o dia anterior ao in\xEDcio; mudan\xE7a de sal\xE1rio at\xE9 o dia 15 do m\xEAs seguinte; desligamento em at\xE9 10 dias corridos. O envio direto pelo app (API) fica desligado: exige certificado digital da empresa."))), aba === "desligar" && /*#__PURE__*/React.createElement(React.Fragment, null, desligado ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 14,
+      margin: "10px 0 0"
+    }
+  }, "Desligado em ", /*#__PURE__*/React.createElement("b", null, fmtData(cad?.desligadoEm) || "—"), cad?.motivoDesligamento ? ` · ${cad.motivoDesligamento}` : "", "."), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      borderColor: C.verde,
+      color: C.verde,
+      marginTop: 8
+    },
+    disabled: ocupado,
+    onClick: () => roda(() => handlers.reativarColaborador(u.id), "Colaborador reativado.")
+  }, "Reativar colaborador")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: C.cinza,
+      margin: "10px 0 0",
+      lineHeight: 1.6
+    }
+  }, "O colaborador some das listas e perde o acesso, mas ", /*#__PURE__*/React.createElement("b", null, "nada \xE9 apagado"), ". ", GUARDA_DOCUMENTOS_TXT), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      flexWrap: "wrap",
+      marginTop: 8,
+      alignItems: "end"
+    }
+  }, /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Data do desligamento",
+    largura: 170
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    style: inputFicha,
+    value: desl.data,
+    onChange: e => setDesl({
+      ...desl,
+      data: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Motivo",
+    largura: 260
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inputFicha,
+    value: desl.motivo,
+    onChange: e => setDesl({
+      ...desl,
+      motivo: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Escolha\u2026"), Object.entries(MOTIVOS_DESLIGAMENTO).map(([k, v]) => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, v)))), desl.motivo === "outro" && /*#__PURE__*/React.createElement(CampoFicha, {
+    rot: "Descreva",
+    largura: 260
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inputFicha,
+    value: desl.detalhe,
+    onChange: e => setDesl({
+      ...desl,
+      detalhe: e.target.value
+    })
+  }))), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      borderColor: C.vermelho,
+      color: C.vermelho,
+      marginTop: 10
+    },
+    disabled: ocupado || !noBanco || u.id === gestorId,
+    onClick: () => {
+      if (window.confirm(`Desligar ${u.nome}? Nada é apagado e dá para reativar depois.`)) roda(() => handlers.desligarColaborador(u.id, desl), "Colaborador desligado. A pendência do eSocial (S-2299) foi criada.");
+    }
+  }, "Desligar colaborador"))), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: msg.ok ? C.verde : C.vermelho,
+      margin: "10px 0 0"
+    }
+  }, msg.txt));
+}
+function ConfirmarEnvio({
+  onConfirmar
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [rec, setRec] = useState("");
+  if (!aberto) return /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "5px 10px",
+      fontSize: 12
+    },
+    onClick: () => setAberto(true)
+  }, "Confirmar envio");
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...inputFicha,
+      width: 150,
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    placeholder: "N\xBA do recibo (opcional)",
+    value: rec,
+    onChange: e => setRec(e.target.value)
+  }), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn,
+      padding: "5px 10px",
+      fontSize: 12
+    },
+    onClick: () => {
+      onConfirmar(rec);
+      setAberto(false);
+    }
+  }, "J\xE1 enviei"));
+}
 function SecaoEquipe({
   usuarios,
   convites,
   onCriarConvite,
   onSalvarUsuario,
-  gestorId
+  gestorId,
+  cadastros = [],
+  salHist = [],
+  vtLinhas = [],
+  dependentes = [],
+  esocialRegs = [],
+  examesOcupacionais = [],
+  cadastroNoBanco = false,
+  cadHandlers = null
 }) {
   const [form, setForm] = useState({
     nome: "",
@@ -16183,6 +17994,10 @@ function SecaoEquipe({
   const [msg, setMsg] = useState(null);
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
+  const [fichaId, setFichaId] = useState(null);
+  const [mostrarDesligados, setMostrarDesligados] = useState(false);
+  const cadDe = id => cadastros.find(c => c.userId === id) || null;
+  const desligadosQtd = usuarios.filter(u => estaDesligado(u, cadDe(u.id))).length;
   const linkDe = tk => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
   const msgConvite = (nome, link) => "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" + "Abra o link abaixo, escolha uma senha e sua conta fica pronta na hora:\n" + link + "\n\n" + "O link é só seu, vale uma única vez e vence em 7 dias.";
   const abrirWhats = (nome, link, telefone) => window.open(linkWhats(telefone, msgConvite(nome, link)), "_blank", "noopener");
@@ -16271,7 +18086,20 @@ function SecaoEquipe({
       fontSize: 15,
       color: C.cinza
     }
-  }, "\uD83D\uDC65 Equipe \u2014 colaboradores e convites"), usuarios.map(u => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDC65 Equipe \u2014 colaboradores e convites"), desligadosQtd > 0 && /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      fontSize: 12,
+      color: C.cinza,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: mostrarDesligados,
+    onChange: e => setMostrarDesligados(e.target.checked)
+  }), " Mostrar desligados (", desligadosQtd, ")"), usuarios.filter(u => mostrarDesligados || !estaDesligado(u, cadDe(u.id))).map(u => /*#__PURE__*/React.createElement("div", {
     key: u.id,
     style: {
       borderTop: "1px solid #1E3450",
@@ -16455,11 +18283,20 @@ function SecaoEquipe({
       alignItems: "center",
       flexShrink: 0
     }
-  }, u.ativo === false ? /*#__PURE__*/React.createElement("span", {
+  }, estaDesligado(u, cadDe(u.id)) ? /*#__PURE__*/React.createElement("span", {
+    style: S.tag(C.vermelho, C.preto)
+  }, "DESLIGADO") : u.ativo === false ? /*#__PURE__*/React.createElement("span", {
     style: S.tag("#1A2F4A", "#C7D2E4")
   }, "INATIVO") : /*#__PURE__*/React.createElement("span", {
     style: S.tag(C.verde, C.preto)
-  }, "ATIVO"), /*#__PURE__*/React.createElement("button", {
+  }, "ATIVO"), cadHandlers && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btnGhost,
+      padding: "6px 12px",
+      fontSize: 12
+    },
+    onClick: () => setFichaId(fichaId === u.id ? null : u.id)
+  }, "\uD83D\uDCCB Ficha"), /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       padding: "6px 12px",
@@ -16476,7 +18313,7 @@ function SecaoEquipe({
       vtValor: u.vtValor || 0,
       dependentes: u.dependentes || 0
     })
-  }, "Editar"), u.id !== gestorId && (u.ativo === false ? /*#__PURE__*/React.createElement("button", {
+  }, "Editar"), u.id !== gestorId && !estaDesligado(u, cadDe(u.id)) && (u.ativo === false ? /*#__PURE__*/React.createElement("button", {
     style: {
       ...S.btnGhost,
       borderColor: C.verde,
@@ -16498,7 +18335,20 @@ function SecaoEquipe({
     onClick: () => onSalvarUsuario(u.id, {
       ativo: false
     })
-  }, "Desativar")))))), /*#__PURE__*/React.createElement("div", {
+  }, "Desativar")))), fichaId === u.id && cadHandlers && /*#__PURE__*/React.createElement(FichaColaborador, {
+    key: u.id,
+    u: u,
+    cad: cadDe(u.id),
+    deps: dependentes.filter(x => x.userId === u.id),
+    hist: salHist,
+    vtLinhasDoUser: vtLinhas.filter(x => x.userId === u.id),
+    regsESocial: esocialRegs.filter(x => x.userId === u.id),
+    exames: examesOcupacionais,
+    gestorId: gestorId,
+    noBanco: cadastroNoBanco,
+    handlers: cadHandlers,
+    onFechar: () => setFichaId(null)
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.display,
       fontSize: 13,
@@ -19173,7 +21023,8 @@ function CardHoleriteItem({
   f,
   user,
   onAssinarFolha,
-  compras = []
+  compras = [],
+  vtCustoMensal = 0
 }) {
   const detalheCompras = f.compras > 0 ? comprasDoMes(compras, f.userId, f.competencia) : [];
   const [etapaAssinatura, setEtapaAssinatura] = useState(null); // null | "aguardando_arquivo"
@@ -19327,7 +21178,20 @@ function CardHoleriteItem({
       color: C.verde,
       fontSize: 16
     }
-  }, brl(f.liquido))))), detalheCompras.length > 0 && /*#__PURE__*/React.createElement("p", {
+  }, brl(f.liquido))))), f.vt > 0 && (() => {
+    const dv = dividirVT({
+      salarioBase: f.salario,
+      custoMensal: Math.max(vtCustoMensal, f.vt)
+    });
+    return /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 12,
+        color: C.cinza,
+        margin: "8px 0 0",
+        lineHeight: 1.6
+      }
+    }, "\uD83D\uDE8C Vale-transporte: voc\xEA paga at\xE9 6% do sal\xE1rio (", brl(f.vt), " neste m\xEAs)", dv.custoEmpresa > 0 ? `; a empresa paga o restante (${brl(dv.custoEmpresa)}).` : ".");
+  })(), detalheCompras.length > 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: C.cinza,
@@ -19506,7 +21370,8 @@ function TelaHolerite({
   folhasPg,
   adiantamentos,
   onAssinarFolha,
-  compras = []
+  compras = [],
+  vtCustoMensal = 0
 }) {
   const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
   const proximas = compras.filter(compraDescontavel).flatMap(c => parcelasDaCompra(c).filter(p => !folhasPg.some(f => f.status === "fechada" && f.competencia.slice(0, 7) === p.comp.slice(0, 7))).map(p => ({
@@ -19537,7 +21402,8 @@ function TelaHolerite({
     f: f,
     user: user,
     onAssinarFolha: onAssinarFolha,
-    compras: compras
+    compras: compras,
+    vtCustoMensal: vtCustoMensal
   })), adiantamentos.some(a => a.status === "pendente") && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
@@ -20568,6 +22434,21 @@ const TABELAS_OPCIONAIS = [{
 }, {
   nome: "compras_colaborador",
   para: "compras do colaborador (desconto em folha)"
+}, {
+  nome: "colaborador_cadastro",
+  para: "cadastro completo do colaborador (ficha, desligamento)"
+}, {
+  nome: "salario_historico",
+  para: "historico de salario"
+}, {
+  nome: "vale_transporte_linhas",
+  para: "linhas de onibus do vale-transporte"
+}, {
+  nome: "dependentes",
+  para: "dependentes (salario-familia e IRRF)"
+}, {
+  nome: "esocial_registros",
+  para: "pendencias da carteira digital (eSocial)"
 }];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -21129,6 +23010,277 @@ drop trigger if exists trg_compras_regras on public.compras_colaborador;
 create trigger trg_compras_regras
   before insert or update on public.compras_colaborador
   for each row execute function public.compras_colaborador_regras();
+
+-- 2026-11-12 - Cadastro completo do colaborador (ficha, salario com historico, vale-transporte,
+-- dependentes, pendencias da carteira digital/eSocial, desligamento sem apagar nada)
+--
+-- NAO rode em producao sem o dono/Claude revisar. So cria tabelas NOVAS (nao mexe em usuarios,
+-- folha_pagamento nem em nenhuma politica existente). Pode rodar de novo sem estragar nada.
+--
+-- Quem ve o que (RLS): colaborador ve so as linhas dele; gestor (is_gestor()) ve todas.
+-- Nada e apagado: nao existe policy de DELETE em nenhuma tabela. Desligar = marcar data e motivo.
+--
+-- Tabelas:
+--  1) colaborador_cadastro   ficha (1 linha por pessoa): dados pessoais, endereco, pagamento,
+--                            contato de emergencia, jornada e desligamento
+--  2) salario_historico      cada alteracao de salario (valor, vigencia, motivo, quem alterou)
+--                            + trava contra REDUCAO (CF art. 7o VI / CLT art. 468)
+--  3) vale_transporte_linhas linhas de onibus de ida e volta
+--  4) dependentes            dependentes (IRRF / salario-familia)
+--  5) esocial_registros      pendencias de S-2200 / S-2206 / S-2299 ate o gestor confirmar o envio
+--
+-- Como voltar atras: bloco "DESFAZER" no fim do arquivo.
+
+-- ============================================================
+-- 1) FICHA
+-- ============================================================
+create table if not exists public.colaborador_cadastro (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  -- dados pessoais (carteira/eSocial)
+  data_nascimento date,
+  sexo text check (sexo in ('F', 'M')),
+  raca_cor text check (raca_cor in ('branca', 'preta', 'parda', 'amarela', 'indigena', 'nao_informada')),
+  estado_civil text check (estado_civil in ('solteiro', 'casado', 'uniao_estavel', 'separado', 'divorciado', 'viuvo')),
+  grau_instrucao text check (grau_instrucao in ('fundamental', 'medio', 'superior', 'pos', 'outro')),
+  pis_nis text check (pis_nis is null or pis_nis ~ '^[0-9]{11}$'),
+  cbo text check (cbo is null or cbo ~ '^[0-9]{6}$'),
+  -- jornada
+  jornada_horas_semana numeric(4, 1) check (jornada_horas_semana is null or (jornada_horas_semana > 0 and jornada_horas_semana <= 44)),
+  jornada_descricao text check (char_length(jornada_descricao) <= 200),
+  -- endereco
+  cep text check (cep is null or cep ~ '^[0-9]{8}$'),
+  logradouro text check (char_length(logradouro) <= 120),
+  numero text check (char_length(numero) <= 12),
+  complemento text check (char_length(complemento) <= 60),
+  bairro text check (char_length(bairro) <= 80),
+  cidade text check (char_length(cidade) <= 80),
+  uf text check (uf is null or uf ~ '^[A-Z]{2}$'),
+  codigo_ibge text check (codigo_ibge is null or codigo_ibge ~ '^[0-9]{7}$'),
+  -- pagamento
+  banco text check (char_length(banco) <= 60),
+  agencia text check (char_length(agencia) <= 12),
+  conta text check (char_length(conta) <= 20),
+  pix_tipo text check (pix_tipo in ('cpf', 'celular', 'email', 'aleatoria')),
+  pix_chave text check (char_length(pix_chave) <= 80),
+  -- emergencia
+  emergencia_nome text check (char_length(emergencia_nome) <= 80),
+  emergencia_parentesco text check (char_length(emergencia_parentesco) <= 40),
+  emergencia_telefone text check (char_length(emergencia_telefone) <= 20),
+  -- vale-transporte: dias de uso por mes
+  vt_dias_mes smallint check (vt_dias_mes is null or vt_dias_mes between 0 and 31),
+  -- desligamento (nada e apagado: so marca)
+  desligado_em date,
+  motivo_desligamento text check (char_length(motivo_desligamento) <= 200),
+  atualizado_em timestamptz not null default now(),
+  check (desligado_em is null or motivo_desligamento is not null)
+);
+alter table public.colaborador_cadastro enable row level security;
+
+drop policy if exists "cadastro: ver o proprio ou todos (gestor)" on public.colaborador_cadastro;
+create policy "cadastro: ver o proprio ou todos (gestor)" on public.colaborador_cadastro
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "cadastro: criar" on public.colaborador_cadastro;
+create policy "cadastro: criar" on public.colaborador_cadastro
+  for insert to authenticated with check (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "cadastro: atualizar" on public.colaborador_cadastro;
+create policy "cadastro: atualizar" on public.colaborador_cadastro
+  for update to authenticated
+  using (usuario_id = auth.uid() or is_gestor())
+  with check (usuario_id = auth.uid() or is_gestor());
+-- Sem policy de DELETE.
+
+-- Colaborador so mexe nos dados pessoais de contato (endereco, pagamento, emergencia).
+-- Data de nascimento, PIS, CBO, jornada, VT e desligamento: so o gestor.
+create or replace function public.colaborador_cadastro_regras()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_gestor boolean := coalesce(is_gestor(), false);
+  v_livres text[] := array['cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf', 'codigo_ibge',
+    'banco', 'agencia', 'conta', 'pix_tipo', 'pix_chave',
+    'emergencia_nome', 'emergencia_parentesco', 'emergencia_telefone', 'atualizado_em'];
+begin
+  new.atualizado_em := now();
+  if v_gestor then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.usuario_id <> auth.uid() then
+      raise exception 'so o gestor cria a ficha de outra pessoa';
+    end if;
+    if new.data_nascimento is not null or new.sexo is not null or new.raca_cor is not null
+       or new.estado_civil is not null or new.grau_instrucao is not null or new.pis_nis is not null
+       or new.cbo is not null or new.jornada_horas_semana is not null or new.jornada_descricao is not null
+       or new.vt_dias_mes is not null or new.desligado_em is not null or new.motivo_desligamento is not null then
+      raise exception 'colaborador so preenche endereco, pagamento e contato de emergencia';
+    end if;
+    return new;
+  end if;
+  if new.usuario_id <> old.usuario_id then
+    raise exception 'a ficha nao muda de dono';
+  end if;
+  if (to_jsonb(new) - v_livres) <> (to_jsonb(old) - v_livres) then
+    raise exception 'colaborador so altera endereco, pagamento e contato de emergencia';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_cadastro_regras on public.colaborador_cadastro;
+create trigger trg_cadastro_regras
+  before insert or update on public.colaborador_cadastro
+  for each row execute function public.colaborador_cadastro_regras();
+
+-- ============================================================
+-- 2) SALARIO COM HISTORICO
+-- ============================================================
+create table if not exists public.salario_historico (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  valor numeric(12, 2) not null check (valor > 0 and valor <= 1000000),
+  vigencia date not null,
+  motivo text not null check (char_length(btrim(motivo)) between 3 and 200),
+  acordo_coletivo boolean not null default false,
+  alterado_por uuid not null references public.usuarios (id),
+  criado_em timestamptz not null default now()
+);
+create index if not exists salario_historico_usuario on public.salario_historico (usuario_id, vigencia desc, criado_em desc);
+alter table public.salario_historico enable row level security;
+
+drop policy if exists "salario: ver o proprio ou todos (gestor)" on public.salario_historico;
+create policy "salario: ver o proprio ou todos (gestor)" on public.salario_historico
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "salario: so o gestor lanca" on public.salario_historico;
+create policy "salario: so o gestor lanca" on public.salario_historico
+  for insert to authenticated with check (is_gestor() and alterado_por = auth.uid());
+-- Sem UPDATE e sem DELETE: historico de salario nunca e reescrito (corrige-se lancando outra linha).
+
+create or replace function public.salario_historico_regras()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_anterior numeric(12, 2);
+begin
+  new.alterado_por := auth.uid();
+  new.criado_em := now();
+  -- salario vigente na data da nova vigencia (ultima linha com vigencia <= nova)
+  select valor into v_anterior
+    from public.salario_historico
+   where usuario_id = new.usuario_id and vigencia <= new.vigencia
+   order by vigencia desc, criado_em desc
+   limit 1;
+  if v_anterior is not null and new.valor < v_anterior and not new.acordo_coletivo then
+    raise exception 'reducao de salario nao e permitida (CF art. 7o VI, CLT art. 468) sem acordo ou convencao coletiva';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_salario_regras on public.salario_historico;
+create trigger trg_salario_regras
+  before insert on public.salario_historico
+  for each row execute function public.salario_historico_regras();
+
+-- ============================================================
+-- 3) VALE-TRANSPORTE
+-- ============================================================
+create table if not exists public.vale_transporte_linhas (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  sentido text not null check (sentido in ('ida', 'volta')),
+  linha text not null check (char_length(btrim(linha)) between 1 and 60),
+  valor_passagem numeric(8, 2) not null check (valor_passagem > 0 and valor_passagem <= 200),
+  ativo boolean not null default true,
+  criado_em timestamptz not null default now()
+);
+create index if not exists vt_linhas_usuario on public.vale_transporte_linhas (usuario_id);
+alter table public.vale_transporte_linhas enable row level security;
+
+drop policy if exists "vt: ver o proprio ou todos (gestor)" on public.vale_transporte_linhas;
+create policy "vt: ver o proprio ou todos (gestor)" on public.vale_transporte_linhas
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "vt: so o gestor cria" on public.vale_transporte_linhas;
+create policy "vt: so o gestor cria" on public.vale_transporte_linhas
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "vt: so o gestor altera" on public.vale_transporte_linhas;
+create policy "vt: so o gestor altera" on public.vale_transporte_linhas
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+-- Sem DELETE: linha que saiu de uso fica com ativo = false.
+
+-- ============================================================
+-- 4) DEPENDENTES
+-- ============================================================
+create table if not exists public.dependentes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  nome text not null check (char_length(btrim(nome)) between 2 and 100),
+  parentesco text not null check (parentesco in ('filho', 'conjuge', 'outro')),
+  data_nascimento date not null,
+  cpf text check (cpf is null or cpf ~ '^[0-9]{11}$'),
+  irrf boolean not null default true,
+  salario_familia boolean not null default false,
+  ativo boolean not null default true,
+  criado_em timestamptz not null default now()
+);
+create index if not exists dependentes_usuario on public.dependentes (usuario_id);
+alter table public.dependentes enable row level security;
+
+drop policy if exists "dependentes: ver o proprio ou todos (gestor)" on public.dependentes;
+create policy "dependentes: ver o proprio ou todos (gestor)" on public.dependentes
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "dependentes: so o gestor cria" on public.dependentes;
+create policy "dependentes: so o gestor cria" on public.dependentes
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "dependentes: so o gestor altera" on public.dependentes;
+create policy "dependentes: so o gestor altera" on public.dependentes
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+
+-- ============================================================
+-- 5) CARTEIRA DIGITAL / eSOCIAL (pendencias)
+-- ============================================================
+create table if not exists public.esocial_registros (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  evento text not null check (evento in ('S-2200', 'S-2206', 'S-2299')),
+  data_fato date not null,
+  descricao text check (char_length(descricao) <= 200),
+  status text not null default 'pendente' check (status in ('pendente', 'enviado')),
+  recibo text check (char_length(recibo) <= 60),
+  enviado_em timestamptz,
+  enviado_por uuid references public.usuarios (id),
+  criado_em timestamptz not null default now(),
+  unique (usuario_id, evento, data_fato)
+);
+create index if not exists esocial_registros_status on public.esocial_registros (status, data_fato);
+alter table public.esocial_registros enable row level security;
+
+drop policy if exists "esocial: ver o proprio ou todos (gestor)" on public.esocial_registros;
+create policy "esocial: ver o proprio ou todos (gestor)" on public.esocial_registros
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "esocial: so o gestor cria" on public.esocial_registros;
+create policy "esocial: so o gestor cria" on public.esocial_registros
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "esocial: so o gestor confirma" on public.esocial_registros;
+create policy "esocial: so o gestor confirma" on public.esocial_registros
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+
+-- ---------- DESFAZER (so se precisar; nao rode junto) ----------
+-- drop table if exists public.esocial_registros;
+-- drop table if exists public.dependentes;
+-- drop table if exists public.vale_transporte_linhas;
+-- drop trigger if exists trg_salario_regras on public.salario_historico;
+-- drop function if exists public.salario_historico_regras();
+-- drop table if exists public.salario_historico;
+-- drop trigger if exists trg_cadastro_regras on public.colaborador_cadastro;
+-- drop function if exists public.colaborador_cadastro_regras();
+-- drop table if exists public.colaborador_cadastro;
 `;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
@@ -21858,7 +24010,8 @@ function TelaGestor({
   aceites,
   ajustes = [],
   onDecidirAjuste,
-  demo
+  demo,
+  cadastrosPack = null
 }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({
     u,
@@ -22297,13 +24450,14 @@ function TelaGestor({
     }, "SEM DADOS") : /*#__PURE__*/React.createElement("span", {
       style: S.tag(C.verde, C.preto)
     }, "OK")));
-  })))), /*#__PURE__*/React.createElement(SecaoEquipe, {
+  })))), /*#__PURE__*/React.createElement(SecaoEquipe, _extends({
     usuarios: usuarios,
     convites: convites,
     onCriarConvite: onCriarConvite,
     onSalvarUsuario: onSalvarUsuario,
-    gestorId: gestorId
-  }), /*#__PURE__*/React.createElement(SecaoFolgas, {
+    gestorId: gestorId,
+    examesOcupacionais: examesOcupacionais
+  }, cadastrosPack || {})), /*#__PURE__*/React.createElement(SecaoFolgas, {
     folgas: folgas,
     usuarios: usuarios,
     registros: registros,

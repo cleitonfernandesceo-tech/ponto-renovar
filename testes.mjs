@@ -59,7 +59,7 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas,
   VT_LIMITE_PCT, cpfValido, fmtCPF, pisValido, cepValido, fmtCEP, enderecoDoViaCEP, salarioVigenteEm, salarioDoMes,
   validarAlteracaoSalario, custoVT, dividirVT, dependentesIRRF, prazoESocial, mapCadastro, estaDesligado,
-  faltaNoCadastro, resumoESocial, MOTIVOS_DESLIGAMENTO };`;
+  faltaNoCadastro, resumoESocial, MOTIVOS_DESLIGAMENTO, asoDoColaborador };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1419,6 +1419,18 @@ secao("Jornada de 42h desde 16/12/2026 (fim da escala 6x1, pedido do dono 06/11/
   t("resumo S-2200 incompleto aponta o que falta", !r0.completo && r0.faltando.includes("CPF") && r0.texto.includes("FALTA PREENCHER"));
   const rs = m.resumoESocial("S-2206", { u: { id: "u", nome: "Ana", cpf: "52998224725" }, hist: h, novoSalario: 2500, dataFato: "2026-08-01", motivo: "reajuste" });
   t("resumo S-2206 mostra novo e anterior", rs.texto.includes("2.500") && rs.texto.includes("2.300"));
+  const ex = [{ userId: "u", tipo: "periodico", status: "realizado", data: "2026-01-10", tipoLabel: "Periódico" }];
+  t("ASO em dia", m.asoDoColaborador(ex, "u", new Date("2026-06-01T10:00:00")).situacao === "em_dia");
+  t("ASO vencendo em 30 dias", m.asoDoColaborador(ex, "u", new Date("2026-12-20T10:00:00")).situacao === "vencendo");
+  t("ASO vencido depois de 12 meses", m.asoDoColaborador(ex, "u", new Date("2027-02-01T10:00:00")).situacao === "vencido");
+  t("sem exame avisa", m.asoDoColaborador([], "u").situacao === "sem_exame");
+  const mig = readFileSync("supabase/migrations/20261112180000_cadastro_colaborador.sql", "utf8");
+  t("migração: toda tabela nova com RLS e sem policy de DELETE", ["colaborador_cadastro", "salario_historico", "vale_transporte_linhas", "dependentes", "esocial_registros"].every((tb) => new RegExp("alter table public\." + tb + " enable row level security").test(mig)) && !/for delete/i.test(mig));
+  t("migração embutida no diagnóstico do app", src.includes("create table if not exists public.colaborador_cadastro") && src.includes('nome: "esocial_registros"'));
+  t("folha usa salário do mês quando há histórico", src.includes("salarioDoMes(historicoSalario, u.id, comp"));
+  t("CEP: CSP libera só o viacep", readFileSync("index.html", "utf8").includes("connect-src 'self' https://bdbxjdkjeeobaxulfqkb.supabase.co https://*.supabase.co https://viacep.com.br;"));
+  t("ficha: desligar e mostrar desligados existem", src.includes("Mostrar desligados") && src.includes("Desligar colaborador") && src.includes("Registrar na carteira"));
+  t("nenhum log leva CPF/Pix/endereço", !/log\("cadastro_[a-z]+", `[^`]*(pixChave|\.cpf|cpf\))/.test(src));
 }
 
 console.log(`\n${"═".repeat(62)}`);
