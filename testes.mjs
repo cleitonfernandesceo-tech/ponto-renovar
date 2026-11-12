@@ -56,7 +56,10 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin,
   validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo,
   COMPRA_MAX_PARCELAS, compMais, primeiraCompDaCompra, mapCompra, validarCompra, parcelasDaCompra,
-  compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas };`;
+  compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas,
+  VT_LIMITE_PCT, cpfValido, fmtCPF, pisValido, cepValido, fmtCEP, enderecoDoViaCEP, salarioVigenteEm, salarioDoMes,
+  validarAlteracaoSalario, custoVT, dividirVT, dependentesIRRF, prazoESocial, mapCadastro, estaDesligado,
+  faltaNoCadastro, resumoESocial, MOTIVOS_DESLIGAMENTO, asoDoColaborador };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1376,6 +1379,58 @@ secao("Jornada de 42h desde 16/12/2026 (fim da escala 6x1, pedido do dono 06/11/
   t("servidor: quarta nova abre às 8h30 (aviso 8h35 e 9h35)", srv.etapaDaHora("2026-12-23", 3, 8, 35) === "ent8" && srv.etapaDaHora("2026-12-23", 3, 9, 35) === "ent9" && srv.etapaDaHora("2026-12-23", 3, 8, 5) === undefined);
   t("servidor: sábado novo não avisa entrada", srv.etapaDaHora("2026-12-19", 6, 8, 5) === undefined);
   t("servidor: dia sem expediente não manda lembrete", fnPush.includes('ignorado: "dia sem expediente"'));
+}
+
+
+{
+  secao("Cadastro do colaborador (salário, VT, eSocial, desligamento)");
+  const e = m.enderecoDoViaCEP({ logradouro: "Rua A", bairro: "Centro", localidade: "Belo Horizonte", uf: "mg", ibge: "3106200" });
+  t("CPF válido e inválido", m.cpfValido("529.982.247-25") && !m.cpfValido("111.111.111-11") && !m.cpfValido("123"));
+  t("PIS válido e inválido", m.pisValido("12345678919") && !m.pisValido("12345678911"));
+  t("CEP formata", m.fmtCEP("30130010") === "30130-010" && m.cepValido("30130-010") && !m.cepValido("123"));
+  t("ViaCEP vira endereço e erro vira null", e.cidade === "Belo Horizonte" && e.uf === "MG" && e.codigoIbge === "3106200" && m.enderecoDoViaCEP({ erro: true }) === null);
+  const h = [{ userId: "u", valor: 2000, vigencia: "2026-01-01", criadoEm: "1" }, { userId: "u", valor: 2300, vigencia: "2026-06-16", criadoEm: "2" }];
+  t("salário vigente por data", m.salarioVigenteEm(h, "u", "2026-06-15", 0) === 2000 && m.salarioVigenteEm(h, "u", "2026-06-16", 0) === 2300 && m.salarioVigenteEm([], "u", "2026-06-16", 999) === 999);
+  t("folha: sem histórico não muda nada", m.salarioDoMes([], "u", "2026-06", 1800) === 1800);
+  t("folha: mês inteiro no mesmo valor", m.salarioDoMes(h, "u", "2026-05", 0) === 2000 && m.salarioDoMes(h, "u", "2026-07", 0) === 2300);
+  t("folha: mudança no meio do mês faz média por dias", m.salarioDoMes(h, "u", "2026-06", 0) === 2150);
+  const base = { hist: h, userId: "u", motivo: "ajuste", salarioAtual: 2300 };
+  const red = m.validarAlteracaoSalario({ ...base, valor: 2000, vigencia: "2026-08-01" });
+  t("redução sem acordo é bloqueada e cita a lei", !red.ok && red.reducao && /468/.test(red.erro) && /7º/.test(red.erro));
+  t("redução com acordo coletivo passa", m.validarAlteracaoSalario({ ...base, valor: 2000, vigencia: "2026-08-01", acordo: true }).ok);
+  t("aumento passa", m.validarAlteracaoSalario({ ...base, valor: 2500, vigencia: "2026-08-01" }).ok);
+  t("exige motivo e data", !m.validarAlteracaoSalario({ ...base, valor: 2500, vigencia: "2026-08-01", motivo: "" }).ok && !m.validarAlteracaoSalario({ ...base, valor: 2500, vigencia: "" }).ok);
+  const vt = m.custoVT([{ valor: 5, ativo: true }, { valor: 5.5, ativo: true }, { valor: 9, ativo: false }], 22);
+  t("custo de VT: 10,50 por dia x 22 = 231", vt.porDia === 10.5 && vt.custoMensal === 231 && vt.linhas === 2);
+  const dv = m.dividirVT({ salarioBase: 2000, custoMensal: 231 });
+  t("VT: colaborador paga no máximo 6% (120) e a empresa o resto (111)", dv.descontoColaborador === 120 && dv.custoEmpresa === 111);
+  const dv2 = m.dividirVT({ salarioBase: 2000, custoMensal: 80 });
+  t("VT barato: desconta só o custo, empresa 0", dv2.descontoColaborador === 80 && dv2.custoEmpresa === 0);
+  t("dependentes IRRF contam só ativos marcados", m.dependentesIRRF([{ irrf: true }, { irrf: true, ativo: false }, { irrf: false }]) === 1);
+  t("prazo S-2200: dia anterior, fim de semana antecipa para sexta", m.prazoESocial("S-2200", "2026-11-16") === "2026-11-13");
+  t("prazo S-2206: dia 15 do mês seguinte", m.prazoESocial("S-2206", "2026-11-20") === "2026-12-15");
+  t("prazo S-2299: 10 dias corridos", m.prazoESocial("S-2299", "2026-11-20") === "2026-11-30");
+  t("desligado: pela ficha ou por inativo", m.estaDesligado({}, { desligadoEm: "2026-11-01" }) && m.estaDesligado({ ativo: false }, null) && !m.estaDesligado({ ativo: true }, {}));
+  const falta = m.faltaNoCadastro({ cpf: "" }, {}, []);
+  t("lista o que falta no cadastro", falta.includes("CPF") && falta.includes("endereço completo") && falta.includes("contato de emergência"));
+  const r = m.resumoESocial("S-2299", { u: { nome: "Ana", cpf: "52998224725", matricula: "7" }, cad: { desligadoEm: "2026-11-20", motivoDesligamento: "pedido_demissao" }, dataFato: "2026-11-20" });
+  t("resumo S-2299 traz CPF, prazo e está completo", r.completo && r.texto.includes("529.982.247-25") && r.texto.includes("Prazo de envio") && r.prazo === "2026-11-30");
+  const r0 = m.resumoESocial("S-2200", { u: { nome: "Ana", cpf: "" }, cad: {}, dataFato: "2026-11-16" });
+  t("resumo S-2200 incompleto aponta o que falta", !r0.completo && r0.faltando.includes("CPF") && r0.texto.includes("FALTA PREENCHER"));
+  const rs = m.resumoESocial("S-2206", { u: { id: "u", nome: "Ana", cpf: "52998224725" }, hist: h, novoSalario: 2500, dataFato: "2026-08-01", motivo: "reajuste" });
+  t("resumo S-2206 mostra novo e anterior", rs.texto.includes("2.500") && rs.texto.includes("2.300"));
+  const ex = [{ userId: "u", tipo: "periodico", status: "realizado", data: "2026-01-10", tipoLabel: "Periódico" }];
+  t("ASO em dia", m.asoDoColaborador(ex, "u", new Date("2026-06-01T10:00:00")).situacao === "em_dia");
+  t("ASO vencendo em 30 dias", m.asoDoColaborador(ex, "u", new Date("2026-12-20T10:00:00")).situacao === "vencendo");
+  t("ASO vencido depois de 12 meses", m.asoDoColaborador(ex, "u", new Date("2027-02-01T10:00:00")).situacao === "vencido");
+  t("sem exame avisa", m.asoDoColaborador([], "u").situacao === "sem_exame");
+  const mig = readFileSync("supabase/migrations/20261112180000_cadastro_colaborador.sql", "utf8");
+  t("migração: toda tabela nova com RLS e sem policy de DELETE", ["colaborador_cadastro", "salario_historico", "vale_transporte_linhas", "dependentes", "esocial_registros"].every((tb) => new RegExp("alter table public\." + tb + " enable row level security").test(mig)) && !/for delete/i.test(mig));
+  t("migração embutida no diagnóstico do app", src.includes("create table if not exists public.colaborador_cadastro") && src.includes('nome: "esocial_registros"'));
+  t("folha usa salário do mês quando há histórico", src.includes("salarioDoMes(historicoSalario, u.id, comp"));
+  t("CEP: CSP libera só o viacep", readFileSync("index.html", "utf8").includes("connect-src 'self' https://bdbxjdkjeeobaxulfqkb.supabase.co https://*.supabase.co https://viacep.com.br;"));
+  t("ficha: desligar e mostrar desligados existem", src.includes("Mostrar desligados") && src.includes("Desligar colaborador") && src.includes("Registrar na carteira"));
+  t("nenhum log leva CPF/Pix/endereço", !/log\("cadastro_[a-z]+", `[^`]*(pixChave|\.cpf|cpf\))/.test(src));
 }
 
 console.log(`\n${"═".repeat(62)}`);
