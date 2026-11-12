@@ -3772,6 +3772,139 @@ function asoDoColaborador(exames = [], userId, hoje = new Date()) {
   return { ultimo, validade, dias, situacao: dias < 0 ? "vencido" : dias <= ASO_AVISO_DIAS ? "vencendo" : "em_dia", agendado };
 }
 
+/* --------- Termo de responsabilidade do REP-P (Portaria MTP 671/2021, art. 78 e Anexo VII) ---------
+   Modelo pronto para o dono revisar e assinar. O app NAO assina por ninguem: so monta o texto do Anexo VII
+   com os dados que ja existem (CONFIG_FISCAL) e lista o que falta (numero do INPI, nomes e CPF dos signatarios).
+   Os signatarios sao o responsavel legal e o responsavel tecnico da empresa DESENVOLVEDORA (aqui, a propria
+   Renovar Tech, que tambem e a empresa usuaria). Deve ficar disponivel para a Inspecao do Trabalho. */
+function termoREPP(cfg = CONFIG_FISCAL, extra = {}) {
+  const nr = soDigitos(cfg.nrInpi || "");
+  const inpiOk = nr.length > 0 && !/^0+$/.test(nr);
+  const legal = extra.responsavelLegal || {}, tec = extra.responsavelTecnico || {};
+  const campos = [
+    ["Tipo do REP/PTRP", "REP-P"],
+    ["Marca do equipamento", "N/A"], ["Modelo do equipamento", "N/A"], ["Certificado de conformidade", "N/A"], ["Número de fabricação", "N/A"],
+    ["Número de registro no INPI", inpiOk ? nr : ""],
+    ["Identificador do programa", cfg.ptrp?.nome || ""],
+    ["Versão do programa", extra.versao || cfg.ptrp?.versao || ""],
+    ["Assinatura eletrônica (somente REP-C)", "N/A"], ["Chave pública", "N/A"], ["Algoritmo de criptografia assimétrica", "N/A"],
+    ["Algoritmo de hash", "SHA-256"],
+  ];
+  const destinataria = [["Razão social", cfg.razaoSocial || ""], ["CNPJ", fmtCNPJ(cfg.idtEmpregador)]];
+  const assinantes = [
+    ["Responsável legal — nome", legal.nome || ""], ["Responsável legal — CPF", legal.cpf || ""],
+    ["Responsável técnico — nome", tec.nome || ""], ["Responsável técnico — CPF", tec.cpf || ""],
+  ];
+  const faltando = [...campos, ...assinantes].filter(([, v]) => !v).map(([k]) => k);
+  const intro = `Na qualidade de responsável técnico e de responsável legal da empresa ${cfg.razaoSocial || ""} (CNPJ ${fmtCNPJ(cfg.idtDesenv)}), os signatários abaixo, em atenção ao art. 78 da Portaria MTP nº 671/2021, atestam e declaram que o programa identificado abaixo está em conformidade com a Portaria MTP nº 671/2021.`;
+  const fecho = "Declaramos ainda que estamos cientes das consequências legais, cíveis e criminais quanto à falsa declaração, falso atestado e falsidade ideológica. Reiteramos ao usuário que este documento deve ficar disponível para pronta apresentação à Inspeção do Trabalho.";
+  const texto = ["ATESTADO TÉCNICO E TERMO DE RESPONSABILIDADE (Anexo VII da Portaria MTP 671/2021)", "", intro, "",
+    ...campos.map(([k, v]) => `${k}: ${v || "(PREENCHER)"}`), "", fecho, "", "Empresa/pessoa destinatária:",
+    ...destinataria.map(([k, v]) => `${k}: ${v}`), "", ...assinantes.map(([k, v]) => `${k}: ${v || "(PREENCHER)"}`)].join("\n");
+  return { intro, campos, destinataria, assinantes, fecho, faltando, completo: faltando.length === 0, texto };
+}
+function fmtCNPJ(v) {
+  const d = soDigitos(v || "");
+  return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : String(v || "");
+}
+function pdfTermoREPP(t) {
+  const p = pdfPagina();
+  const x0 = 48, larg = 499;
+  let y = 56;
+  const quebra = (s, size, bold) => {
+    const out = []; let atual = "";
+    for (const pal of String(s).split(" ")) {
+      const tent = atual ? atual + " " + pal : pal;
+      if (pdfLargura(tent, size, bold) > larg && atual) { out.push(atual); atual = pal; } else atual = tent;
+    }
+    if (atual) out.push(atual);
+    return out;
+  };
+  p.centro(297.5, y, "ATESTADO TÉCNICO E TERMO DE RESPONSABILIDADE", 13, true); y += 16;
+  p.centro(297.5, y, "Anexo VII da Portaria MTP nº 671/2021", 9); y += 26;
+  for (const l of quebra(t.intro, 10)) { p.txt(x0, y, l, 10); y += 14; }
+  y += 8;
+  for (const [k, v] of t.campos) { p.txt(x0, y, k + ":", 9.5, true); p.txt(x0 + 210, y, v || "(PREENCHER)", 9.5); y += 14; }
+  y += 8;
+  for (const l of quebra(t.fecho, 9.5)) { p.txt(x0, y, l, 9.5); y += 13; }
+  y += 12;
+  p.txt(x0, y, "Empresa/pessoa destinatária", 10, true); y += 15;
+  for (const [k, v] of t.destinataria) { p.txt(x0, y, k + ":", 9.5, true); p.txt(x0 + 210, y, v, 9.5); y += 14; }
+  y += 40;
+  for (const [i, [nome, cpf]] of [[t.assinantes[0], t.assinantes[1]], [t.assinantes[2], t.assinantes[3]]].entries()) {
+    p.linha(x0 + 20, y, x0 + 260, y); p.txt(x0 + 20, y + 12, "Responsável " + (i === 0 ? "legal" : "técnico") + ": " + (nome[1] || "____________________"), 9);
+    p.txt(x0 + 20, y + 25, "CPF: " + (cpf[1] || "______________"), 9); y += 60;
+  }
+  p.txt(x0, 790, "Gerado pelo Ponto Renovar. Modelo para revisão e assinatura do responsável; não vale sem assinatura.", 7);
+  return pdfArquivo([p.conteudo()]);
+}
+
+/* --------- Pacote do contador (uma competencia) ---------
+   Junta numa so planilha (CSV em Latin-1 como as outras planilhas do app, abre direto no Excel) e num PDF o que a contabilidade pede:
+   folha por pessoa (bruto, INSS, IRRF, FGTS, liquido), provisao de 13o e ferias e os prazos legais.
+   Tudo vem da folha ja calculada no app (folhasPg); nada novo e inventado aqui. */
+function pacoteContador({ usuarios = [], folhasPg = [], comp = "", regime = "simples" } = {}) {
+  const c7 = String(comp).slice(0, 7);
+  const doMes = (folhasPg || []).filter((f) => String(f.competencia || "").slice(0, 7) === c7);
+  const nome = (id) => (usuarios.find((u) => u.id === id) || {}).nome || "";
+  const aliq = TABELAS_2026.fgtsPatronal;
+  const cab = ["Competencia", "Matricula", "Colaborador", "CPF", "Bruto", "Faltas+Atrasos", "BaseFGTS", "FGTS 8%", "INSS retido", "IRRF retido", "Liquido", "Prov 13o", "Prov ferias", "Prov 1/3 ferias", "Status"];
+  const n = (v) => String(r2(+v || 0)).replace(".", ",");
+  const linhas = doMes.map((f) => {
+    const u = usuarios.find((x) => x.id === f.userId) || {};
+    const bruto = +f.salario || 0;
+    const base = r2(bruto - (+f.faltas || 0) - (+f.atrasos || 0));
+    return [c7, u.matricula || "", nome(f.userId), u.cpf ? fmtCPF(u.cpf) : "", n(bruto), n((+f.faltas || 0) + (+f.atrasos || 0)), n(base), n(base * aliq),
+      n(f.inss), n(f.irrf), n(f.liquido), n(bruto / 12), n(bruto / 12), n(bruto / 36), f.status || ""];
+  });
+  const custo = custoDaEquipe(doMes, regime);
+  const totais = ["TOTAL", "", `${doMes.length} pessoa(s)`, "", n(custo.bruto), "", "", n(custo.fgts), n(custo.inssRetido), n(custo.irrfRetido), n(custo.liquido), n(custo.decimo), n(custo.ferias), n(custo.tercoFerias), ""];
+  const ano = c7.slice(0, 4), mes = +c7.slice(5, 7);
+  const notas = [
+    "FGTS: recolher até o dia 20 do mês seguinte (guia pelo Conectividade Social/eSocial).",
+    "INSS e IRRF retidos: entram na DCTFWeb/guia DARF pelo eSocial; confirme vencimentos com o contador.",
+    `13º salário: 1ª parcela até 30/11/${ano}; 2ª parcela até 20/12/${ano}; FGTS do 13º vai na guia de dezembro (Lei 4.749/65).`,
+    "Férias: pagar até 2 dias antes do início do gozo, com o terço constitucional (CLT art. 145).",
+    "Provisões: 1/12 do bruto para o 13º, 1/12 para férias e 1/36 para o terço (valor para guardar, não para pagar agora).",
+    ...(mes === 11 || mes === 12 ? [`Atenção: competência ${String(mes).padStart(2, "0")}/${ano} tem prazo de 13º salário.`] : []),
+    "Conferência gerencial. Não substitui a folha oficial do contador.",
+  ];
+  const csv = [cab, ...linhas, totais].map((l) => l.join(";")).join("\r\n") + "\r\n\r\n" + notas.join("\r\n") + "\r\n";
+  return { comp: c7, cab, linhas, totais, custo, notas, csv, vazio: doMes.length === 0 };
+}
+function pdfPacoteContador(pc, empresa = EMPRESA) {
+  const p = pdfPagina();
+  const x0 = 36;
+  p.txt(x0, 50, "PACOTE DO CONTADOR — " + rotuloComp(pc.comp), 13, true);
+  p.txt(x0, 64, `${empresa.nome} · CNPJ ${empresa.cnpj}`, 9);
+  const colunas = [["Colaborador", 36, 0], ["Bruto", 190, 1], ["FGTS", 245, 1], ["INSS", 295, 1], ["IRRF", 345, 1], ["Líquido", 400, 1], ["Prov.13º", 455, 1], ["Prov.Fér+1/3", 523, 1]];
+  let y = 90;
+  p.fundo(x0, y - 11, 523, 15, 0.88);
+  for (const [t, x, d] of colunas) d ? p.dir(x + 38, y, t, 8, true) : p.txt(x, y, t, 8, true);
+  y += 15;
+  const val = (s) => String(s);
+  for (const l of pc.linhas) {
+    p.txt(36, y, String(l[2]).slice(0, 30), 8.5);
+    [[4, 190], [7, 245], [8, 295], [9, 345], [10, 400], [11, 455]].forEach(([i, x]) => p.dir(x + 38, y, val(l[i]), 8.5));
+    p.dir(523 + 38, y, val(String((+l[12].replace(",", ".") + +l[13].replace(",", ".")).toFixed(2)).replace(".", ",")), 8.5);
+    y += 13;
+  }
+  p.linha(x0, y - 8, 559, y - 8);
+  const T = pc.totais;
+  p.txt(36, y + 4, "TOTAL", 8.5, true);
+  [[4, 190], [7, 245], [8, 295], [9, 345], [10, 400], [11, 455]].forEach(([i, x]) => p.dir(x + 38, y + 4, val(T[i]), 8.5, true));
+  y += 34;
+  p.txt(x0, y, "Custo da equipe no mês", 10, true); y += 14;
+  const c = pc.custo;
+  for (const [k, v] of [["Bruto", c.bruto], ["Encargos (FGTS" + (c.inssPatronal ? "+INSS patronal+RAT+terceiros" : "") + ")", c.encargos], ["Provisões (13º + férias + 1/3 + encargos)", c.provisoes], ["Custo total com provisões", c.custoTotal]]) {
+    p.txt(x0, y, k, 9); p.dir(400, y, brl(v), 9); y += 13;
+  }
+  y += 10;
+  p.txt(x0, y, "Prazos e observações", 10, true); y += 14;
+  for (const nota of pc.notas) { p.txt(x0, y, "• " + nota.slice(0, 120), 8); y += 12; }
+  return pdfArquivo([p.conteudo()]);
+}
+
 /* ================= UI base ================= */
 /* Paleta "alta performance" v2 — azul-marinho (base), laranja neon (ações/destaque),
    marrom escuro (superfícies secundárias: inputs/painéis internos), branco (texto).
@@ -4060,6 +4193,7 @@ function AppInterno() {
   const lembretesDisparados = useRef({});
   const [conviteToken] = useState(() => { try { return new URLSearchParams(window.location.search).get("convite"); } catch { return null; } });
   const [tela, setTela] = useState(telaInicial);
+  const [maisAberto, setMaisAberto] = useState(false); // menu do colaborador: so 4 itens + "Mais"
   const [fluxoPonto, setFluxoPonto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [comprovante, setComprovante] = useState(null);
@@ -5940,10 +6074,14 @@ function AppInterno() {
   // Gestor não coleta biometria/geo pra si, então não é bloqueado.
   if (user.papel !== "gestor" && !user.consentimentoLGPD) return <GateConsentimentoLGPD user={user} onAceitar={() => consentir(true)} onSair={sair} />;
 
+  /* Menu enxuto (pedido do dono, 11/11/2026): o colaborador ve so o essencial; nada foi removido, o resto esta em
+     "Meus pedidos" (justificar, atestado, ferias, banco de horas, compras) e em "Mais". */
+  const PEDIDOS_TELAS = [["justificar", "✍️ Explicar uma falta"], ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["compras", "🛍 Minhas compras"]];
+  const MAIS_TELAS = [["cadastro", "📇 Meu cadastro"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"], ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"]];
+  const emPedidos = tela === "pedidos" || PEDIDOS_TELAS.some(([k]) => k === tela);
+  const emMais = MAIS_TELAS.some(([k]) => k === tela);
   const menu = [
-    ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meus horários"], ["justificar", "✍️ Explicar uma falta"],
-    ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["cadastro", "📇 Meu cadastro"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"],
-            ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
+    ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meu espelho"], ["pedidos", "📨 Meus pedidos"], ["holerite", "💰 Contracheque"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
 
@@ -6054,8 +6192,12 @@ function AppInterno() {
               : <span style={S.tag(C.grafite, C.verde)}>● conectado</span>}
           </div>
           <div className="menu" role="navigation" aria-label="Menu principal" style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 6 }}>
-            {menu.map(([k, label]) => (
-              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#2A4568" }}>{label}</button>
+            {menu.map(([k, label]) => { const ativo = k === "pedidos" ? emPedidos : tela === k; return (
+              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", background: ativo ? C.grafite : "transparent", borderColor: ativo ? C.amarelo : "#2A4568" }}>{label}</button>
+            ); })}
+            <button aria-expanded={maisAberto || emMais} onClick={() => setMaisAberto((v) => !v)} style={{ ...S.btnGhost, textAlign: "left", background: "transparent", borderColor: "#2A4568", color: C.cinza }}>{(maisAberto || emMais) ? "▾ Mais" : "▸ Mais"}</button>
+            {(maisAberto || emMais) && MAIS_TELAS.map(([k, label]) => (
+              <button key={k} onClick={() => setTela(k)} style={{ ...S.btnGhost, textAlign: "left", fontSize: 13, background: tela === k ? C.grafite : "transparent", borderColor: tela === k ? C.amarelo : "#2A4568" }}>{label}</button>
             ))}
           </div>
           <div className="perfil" style={{ marginTop: 26, borderTop: "1px solid #1E3450", paddingTop: 14 }}>
@@ -6143,6 +6285,8 @@ function AppInterno() {
             <BannerSaidasAuto pendencias={saidasPend.filter(p => p.userId === user.id && !p.confirmada)} onConfirmar={confirmarSaida} onCorrigir={corrigirSaida} />
           )}
           {salvando && <div style={{ ...S.card, marginBottom: 14, padding: 10, fontSize: 13, color: C.cinza }}>⏳ Salvando no banco…</div>}
+          {PEDIDOS_TELAS.some(([k]) => k === tela) && <button className="no-print" style={{ ...S.btnGhost, marginBottom: 12, padding: "6px 12px", fontSize: 12 }} onClick={() => setTela("pedidos")}>← Meus pedidos</button>}
+          {tela === "pedidos" && <TelaPedidos itens={PEDIDOS_TELAS} onIr={setTela} />}
           {tela === "ponto" && <TelaPonto {...{ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto, geo, comprovante, iniciarBatida, concluirBatida, locais, bloqueioGeo, notifStatus, onPedirNotif: pedirPermissaoNotif, credenciais: credenciais.filter(c => c.userId === user.id), onIrConfigurar: () => setTela("lgpd"), onAbrirRoteiro: () => setTela("time"), acoes, onAlternarCombinado: alternarCombinado, token: sessao?.token, demo, onRegistrarSemLocalizacao: registrarSemLocalizacao, respostas: rit.respostas || [], salas, presencas, presencaNoBanco, onEntrarSala: entrarNaSala }} />}
           {tela === "espelho" && <TelaEspelho user={user} registros={registros} exportarAFD={exportarAFD} exportarAEJ={exportarAEJ} aceites={aceites} onAceitar={salvarAceite} ajustes={ajustes.filter((a) => a.userId === user.id)} onPedirAjuste={pedirAjuste} />}
           {tela === "justificar" && <TelaJustificar {...{ user, justificativas, onEnviar: enviarJustificativa }} />}
@@ -6778,7 +6922,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
               <div style={{ ...S.display, color: comprovante.pendente ? C.cinza : C.verde, fontSize: 15 }}>
                 {comprovante.pendente ? "⏳ Registrado no aparelho — envio pendente" : "✔ Registro confirmado no servidor"}
               </div>
-              <div style={{ ...S.display, color: C.amarelo, fontSize: 13, marginTop: 2 }}>Comprovante (Portaria 671/2021)</div>
+              <div style={{ ...S.display, color: C.amarelo, fontSize: 13, marginTop: 2 }}>Comprovante de Registro de Ponto do Trabalhador</div>
               {comprovante.pendente && (
                 <div style={{ fontSize: 12, color: C.branco, background: "#3A2A08", borderRadius: 8, padding: 10, marginTop: 8, lineHeight: 1.55 }}>
                   Sua batida foi salva <b>neste aparelho</b> com o horário de agora e será enviada automaticamente quando a rede voltar.
@@ -6788,7 +6932,9 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
               <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.7 }}>
                 NSR: <b>{String(comprovante.nsr).padStart(9, "0")}</b><br />
                 {EMPRESA.nome} · CNPJ {EMPRESA.cnpj}<br />
-                Colaborador: {user.nome}<br />
+                Local: {EMPRESA.endereco}<br />
+                Colaborador: {user.nome}{cpfValido(user.cpf) ? ` · CPF ${fmtCPF(user.cpf)}` : ""}<br />
+                Programa (REP-P): {CONFIG_FISCAL.ptrp.nome} {CONFIG_FISCAL.ptrp.versao} · INPI {/^0*$/.test(CONFIG_FISCAL.nrInpi) ? "registro em andamento" : CONFIG_FISCAL.nrInpi}<br />
                 Marcação: <b>{comprovante.tipo.toUpperCase()}</b> em {fmtDataHora(comprovante.ts)}<br />
                 Geo: {comprovante.lat != null ? `${comprovante.lat}, ${comprovante.lng}` : (comprovante.geoStatus === "dispensado_por_falha" ? "sem localização (justificada) ⚠️" : comprovante.geoStatus === "sem_geofence" ? "não exigida" : "indisponível")}{geo?.local ? ` · dentro do raio de "${geo.local}"` : ""} · Identidade: {comprovante.metodo === "webauthn_servidor" ? "biometria validada no servidor ✔" : comprovante.metodo === "webauthn_local" ? "biometria conferida localmente (demo) ✔" : "sem verificação biométrica ⚠️"}
               </div>
@@ -6835,6 +6981,18 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   );
 }
 
+/* Central de pedidos do colaborador: um lugar so para tudo o que ele pede ou envia. */
+function TelaPedidos({ itens, onIr }) {
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Meus pedidos</h1>
+      <p style={{ fontSize: 13, color: C.cinza, margin: "6px 0 14px" }}>Escolha o que você precisa.</p>
+      <div style={{ display: "grid", gap: 10 }}>
+        {itens.map(([k, label]) => <button key={k} style={{ ...S.card, textAlign: "left", cursor: "pointer", fontSize: 16, color: C.branco, padding: "16px 18px" }} onClick={() => onIr(k)}>{label}</button>)}
+      </div>
+    </div>
+  );
+}
 function TelaEspelho({ user, registros, exportarAFD, exportarAEJ, aceites = [], onAceitar, ajustes = [], onPedirAjuste }) {
   const [pedindo, setPedindo] = useState(null); // { dia, regs }
   const todosDias = agruparPorDia(registros, user.id);
@@ -9845,6 +10003,9 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
             {Object.entries(REGIMES_EMPRESA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} onClick={csvContador}>⬇ Resumo pro contador</button>
+          <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} onClick={() => baixarPDF(pdfPacoteContador(pacoteContador({ usuarios, folhasPg, comp: alvo, regime })), "pacote-contador-" + alvo.slice(0, 7) + ".pdf")}>📦 Pacote do contador (PDF)</button>
+          <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} onClick={() => baixarArquivo(pacoteContador({ usuarios, folhasPg, comp: alvo, regime }).csv, "pacote-contador-" + alvo.slice(0, 7) + ".csv")}>📦 Pacote do contador (planilha)</button>
+          <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} onClick={() => baixarPDF(pdfTermoREPP(termoREPP()), "termo-responsabilidade-rep-p.pdf")}>📜 Termo do REP-P (PDF para assinar)</button>
         </div>
       </div>
       {folhas.length === 0 ? (
@@ -11643,6 +11804,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
     .sort((a, b) => b.g.total - a.g.total);
   const pend = justificativas.filter(j => j.status === "pendente").length + atestados.filter(a => a.status === "pendente").length + ferias.filter(f => f.status === "pendente").length + folgas.filter(f => f.status === "pendente").length;
   const nome = (id) => usuarios.find(u => u.id === id)?.nome || id;
+  const [grupo, setGrupo] = useState("hoje"); // menu enxuto do gestor: 5 areas em vez de 20 blocos empilhados
   const [filtroAcao, setFiltroAcao] = useState("");
   const [filtroAutor, setFiltroAutor] = useState("");
   const [buscaLog, setBuscaLog] = useState("");
@@ -11655,6 +11817,12 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Painel do gestor {pend > 0 && <span style={S.tag(C.vermelho, C.preto)}>{pend} pendência(s)</span>}</h1>
+      <div className="no-print" role="tablist" aria-label="Áreas do painel" style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 6px" }}>
+        {[["hoje", "📌 Hoje"], ["pessoas", "👥 Pessoas"], ["folha", "💰 Folha e contador"], ["ponto", "⏱ Ponto e conformidade"], ["sistema", "⚙️ Sistema"]].map(([k, rot]) => (
+          <button key={k} role="tab" aria-selected={grupo === k} onClick={() => setGrupo(k)} style={{ ...S.btnGhost, padding: "8px 14px", fontSize: 13, background: grupo === k ? C.grafite : "transparent", borderColor: grupo === k ? C.amarelo : "#2A4568" }}>{rot}</button>
+        ))}
+      </div>
+      {grupo === "hoje" && (<>
       {(() => {
         const afetados = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, imp: impactoMudancaIntervalo(u.id, registros) })).filter(x => x.imp.diasAfetados > 0);
         if (!afetados.length) return null;
@@ -11826,25 +11994,27 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
           </tbody>
         </table>
       </div>
-      <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} examesOcupacionais={examesOcupacionais} {...(cadastrosPack || {})} />
-      <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
-      <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
-      <SecaoCompras {...{ usuarios, compras, folhasPg, demo, meuId: gestorId, noBanco: comprasNoBanco, onRegistrar: onRegistrarCompra, onDecidir: onDecidirCompra, onCancelar: onCancelarCompra }} />
-       <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
-        <CartaoDespedida usuarios={usuarios} rescisoes={rescisoes} />
-       <SecaoExames usuarios={usuarios} exames={examesOcupacionais} rescisoes={rescisoes} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
-       <SecaoRecrutamento candidatos={candidatos} onCriar={onCriarCandidato} onMudarStatus={onMudarStatusCandidato} onContratar={onContratarCandidato} onAbrir={onAbrirArquivo} demo={demo} />
-       <SecaoDocumentos usuarios={usuarios} documentos={documentosRH} exames={examesOcupacionais} onAnexar={onAnexarDocumento} onAbrir={onAbrirArquivo} />
-       <SecaoContabilidade usuarios={usuarios} folhasPg={folhasPg} guias={guias} onRegistrarPagamento={onRegistrarPagamentoGuia} onSalvarLinha={onSalvarLinhaGuia} onAbrir={onAbrirArquivo} demo={demo} />
-      <SecaoESocial usuarios={usuarios} rescisoes={rescisoes} atestados={atestados} folhasPg={folhasPg} />
-      <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />
-      <SecaoImagens usuarios={usuarios} consImagem={consImagem} />
-      <SecaoAgendaRH usuarios={usuarios} exames={examesOcupacionais} ferias={ferias} />
-      <SecaoConformidade usuarios={usuarios} registros={registros} />
-      <SecaoAjustesPonto ajustes={ajustes} usuarios={usuarios} onDecidir={onDecidirAjuste} />
-      <SecaoAceites usuarios={usuarios} aceites={aceites} />
-      <SecaoDiagnostico demo={demo} />
-      <SecaoBackup demo={demo} dados={{ usuarios, registros, faltas, justificativas, atestados, ferias, folgas, folhasPg, adiantamentos, guias, rescisoes, exames: examesOcupacionais, candidatos, documentos: documentosRH, consImagem, aceites, locais, logs }} />
+      </>)}
+      {grupo === "pessoas" && <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} examesOcupacionais={examesOcupacionais} {...(cadastrosPack || {})} />}
+      {grupo === "pessoas" && <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />}
+      {grupo === "folha" && <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />}
+      {grupo === "pessoas" && <SecaoCompras {...{ usuarios, compras, folhasPg, demo, meuId: gestorId, noBanco: comprasNoBanco, onRegistrar: onRegistrarCompra, onDecidir: onDecidirCompra, onCancelar: onCancelarCompra }} />}
+      {grupo === "pessoas" && <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />}
+      {grupo === "pessoas" && <CartaoDespedida usuarios={usuarios} rescisoes={rescisoes} />}
+      {grupo === "pessoas" && <SecaoExames usuarios={usuarios} exames={examesOcupacionais} rescisoes={rescisoes} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />}
+      {grupo === "pessoas" && <SecaoRecrutamento candidatos={candidatos} onCriar={onCriarCandidato} onMudarStatus={onMudarStatusCandidato} onContratar={onContratarCandidato} onAbrir={onAbrirArquivo} demo={demo} />}
+      {grupo === "pessoas" && <SecaoDocumentos usuarios={usuarios} documentos={documentosRH} exames={examesOcupacionais} onAnexar={onAnexarDocumento} onAbrir={onAbrirArquivo} />}
+      {grupo === "folha" && <SecaoContabilidade usuarios={usuarios} folhasPg={folhasPg} guias={guias} onRegistrarPagamento={onRegistrarPagamentoGuia} onSalvarLinha={onSalvarLinhaGuia} onAbrir={onAbrirArquivo} demo={demo} />}
+      {grupo === "folha" && <SecaoESocial usuarios={usuarios} rescisoes={rescisoes} atestados={atestados} folhasPg={folhasPg} />}
+      {grupo === "ponto" && <SecaoLocais locais={locais} onCriar={onCriarLocal} onDesativar={onDesativarLocal} />}
+      {grupo === "ponto" && <SecaoImagens usuarios={usuarios} consImagem={consImagem} />}
+      {grupo === "pessoas" && <SecaoAgendaRH usuarios={usuarios} exames={examesOcupacionais} ferias={ferias} />}
+      {grupo === "ponto" && <SecaoConformidade usuarios={usuarios} registros={registros} />}
+      {grupo === "ponto" && <SecaoAjustesPonto ajustes={ajustes} usuarios={usuarios} onDecidir={onDecidirAjuste} />}
+      {grupo === "ponto" && <SecaoAceites usuarios={usuarios} aceites={aceites} />}
+      {grupo === "sistema" && <SecaoDiagnostico demo={demo} />}
+      {grupo === "sistema" && <SecaoBackup demo={demo} dados={{ usuarios, registros, faltas, justificativas, atestados, ferias, folgas, folhasPg, adiantamentos, guias, rescisoes, exames: examesOcupacionais, candidatos, documentos: documentosRH, consImagem, aceites, locais, logs }} />}
+      {grupo === "hoje" && (<>
       {[
         ["Justificativas", justificativas, (j) => `${nome(j.userId)} — ${j.texto}`],
         ["Atestados", atestados, (a) => `${nome(a.userId)} — ${a.nome}${a.obs ? " · " + a.obs : ""}`],
@@ -11866,6 +12036,8 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
           ))}
         </div>
       ))}
+      </>)}
+      {grupo === "sistema" && (
       <div style={{ ...S.card, marginTop: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
           <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>Trilha de auditoria</div>
@@ -11898,6 +12070,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }

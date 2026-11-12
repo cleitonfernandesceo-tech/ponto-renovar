@@ -59,7 +59,8 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas,
   VT_LIMITE_PCT, cpfValido, fmtCPF, pisValido, cepValido, fmtCEP, enderecoDoViaCEP, salarioVigenteEm, salarioDoMes,
   validarAlteracaoSalario, custoVT, dividirVT, dependentesIRRF, prazoESocial, mapCadastro, estaDesligado,
-  faltaNoCadastro, resumoESocial, MOTIVOS_DESLIGAMENTO, asoDoColaborador };`;
+  faltaNoCadastro, resumoESocial, MOTIVOS_DESLIGAMENTO, asoDoColaborador,
+  termoREPP, pdfTermoREPP, pacoteContador, pdfPacoteContador, fmtCNPJ };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -1462,6 +1463,33 @@ secao("Pausa da tarde pré-assinalada 17h-17h30 e avisos de saída (desde 13/11/
   t("servidor: nenhuma marcação é criada pelo lembrete", !/POST[\s\S]{0,80}marcacoes/.test(fs2) && !fs2.includes('"marcacoes?on_conflict'));
   const migP = readFileSync("supabase/migrations/20261112200000_pausa_preassinalada_avisos.sql", "utf8");
   t("migração desliga a saída automática e agenda os avisos da tarde", migP.includes("cron.unschedule('auto-saida-diaria')") && migP.includes("'6 21 * * 1-5'") && migP.includes("'20,50 19,20 * * 1-5'"));
+}
+
+// ============================================================
+secao("Termo do REP-P e pacote do contador (Portaria 671, Anexo VII)");
+{
+  const tr = m.termoREPP();
+  t("termo do REP-P: tipo REP-P, hash SHA-256 e campos de REP-C como N/A", tr.campos[0][1] === "REP-P" && tr.campos.some(([k, v]) => k === "Algoritmo de hash" && v === "SHA-256") && tr.campos.filter(([, v]) => v === "N/A").length >= 7);
+  t("termo do REP-P: sem número do INPI (placeholder zerado) fica 'a preencher'", !tr.completo && tr.faltando.includes("Número de registro no INPI"));
+  t("termo do REP-P: signatários vazios aparecem como pendência", tr.faltando.includes("Responsável legal — CPF") && tr.faltando.includes("Responsável técnico — nome"));
+  const ok1 = m.termoREPP({ ...m.CONFIG_FISCAL, nrInpi: "12345678901234567" }, { responsavelLegal: { nome: "A", cpf: "1" }, responsavelTecnico: { nome: "B", cpf: "2" } });
+  t("termo do REP-P: com INPI e signatários fica completo", ok1.completo && ok1.texto.includes("12345678901234567"));
+  t("termo do REP-P: destinatária traz CNPJ formatado", m.fmtCNPJ("41206506000139") === "41.206.506/0001-39" && tr.texto.includes("41.206.506/0001-39"));
+  t("termo do REP-P: PDF válido", m.pdfTermoREPP(tr).startsWith("%PDF-1.4") && m.pdfTermoREPP(tr).includes("%%EOF"));
+  const us = [{ id: "a", nome: "Ana", matricula: "0010", cpf: "52998224725" }, { id: "b", nome: "Beto", matricula: "0011", cpf: "" }];
+  const fp = [
+    { userId: "a", competencia: "2026-11-01", salario: 3000, faltas: 100, atrasos: 50, inss: 250, irrf: 0, liquido: 2600, status: "fechada" },
+    { userId: "b", competencia: "2026-11-01", salario: 1800, faltas: 0, atrasos: 0, inss: 140, irrf: 0, liquido: 1660, status: "fechada" },
+    { userId: "a", competencia: "2026-10-01", salario: 3000, faltas: 0, atrasos: 0, inss: 250, irrf: 0, liquido: 2750, status: "fechada" }];
+  const pc = m.pacoteContador({ usuarios: us, folhasPg: fp, comp: "2026-11" });
+  t("pacote: só a competência pedida (2 linhas, não 3)", pc.linhas.length === 2 && pc.comp === "2026-11");
+  t("pacote: FGTS 8% sobre bruto menos faltas e atrasos (2850 -> 228)", pc.linhas[0][7] === "228");
+  t("pacote: total do bruto e do FGTS conferem com a soma", pc.custo.bruto === 4800 && pc.totais[7] === String(m.r2(pc.custo.fgts)).replace(".", ","));
+  t("pacote: provisões 13º=1/12 e férias=1/12 do bruto", pc.custo.decimo === 400 && pc.custo.ferias === 400 && pc.custo.tercoFerias === 133.33);
+  t("pacote: CSV abre no Excel (Latin-1 + ponto e vírgula) e traz prazos do 13º", [...pc.csv].every((c) => c.charCodeAt(0) <= 255) && pc.csv.includes("Colaborador;") && pc.csv.includes("30/11/2026") && pc.csv.includes("20/12/2026"));
+  t("pacote: competência sem folha vem vazia, sem quebrar", m.pacoteContador({ usuarios: us, folhasPg: fp, comp: "2027-01" }).vazio === true);
+  const pdfc = m.pdfPacoteContador(pc);
+  t("pacote: PDF válido com nome do colaborador", pdfc.startsWith("%PDF-1.4") && pdfc.includes("Ana") && pdfc.includes("%%EOF"));
 }
 
 console.log(`\n${"═".repeat(62)}`);
