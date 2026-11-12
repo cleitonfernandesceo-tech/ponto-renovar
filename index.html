@@ -5119,6 +5119,11 @@ const EVENTOS_ESOCIAL = {
     nome: "Admissao do trabalhador",
     base: "enviar ate o dia imediatamente anterior ao inicio das atividades - e o evento que assina a carteira digital"
   },
+  S2206: {
+    codigo: "S-2206",
+    nome: "Alteracao de contrato (salario)",
+    base: "enviar ate o dia 15 do mes seguinte a alteracao e antes da folha da competencia"
+  },
   S2299: {
     codigo: "S-2299",
     nome: "Desligamento",
@@ -5239,6 +5244,380 @@ function MedidorPremio({
       marginTop: 4
     }
   }, m.estourou ? `⛔ Limite ultrapassado — ${m.regraTexto}` : pct >= 0.7 ? `⚠️ Atenção: você está a ${m.limite - m.valor}${m.unidade || ""} do limite (${m.regraTexto})` : `Regra: ${m.regraTexto}`));
+}
+
+/* ============================================================
+   CADASTRO COMPLETO DO COLABORADOR (ficha, salario com historico, vale-transporte,
+   dependentes, carteira digital/eSocial e desligamento)
+   So funcoes puras aqui: testadas em testes.mjs, sem rede e sem tela.
+   Fontes: CF art. 7o VI e CLT art. 468 (salario nao reduz sem acordo/convencao coletiva);
+   Lei 7.418/85 e Decreto 95.247/87 (VT: desconto de ate 6% do salario basico);
+   eSocial S-2200/S-2206/S-2299 (gov.br/esocial, Manual de Orientacao e Manual Web Geral).
+   ============================================================ */
+const VT_LIMITE_PCT = 0.06;
+const VT_DIAS_PADRAO = 22;
+const ESTADO_CIVIL = {
+  solteiro: "Solteiro(a)",
+  casado: "Casado(a)",
+  uniao_estavel: "União estável",
+  separado: "Separado(a)",
+  divorciado: "Divorciado(a)",
+  viuvo: "Viúvo(a)"
+};
+const GRAU_INSTRUCAO = {
+  fundamental: "Ensino fundamental",
+  medio: "Ensino médio",
+  superior: "Ensino superior",
+  pos: "Pós-graduação",
+  outro: "Outro"
+};
+const RACA_COR = {
+  branca: "Branca",
+  preta: "Preta",
+  parda: "Parda",
+  amarela: "Amarela",
+  indigena: "Indígena",
+  nao_informada: "Prefiro não informar"
+};
+const PIX_TIPOS = {
+  cpf: "CPF",
+  celular: "Celular",
+  email: "E-mail",
+  aleatoria: "Chave aleatória"
+};
+const PARENTESCO_DEP = {
+  filho: "Filho(a)",
+  conjuge: "Cônjuge",
+  outro: "Outro"
+};
+const MOTIVOS_DESLIGAMENTO = {
+  ...Object.fromEntries(Object.entries(MOTIVOS_RESCISAO).map(([k, v]) => [k, v.label])),
+  outro: "Outro motivo (descreva)"
+};
+const GUARDA_DOCUMENTOS_TXT = "Nada é apagado: a lei manda guardar ponto, folha e documentos do colaborador por anos depois que ele sai (a prescrição trabalhista é de 2 anos após o desligamento, limitada a 5 anos para trás — CLT art. 11; o FGTS e a Previdência também prescrevem em 5 anos — Lei 8.036/90 art. 23 e Decreto 3.048/99 art. 225 §5º, que manda guardar até a prescrição). Por segurança o sistema guarda tudo e só esconde o desligado das listas.";
+const cpfValido = v => {
+  const c = soDigitos(v);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = (base, peso) => {
+    let s = 0;
+    for (let i = 0; i < base.length; i++) s += +base[i] * (peso - i);
+    const r = s * 10 % 11;
+    return r === 10 ? 0 : r;
+  };
+  return dv(c.slice(0, 9), 10) === +c[9] && dv(c.slice(0, 10), 11) === +c[10];
+};
+const fmtCPF = v => {
+  const c = soDigitos(v).slice(0, 11);
+  return c.length === 11 ? `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}` : c;
+};
+const pisValido = v => {
+  const c = soDigitos(v);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const pesos = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const s = pesos.reduce((a, p, i) => a + p * +c[i], 0);
+  const r = 11 - s % 11;
+  return (r >= 10 ? 0 : r) === +c[10];
+};
+const cepValido = v => soDigitos(v).length === 8;
+const fmtCEP = v => {
+  const c = soDigitos(v).slice(0, 8);
+  return c.length > 5 ? `${c.slice(0, 5)}-${c.slice(5)}` : c;
+};
+
+/* Resposta do ViaCEP -> campos da ficha. Devolve null se o CEP nao existe. */
+function enderecoDoViaCEP(j) {
+  if (!j || typeof j !== "object" || j.erro) return null;
+  return {
+    logradouro: limparTexto(j.logradouro || "", 120),
+    bairro: limparTexto(j.bairro || "", 80),
+    cidade: limparTexto(j.localidade || "", 80),
+    uf: String(j.uf || "").toUpperCase().slice(0, 2),
+    codigoIbge: soDigitos(j.ibge || "").slice(0, 7)
+  };
+}
+const salHistOrdenado = (hist, userId) => (hist || []).filter(h => h.userId === userId).sort((a, b) => a.vigencia < b.vigencia ? 1 : a.vigencia > b.vigencia ? -1 : String(b.criadoEm || "") > String(a.criadoEm || "") ? 1 : -1);
+
+/* Salario vigente numa data (a ultima alteracao com vigencia <= data). Sem historico: devolve o plano B. */
+function salarioVigenteEm(hist, userId, dataIso, fallback = 0) {
+  const h = salHistOrdenado(hist, userId).find(x => String(x.vigencia).slice(0, 10) <= dataIso);
+  return h ? +h.valor : fallback;
+}
+
+/* Salario do mes para a folha. Se o salario mudou no meio do mes, vale cada valor pelos dias em que
+   esteve vigente (mes comercial de 30 dias, igual ao resto da folha). Sem historico, nada muda. */
+function salarioDoMes(hist, userId, comp, fallback = 0) {
+  if (!salHistOrdenado(hist, userId).length) return fallback;
+  const [a, m] = String(comp).split("-").map(Number);
+  const ultimo = new Date(a, m, 0).getDate();
+  const dd = n => `${String(comp).slice(0, 7)}-${String(Math.min(n, ultimo)).padStart(2, "0")}`;
+  let soma = 0;
+  for (let dia = 1; dia <= 30; dia++) soma += salarioVigenteEm(hist, userId, dd(dia), fallback);
+  return r2(soma / 30);
+}
+
+/* Regras de uma alteracao de salario. Reducao sem acordo/convencao coletiva = bloqueado (CF art. 7o VI, CLT art. 468). */
+function validarAlteracaoSalario({
+  hist = [],
+  userId,
+  valor,
+  vigencia,
+  motivo,
+  acordo = false,
+  salarioAtual = 0
+}) {
+  const v = +valor;
+  if (!(v > 0) || v > LIMITES.valorMax) return {
+    ok: false,
+    erro: "Informe o novo salário (maior que zero)."
+  };
+  if (!dataValida(vigencia)) return {
+    ok: false,
+    erro: "Informe a data em que o novo salário começa a valer."
+  };
+  if (String(motivo || "").trim().length < 3) return {
+    ok: false,
+    erro: "Diga o motivo (ex.: reajuste anual, promoção)."
+  };
+  const anterior = salarioVigenteEm(hist, userId, vigencia, +salarioAtual || 0);
+  const reducao = anterior > 0 && v < anterior;
+  if (reducao && !acordo) {
+    return {
+      ok: false,
+      reducao: true,
+      anterior,
+      erro: `Não pode reduzir o salário (de ${brl(anterior)} para ${brl(v)}). A lei proíbe, salvo acordo ou convenção coletiva com o sindicato (CF art. 7º, VI · CLT art. 468). Se existe esse acordo, marque a caixinha e guarde o documento.`
+    };
+  }
+  const aviso = reducao ? "Redução com acordo/convenção coletiva: guarde o documento assinado junto da pasta do colaborador." : v === anterior ? "O valor é igual ao salário que já valia nessa data." : null;
+  return {
+    ok: true,
+    reducao,
+    anterior,
+    aviso
+  };
+}
+
+/* Vale-transporte: linhas de ida e volta x dias do mes. O colaborador paga ate 6% do salario base;
+   o que passar disso e custo da empresa. */
+function custoVT(linhas = [], dias = VT_DIAS_PADRAO) {
+  const ativas = (linhas || []).filter(l => l && l.ativo !== false);
+  const porDia = r2(ativas.reduce((s, l) => s + (+l.valor || 0), 0));
+  const d = Math.max(0, Math.min(31, Math.floor(+dias || 0)));
+  return {
+    linhas: ativas.length,
+    porDia,
+    dias: d,
+    custoMensal: r2(porDia * d)
+  };
+}
+function dividirVT({
+  salarioBase = 0,
+  custoMensal = 0
+}) {
+  const limite = r2(VT_LIMITE_PCT * (+salarioBase || 0));
+  const descontoColaborador = r2(Math.min(limite, +custoMensal || 0));
+  return {
+    limite,
+    descontoColaborador,
+    custoEmpresa: r2((+custoMensal || 0) - descontoColaborador)
+  };
+}
+const dependentesIRRF = (deps = []) => (deps || []).filter(d => d && d.ativo !== false && d.irrf).length;
+
+/* Prazo de envio ao eSocial (manuais oficiais): S-2200 ate o dia anterior ao inicio; S-2206 ate o dia 15 do mes seguinte;
+   S-2299 ate 10 dias corridos depois do desligamento. Se cair em fim de semana, antecipa para sexta. */
+function prazoESocial(evento, dataFato) {
+  const b = dataLocal(String(dataFato).slice(0, 10));
+  let p;
+  if (evento === "S-2200") p = new Date(b.getFullYear(), b.getMonth(), b.getDate() - 1);else if (evento === "S-2206") p = new Date(b.getFullYear(), b.getMonth() + 1, 15);else if (evento === "S-2299") p = new Date(b.getFullYear(), b.getMonth(), b.getDate() + 10);else return null;
+  while (p.getDay() === 0 || p.getDay() === 6) p = new Date(p.getFullYear(), p.getMonth(), p.getDate() - 1);
+  return dataISO(p);
+}
+const mapCadastro = r => ({
+  userId: r.usuario_id,
+  nascimento: r.data_nascimento || "",
+  sexo: r.sexo || "",
+  racaCor: r.raca_cor || "",
+  estadoCivil: r.estado_civil || "",
+  grauInstrucao: r.grau_instrucao || "",
+  pis: r.pis_nis || "",
+  cbo: r.cbo || "",
+  jornadaHoras: r.jornada_horas_semana == null ? "" : +r.jornada_horas_semana,
+  jornadaTexto: r.jornada_descricao || "",
+  cep: r.cep || "",
+  logradouro: r.logradouro || "",
+  numero: r.numero || "",
+  complemento: r.complemento || "",
+  bairro: r.bairro || "",
+  cidade: r.cidade || "",
+  uf: r.uf || "",
+  codigoIbge: r.codigo_ibge || "",
+  banco: r.banco || "",
+  agencia: r.agencia || "",
+  conta: r.conta || "",
+  pixTipo: r.pix_tipo || "",
+  pixChave: r.pix_chave || "",
+  emergNome: r.emergencia_nome || "",
+  emergParentesco: r.emergencia_parentesco || "",
+  emergTelefone: r.emergencia_telefone || "",
+  vtDias: r.vt_dias_mes == null ? VT_DIAS_PADRAO : +r.vt_dias_mes,
+  desligadoEm: r.desligado_em || "",
+  motivoDesligamento: r.motivo_desligamento || ""
+});
+const mapSalHist = r => ({
+  id: r.id,
+  userId: r.usuario_id,
+  valor: +r.valor,
+  vigencia: String(r.vigencia || "").slice(0, 10),
+  motivo: r.motivo || "",
+  acordo: !!r.acordo_coletivo,
+  por: r.alterado_por,
+  criadoEm: r.criado_em
+});
+const mapVtLinha = r => ({
+  id: r.id,
+  userId: r.usuario_id,
+  sentido: r.sentido,
+  linha: r.linha,
+  valor: +r.valor_passagem,
+  ativo: r.ativo !== false
+});
+const mapDependente = r => ({
+  id: r.id,
+  userId: r.usuario_id,
+  nome: r.nome,
+  parentesco: r.parentesco,
+  nascimento: String(r.data_nascimento || "").slice(0, 10),
+  cpf: r.cpf || "",
+  irrf: !!r.irrf,
+  salarioFamilia: !!r.salario_familia,
+  ativo: r.ativo !== false
+});
+const mapEsocialReg = r => ({
+  id: r.id,
+  userId: r.usuario_id,
+  evento: r.evento,
+  dataFato: String(r.data_fato || "").slice(0, 10),
+  descricao: r.descricao || "",
+  status: r.status,
+  recibo: r.recibo || "",
+  enviadoEm: r.enviado_em || ""
+});
+
+/* Colaborador cuja ficha diz que saiu: some das listas normais (mas o cadastro e o historico ficam guardados). */
+const estaDesligado = (u, cad) => !!(cad && cad.desligadoEm) || u?.ativo === false;
+
+/* O que ainda falta no cadastro (so o essencial). Devolve lista de textos simples. */
+function faltaNoCadastro(u, cad, deps = []) {
+  const f = [];
+  const c = cad || {};
+  if (!cpfValido(u?.cpf)) f.push("CPF");
+  if (!c.nascimento) f.push("data de nascimento");
+  if (!c.sexo) f.push("sexo");
+  if (!c.estadoCivil) f.push("estado civil");
+  if (!c.grauInstrucao) f.push("escolaridade");
+  if (!cepValido(c.cep) || !c.logradouro || !c.numero) f.push("endereço completo");
+  if (!c.cbo) f.push("CBO (código da função)");
+  if (!c.jornadaHoras) f.push("jornada semanal");
+  if (!(c.pixChave || c.banco && c.conta)) f.push("Pix ou conta para pagamento");
+  if (!c.emergNome || !c.emergTelefone) f.push("contato de emergência");
+  (deps || []).filter(d => d.ativo !== false && d.irrf && !cpfValido(d.cpf)).forEach(d => f.push(`CPF do dependente ${d.nome}`));
+  return f;
+}
+const dataDiaAntes = iso => {
+  const b = dataLocal(String(iso).slice(0, 10));
+  return dataISO(new Date(b.getFullYear(), b.getMonth(), b.getDate() - 1));
+};
+
+/* "Registrar na carteira": monta o resumo pronto para copiar no eSocial ou mandar ao contador.
+   O app NAO envia nada sozinho (envio direto exige certificado digital A1 do CNPJ: fica documentado e desligado). */
+function resumoESocial(evento, {
+  u,
+  cad,
+  deps = [],
+  hist = [],
+  dataFato,
+  novoSalario,
+  motivo,
+  empresaCnpj = ""
+} = {}) {
+  const c = cad || {};
+  const linhas = [];
+  const add = (rotulo, valor, obrigatorio = true) => linhas.push({
+    rotulo,
+    valor: valor == null || valor === "" ? "" : String(valor),
+    falta: obrigatorio && (valor == null || valor === "")
+  });
+  const cpf = cpfValido(u?.cpf) ? fmtCPF(u?.cpf) : "";
+  const endereco = [c.logradouro, c.numero, c.complemento, c.bairro].filter(Boolean).join(", ");
+  const sal = novoSalario != null ? +novoSalario : salarioVigenteEm(hist, u?.id, dataFato || hojeStr(), +u?.salario || 0);
+  const nomeEv = {
+    "S-2200": "Admissão do trabalhador (assina a carteira digital)",
+    "S-2206": "Alteração de contrato de trabalho (muda o salário na carteira)",
+    "S-2299": "Desligamento (dá baixa na carteira)"
+  }[evento] || evento;
+  add("CPF", cpf);
+  add("Nome completo", u?.nome || "");
+  if (evento === "S-2200") {
+    const fato = dataFato || (u?.admissao || "").slice(0, 10);
+    add("Data de nascimento", c.nascimento ? fmtData(c.nascimento) : "");
+    add("Sexo", c.sexo === "F" ? "Feminino" : c.sexo === "M" ? "Masculino" : "");
+    add("Raça/cor", RACA_COR[c.racaCor] || "");
+    add("Estado civil", ESTADO_CIVIL[c.estadoCivil] || "");
+    add("Grau de instrução", GRAU_INSTRUCAO[c.grauInstrucao] || "");
+    add("Nacionalidade", "Brasileira (confirme se for outra)", false);
+    add("CEP", cepValido(c.cep) ? fmtCEP(c.cep) : "");
+    add("Endereço", endereco);
+    add("Município", c.cidade ? `${c.cidade}/${c.uf}${c.codigoIbge ? ` (IBGE ${c.codigoIbge})` : ""}` : "");
+    add("PIS/NIS (se tiver)", c.pis ? soDigitos(c.pis) : "", false);
+    add("Matrícula", u?.matricula || "", false);
+    add("Regime", "CLT · Previdência: Regime Geral (INSS)");
+    add("Tipo de contrato", "Prazo indeterminado (ou experiência, se for o caso)");
+    add("Data de admissão", fato ? fmtData(fato) : "");
+    add("Cargo/função", u?.cargo || "");
+    add("CBO", c.cbo || "");
+    add("Salário mensal", sal > 0 ? brl(sal) : "");
+    add("Jornada semanal (horas)", c.jornadaHoras || "");
+    add("Descrição da jornada", c.jornadaTexto || "", false);
+    (deps || []).filter(d => d.ativo !== false).forEach(d => add(`Dependente: ${d.nome}`, `${PARENTESCO_DEP[d.parentesco] || d.parentesco} · nasc. ${fmtData(d.nascimento)} · CPF ${fmtCPF(d.cpf) || "(falta)"} · IRRF: ${d.irrf ? "sim" : "não"} · salário-família: ${d.salarioFamilia ? "sim" : "não"}`, false));
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  if (evento === "S-2206") {
+    const fato = dataFato || hojeStr();
+    const antes = salarioVigenteEm(hist, u?.id, dataDiaAntes(fato), 0);
+    add("Matrícula", u?.matricula || "", false);
+    add("Data da alteração (vale a partir de)", fato ? fmtData(fato) : "");
+    add("Novo salário mensal", sal > 0 ? brl(sal) : "");
+    add("Salário anterior", antes > 0 ? brl(antes) : "", false);
+    add("Motivo", motivo || "", false);
+    add("Importante", "No eSocial, a alteração repete os demais dados do contrato (cargo, jornada, CBO) — confira se continuam iguais.", false);
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  if (evento === "S-2299") {
+    const fato = dataFato || c.desligadoEm;
+    add("Matrícula", u?.matricula || "", false);
+    add("Data do desligamento", fato ? fmtData(fato) : "");
+    add("Motivo", c.motivoDesligamento || motivo || "");
+    add("Aviso", "Se houve aviso prévio, informe o tipo e as datas.", false);
+    add("Verbas", "Valores da rescisão: use o cálculo da seção Rescisão (conferir com o contador).", false);
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  return null;
+}
+function montarResumo(evento, titulo, dataFato, linhas, empresaCnpj) {
+  const prazo = dataFato ? prazoESocial(evento, dataFato) : null;
+  const faltando = linhas.filter(l => l.falta).map(l => l.rotulo);
+  const texto = [`RESUMO PARA O eSOCIAL — evento ${evento}: ${titulo}`, empresaCnpj ? `Empresa: ${empresaCnpj}` : null, prazo ? `Prazo de envio: até ${fmtData(prazo)}` : null, "", ...linhas.map(l => `${l.rotulo}: ${l.valor || "(FALTA PREENCHER)"}`), "", "Gerado pelo Ponto Renovar. Confira com o contador antes de enviar."].filter(x => x !== null).join("\n");
+  return {
+    evento,
+    titulo,
+    dataFato,
+    prazo,
+    linhas,
+    faltando,
+    completo: faltando.length === 0,
+    texto
+  };
 }
 
 /* ================= UI base ================= */
