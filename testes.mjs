@@ -54,7 +54,9 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
   gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
   hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin,
-  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo };`;
+  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo,
+  COMPRA_MAX_PARCELAS, compMais, primeiraCompDaCompra, mapCompra, validarCompra, parcelasDaCompra,
+  compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas };`;
 const entrada = join(dir, "motores.jsx");
 writeFileSync(entrada, src.slice(ini, fim) + exports);
 const saida = join(dir, "motores.mjs");
@@ -290,6 +292,58 @@ t('o SQL tem a chave única usada no upsert de aceites', sqlBloco.includes('uniq
 const blocoDiag = src.slice(src.indexOf('function SecaoDiagnostico'), src.indexOf('function SecaoAceites'));
 t('o diagnóstico é só leitura (não grava nem altera nada)', !/sbInsert|sbUpsert|sbDelete|sbUpdate/.test(blocoDiag));
 t('o README traz exatamente o mesmo SQL', leia('README.md').includes(sqlBloco.trim()));
+
+// ==============================================================
+secao('Compras do colaborador (desconto em até 3x na folha)');
+const compra = (o = {}) => ({ id: 'c1', userId: 'u', valor: 100, data: '2026-07-10', parcelas: 3, primeiraComp: '', status: 'aprovada', aceiteEm: '2026-07-10T10:00:00Z', ...o });
+const somaPs = (c) => m.r2(m.parcelasDaCompra(c).reduce((s, p) => s + p.valor, 0));
+t('3x de 100 fecha em 100 exatos (33,33 + 33,33 + 33,34)',
+  JSON.stringify(m.parcelasDaCompra(compra()).map((p) => p.valor)) === '[33.33,33.33,33.34]' && somaPs(compra()) === 100);
+t('a soma das parcelas sempre fecha o valor (vários valores e parcelas)',
+  [1, 2, 3].every((n) => [0.01, 0.1, 99.99, 100, 123.45, 1000.01].every((v) => somaPs(compra({ valor: v, parcelas: n })) === v)));
+t('a 1ª parcela cai no mês seguinte à compra', m.parcelasDaCompra(compra())[0].comp === '2026-08-01');
+t('virada de ano: compra em dezembro desconta em jan, fev e mar',
+  JSON.stringify(m.parcelasDaCompra(compra({ data: '2026-12-20' })).map((p) => p.comp)) === '["2027-01-01","2027-02-01","2027-03-01"]');
+t('o gestor pode escolher o mês do 1º desconto', m.parcelasDaCompra(compra({ primeiraComp: '2026-10-01' }))[0].comp === '2026-10-01');
+t('nunca passa de 3 parcelas', m.parcelasDaCompra(compra({ parcelas: 9 })).length === 3 && m.COMPRA_MAX_PARCELAS === 3);
+t('só desconta com compra aprovada E aceite do colaborador',
+  m.compraDescontavel(compra()) && !m.compraDescontavel(compra({ status: 'pendente' })) &&
+  !m.compraDescontavel(compra({ aceiteEm: null })) && !m.compraDescontavel(compra({ status: 'recusada' })) &&
+  !m.compraDescontavel(compra({ status: 'cancelada' })));
+t('desconto do mês soma só as parcelas daquele mês',
+  m.descontoComprasDoMes([compra(), compra({ id: 'c2', valor: 60, parcelas: 1 })], 'u', '2026-08-01') === 93.33 &&
+  m.descontoComprasDoMes([compra()], 'u', '2026-07-01') === 0 &&
+  m.descontoComprasDoMes([compra()], 'u', '2026-11-01') === 0);
+t('compra de outra pessoa não desconta de mim', m.descontoComprasDoMes([compra({ userId: 'x' })], 'u', '2026-08-01') === 0);
+t('compra pendente ou sem aceite não desconta nada', m.descontoComprasDoMes([compra({ status: 'pendente' }), compra({ aceiteEm: null })], 'u', '2026-08-01') === 0);
+t('comprasDoMes devolve o detalhe de cada parcela', m.comprasDoMes([compra()], 'u', '2026-09-01').length === 1 && m.comprasDoMes([compra()], 'u', '2026-09-01')[0].n === 2);
+const folhaC = (compras) => m.calcularFolhaColaborador({ ...U }, '2026-08-01', [], [], [], compras);
+t('folha sem o parâmetro de compras não muda (e não manda a coluna nova)',
+  m.calcularFolhaColaborador({ ...U }, '2026-08-01', [], [], []).row.desconto_compras === undefined);
+t('folha com compras desconta do líquido e grava desconto_compras',
+  folhaC([compra()]).row.desconto_compras === 33.33 &&
+  m.r2(folhaC([]).row.valor_liquido - folhaC([compra()]).row.valor_liquido) === 33.33);
+t('compra não aprovada não mexe no líquido', folhaC([compra({ status: 'pendente' })]).row.valor_liquido === folhaC([]).row.valor_liquido);
+t('líquido nunca fica negativo por causa das compras', folhaC([compra({ valor: 100000, parcelas: 1, data: '2026-07-10' })]).row.valor_liquido >= 0);
+const okC = { descricao: 'Caixa de som JBL', valor: 300, data: '2026-07-10', parcelas: 3 };
+t('validação aceita compra certa', m.validarCompra(okC) === null);
+t('validação barra descrição curta, valor zero/negativo, data ruim e parcelas fora de 1 a 3',
+  !!m.validarCompra({ ...okC, descricao: 'ab' }) && !!m.validarCompra({ ...okC, valor: 0 }) && !!m.validarCompra({ ...okC, valor: -5 }) &&
+  !!m.validarCompra({ ...okC, data: '' }) && !!m.validarCompra({ ...okC, parcelas: 4 }) && !!m.validarCompra({ ...okC, parcelas: 0 }) &&
+  !!m.validarCompra({ ...okC, valor: 1000000 }));
+t('o 1º desconto precisa ser depois do mês da compra', !!m.validarCompra({ ...okC, primeiraComp: '2026-07-01' }) && m.validarCompra({ ...okC, primeiraComp: '2026-08-01' }) === null);
+t('mapCompra lê as colunas do banco',
+  m.mapCompra({ id: 'a', usuario_id: 'u', lancado_por: 'g', descricao: 'x', valor_total: '10.5', data_compra: '2026-07-10', parcelas: 2, primeira_competencia: '2026-08-01', status: 'aprovada', aceite_colaborador_em: 't' }).valor === 10.5);
+t('texto de parcelas em português simples', /3x de/.test(m.textoParcelas(compra())) && /1x de/.test(m.textoParcelas(compra({ parcelas: 1 }))));
+const sqlMig = leia('supabase/migrations/20261112120000_compras_colaborador.sql');
+t('migração das compras: RLS ligado, políticas por dono/gestor e gatilho de regras',
+  /enable row level security/.test(sqlMig) && /usuario_id = auth\.uid\(\) or is_gestor\(\)/.test(sqlMig) &&
+  /trg_compras_regras/.test(sqlMig) && !/for delete/i.test(sqlMig));
+t('migração: gestor nunca grava o aceite de outra pessoa', /so o proprio colaborador confirma o aceite/.test(sqlMig));
+t('migração: aviso do backup antes de rodar em produção', /folha_pagamento_bkp_20261112/.test(sqlMig));
+t('o SQL opcional do app e o README incluem a tabela de compras', sqlBloco.includes('compras_colaborador') && leia('README.md').includes('compras_colaborador'));
+t('o app tem tela de compras e o painel do gestor aprova', src.includes('function TelaCompras') && src.includes('<SecaoCompras'));
+t('o holerite mostra a linha de compras', src.includes('COMPRAS NA EMPRESA'));
 
 // ==============================================================
 secao('Backup dos dados');

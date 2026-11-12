@@ -1008,7 +1008,7 @@ const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(
 // Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
 const chaveSemana = (dt) => { const d = new Date(dt); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dataISO(d); };
 
-function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos) {
+function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, compras) {
   const salContratual = +u.salario || 0;
   // Admissão no meio da competência: o mês é proporcional aos dias de vínculo (salário/30 × dias),
   // prática padrão da folha brasileira. Sem isso, quem entrou no dia 16 recebia mês cheio.
@@ -1043,12 +1043,19 @@ function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos) {
   const irrf = calcIRRF(rendimento, inss, +u.dependentes || 0);
   const vt = u.vtAtivo ? r2(Math.min(0.06 * sal, +u.vtValor || 0)) : 0; // min(6% do bruto, custo do VT) — Lei 7.418/85
   const adiant = r2(adiantamentos.filter(a => a.userId === u.id && a.status === "pendente" && mesmaComp(a.competenciaDesconto, comp)).reduce((s, a) => s + (+a.valor || 0), 0));
-  const liquido = r2(sal - descFaltas - descAtrasos - inss - irrf - vt - adiant);
+  // Compras na empresa: so entra quando a lista de compras foi passada (tabela existe no banco).
+  // Sem a lista, a linha da folha continua exatamente como era (coluna desconto_compras nem e enviada).
+  const comCompras = Array.isArray(compras);
+  // A parcela de compras nunca deixa o liquido negativo (o que sobrar nao e cobrado nesse mes).
+  const restoAntesCompras = r2(sal - descFaltas - descAtrasos - inss - irrf - vt - adiant);
+  const descCompras = comCompras ? Math.min(descontoComprasDoMes(compras, u.id, comp), Math.max(0, restoAntesCompras)) : 0;
+  const liquido = r2(restoAntesCompras - descCompras);
   return {
     proporcional, diasProporcionais, salarioContratual: salContratual,
     row: {
       salario_bruto: sal, desconto_inss: inss, desconto_irrf: irrf, desconto_vale_transporte: vt,
       desconto_faltas: descFaltas, desconto_atrasos: descAtrasos, desconto_adiantamento: adiant,
+      ...(comCompras ? { desconto_compras: descCompras } : {}),
       valor_liquido: liquido, dias_faltas_nao_justificadas: diasFaltas, horas_atraso_total: horasAtraso, status: "rascunho",
     },
   };
@@ -1058,6 +1065,7 @@ const mapFolhaPg = (r) => ({
   id: r.id, userId: r.usuario_id, competencia: (r.competencia || "").slice(0, 10),
   salario: +r.salario_bruto, inss: +r.desconto_inss, irrf: +r.desconto_irrf, vt: +r.desconto_vale_transporte,
   faltas: +r.desconto_faltas, atrasos: +r.desconto_atrasos, adiantamento: +r.desconto_adiantamento,
+  compras: +r.desconto_compras || 0,
   liquido: +r.valor_liquido, diasFaltas: r.dias_faltas_nao_justificadas, horasAtraso: +r.horas_atraso_total,
   status: r.status, fechadoEm: r.fechado_em,
   assinadoEm: r.assinado_em || null,
@@ -1065,6 +1073,72 @@ const mapFolhaPg = (r) => ({
   arquivoAssinadoUrl: r.arquivo_assinado_url || null,
 });
 const mapAdiant = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, dataSolicitacao: r.data_solicitacao, competenciaDesconto: (r.competencia_desconto || "").slice(0, 10), status: r.status, observacao: r.observacao });
+
+/* ---------- Compras do colaborador (desconto em folha, 1x a 3x) ----------
+   O colaborador compra um produto da empresa e paga em ate 3 parcelas, descontadas
+   nos meses SEGUINTES a compra. Desconto em salario so e valido com autorizacao do
+   empregado (CLT art. 462; Sumula 342 do TST), por isso a parcela so entra na folha
+   quando a compra esta APROVADA pelo gestor E o colaborador deu o aceite
+   (aceiteEm). Quem registra a propria compra ja da o aceite; quando o gestor lanca
+   no nome do colaborador, o desconto espera o colaborador confirmar. */
+const COMPRA_MAX_PARCELAS = 3;
+const COMPRA_STATUS = { pendente: "Esperando o gestor", aprovada: "Aprovada", recusada: "Recusada", cancelada: "Cancelada" };
+// "2026-11-15" (ou "2026-11") + n meses -> "AAAA-MM-01"
+const compMais = (comp, n) => {
+  const [a, m] = String(comp).slice(0, 7).split("-").map(Number);
+  const t = a * 12 + (m - 1) + n;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+};
+const primeiraCompDaCompra = (dataCompra) => compMais(dataCompra, 1);
+const mapCompra = (r) => ({
+  id: r.id, userId: r.usuario_id, lancadoPor: r.lancado_por, descricao: r.descricao || "",
+  valor: +r.valor_total || 0, data: (r.data_compra || "").slice(0, 10), parcelas: +r.parcelas || 1,
+  primeiraComp: (r.primeira_competencia || "").slice(0, 10), status: r.status || "pendente",
+  aceiteEm: r.aceite_colaborador_em || null, resposta: r.resposta || "",
+  decididoEm: r.decidido_em || null, criadoEm: r.criado_em || null,
+});
+// Devolve o texto do erro (em portugues simples) ou null se estiver tudo certo.
+function validarCompra(d) {
+  const desc = limparTexto(d.descricao, 120);
+  if (desc.length < 3) return "Escreva o que foi comprado (pelo menos 3 letras).";
+  const valor = numeroValido(d.valor, { min: 0.01, max: 100000 });
+  if (valor === null) return "Digite o valor total da compra (maior que zero).";
+  if (!dataValida(d.data)) return "Escolha a data da compra.";
+  const par = Number(d.parcelas);
+  if (!Number.isInteger(par) || par < 1 || par > COMPRA_MAX_PARCELAS) return "Dá para dividir em 1x, 2x ou 3x.";
+  if (d.primeiraComp && !/^\d{4}-\d{2}-01$/.test(String(d.primeiraComp))) return "Escolha o mês do primeiro desconto.";
+  if (d.primeiraComp && d.primeiraComp <= String(d.data).slice(0, 7) + "-01") return "O primeiro desconto precisa ser em um mês depois da compra.";
+  if (valor / par < 0.01) return "Parcela muito pequena. Use menos parcelas.";
+  return null;
+}
+// Parcelas em centavos exatos: as primeiras iguais, a ultima fecha a conta.
+function parcelasDaCompra(c) {
+  const n = Math.min(COMPRA_MAX_PARCELAS, Math.max(1, +c.parcelas || 1));
+  const cents = Math.round((+c.valor || 0) * 100);
+  const base = Math.floor(cents / n);
+  const primeira = c.primeiraComp || primeiraCompDaCompra(c.data);
+  return Array.from({ length: n }, (_, i) => ({
+    n: i + 1, de: n, comp: compMais(primeira, i),
+    valor: (i < n - 1 ? base : cents - base * (n - 1)) / 100,
+  }));
+}
+// So desconta se o gestor aprovou E o colaborador autorizou.
+const compraDescontavel = (c) => c.status === "aprovada" && !!c.aceiteEm;
+function descontoComprasDoMes(compras, userId, comp) {
+  const alvo = String(comp).slice(0, 7);
+  return r2((compras || []).filter((c) => c.userId === userId && compraDescontavel(c))
+    .reduce((s, c) => s + parcelasDaCompra(c).filter((p) => p.comp.slice(0, 7) === alvo).reduce((a, p) => a + p.valor, 0), 0));
+}
+// Compras do mes, com o detalhe de cada parcela (pro holerite mostrar o que e cada desconto).
+function comprasDoMes(compras, userId, comp) {
+  const alvo = String(comp).slice(0, 7);
+  return (compras || []).filter((c) => c.userId === userId && compraDescontavel(c))
+    .flatMap((c) => parcelasDaCompra(c).filter((p) => p.comp.slice(0, 7) === alvo).map((p) => ({ compra: c, ...p })));
+}
+const textoParcelas = (c) => {
+  const ps = parcelasDaCompra(c);
+  return ps.length === 1 ? `1x de ${brl(ps[0].valor)}` : `${ps.length}x de ${brl(ps[0].valor)}${ps[ps.length - 1].valor !== ps[0].valor ? " (a última " + brl(ps[ps.length - 1].valor) + ")" : ""}`;
+};
 const mapRescisao = (r) => ({ id: r.id, userId: r.usuario_id, dataDeslig: (r.data_desligamento || "").slice(0, 10), motivo: r.motivo, motivoLabel: MOTIVOS_RESCISAO[r.motivo]?.label || r.motivo, avisoTipo: r.aviso_tipo, calculo: r.calculo || null, totalProventos: +r.total_proventos || 0, totalDescontos: +r.total_descontos || 0, liquido: +r.valor_liquido || 0, status: r.status, criadoEm: r.criado_em, confirmadoEm: r.confirmado_em });
 const mapExame = (r) => ({ id: r.id, userId: r.usuario_id, tipo: r.tipo, tipoLabel: TIPOS_EXAME[r.tipo] || r.tipo, data: (r.data_exame || "").slice(0, 10), resultado: r.resultado, resultadoLabel: r.resultado ? (RESULTADOS_EXAME[r.resultado] || r.resultado) : null, clinica: r.clinica, anexo: r.anexo_url ? { nome: r.anexo_url.split("/").pop().replace(/^\d+_/, ""), path: r.anexo_url } : null, observacao: r.observacao, status: r.status || "realizado", dataPrevista: (r.data_prevista || "").slice(0, 10), criadoEm: r.criado_em });
 const mapGuia = (r) => ({ id: r.id, competencia: (r.competencia || "").slice(0, 10), tipo: r.tipo, valor: +r.valor_total, vencimento: r.vencimento, status: r.status, pagoEm: (r.pago_em || "").slice(0, 10), linhaDigitavel: r.linha_digitavel || "", valorPago: r.valor_pago == null ? null : +r.valor_pago, comprovante: r.comprovante_url ? { nome: r.comprovante_url.split("/").pop().replace(/^\d+_/, ""), path: r.comprovante_url } : null, observacao: r.observacao || "" });
@@ -1670,6 +1744,7 @@ function pdfReciboFolha(f, u, compISO) {
     { cod: "0550", d: "FALTAS E DSR", ref: `${f.diasFaltas || 0} dia(s)`, dsc: +f.faltas || 0 },
     { cod: "0551", d: "ATRASOS ACIMA DA TOLERANCIA", ref: hmm(Math.round((+f.horasAtraso || 0) * 60)), dsc: +f.atrasos || 0 },
     { cod: "0941", d: "ADIANTAMENTO SALARIAL", ref: "", dsc: +f.adiantamento || 0 },
+    { cod: "0945", d: "COMPRAS NA EMPRESA (AUTORIZADO)", ref: "", dsc: +f.compras || 0 },
     { cod: "0950", d: "VALE-TRANSPORTE", ref: "6,00%", dsc: +f.vt || 0 },
     { cod: "0998", d: "INSS SOBRE SALARIO", ref: pct(+f.inss || 0), dsc: +f.inss || 0 },
     { cod: "0999", d: "IRRF SOBRE SALARIO", ref: "", dsc: +f.irrf || 0 },
@@ -3690,6 +3765,9 @@ function AppInterno() {
   const [saidasPend, setSaidasPend] = useState([]); // registros_ponto com saida_automatica e sem confirmação
   const [folhasPg, setFolhasPg] = useState([]);
   const [adiantamentos, setAdiantamentos] = useState([]);
+  // Compras do colaborador: tabela opcional (compras_colaborador). comprasNoBanco = a tabela existe.
+  const [compras, setCompras] = useState([]);
+  const [comprasNoBanco, setComprasNoBanco] = useState(false);
   const [guias, setGuias] = useState([]);
    const [rescisoes, setRescisoes] = useState([]);
    const [examesOcupacionais, setExamesOcupacionais] = useState([]);
@@ -3919,6 +3997,15 @@ function AppInterno() {
           setAjustes(rows.map(mapAjuste));
         } catch (e) { console.warn("[ajustes de ponto]", e.message); }
       })();
+      // Compras do colaborador: tabela opcional (compras_colaborador). Sem ela a tela
+      // de compras avisa que ainda nao esta ligada e a folha segue como sempre foi.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "compras_colaborador", "select=*&order=criado_em.desc");
+          setCompras(rows.map(mapCompra));
+          setComprasNoBanco(true);
+        } catch (e) { console.warn("[compras]", e.message); setComprasNoBanco(false); }
+      })();
       // Combinados das reunioes: tabela opcional (combinados). Sem ela o app
       // volta pro caderno local do aparelho, que foi como a primeira versao saiu.
       (async () => {
@@ -4127,7 +4214,7 @@ function AppInterno() {
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
-    setFolhasPg(FOLHAS_PG_SEED); setAdiantamentos([]); setGuias([]); setCredenciais([]);
+    setFolhasPg(FOLHAS_PG_SEED); setAdiantamentos([]); setCompras([]); setComprasNoBanco(false); setGuias([]); setCredenciais([]);
     setConsImagem(CONS_IMAGEM_SEED); setAceites(ACEITES_SEED);
     setRankingUsuarios(USUARIOS_SEED.map(u => { const gg = calcularGamificacao(u.id, REGISTROS_SEED, FALTAS_SEED.map((f, i) => ({ id: i, ...f, justificada: false }))); return { id: u.id, nome: u.nome, papel: u.papel, pontos: gg.total, streak: gg.streak }; }));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
@@ -4876,7 +4963,7 @@ function AppInterno() {
     if (!alvo.length) throw new Error("Nenhum colaborador ativo com salário cadastrado — preencha os salários na seção Equipe.");
     const jaFechadas = folhasPg.filter(f => f.competencia === comp && f.status === "fechada").map(f => f.userId);
     const linhas = alvo.filter(u => !jaFechadas.includes(u.id)).map(u => {
-      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos);
+      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, (comprasNoBanco || demo) ? compras : undefined);
       if (r.proporcional) log("folha", `${u.nome}: salário proporcional à admissão (${r.diasProporcionais}/30 dias) — ${brl(r.row.salario_bruto)} de ${brl(r.salarioContratual)}`);
       return { usuario_id: u.id, competencia: comp, ...r.row };
     });
@@ -4899,7 +4986,7 @@ function AppInterno() {
     const f = folhasPg.find(x => x.id === id);
     if (!f || f.status === "fechada") return;
     const novo = { ...f, ...patchNums };
-    const liquido = r2(novo.salario - novo.faltas - novo.atrasos - novo.inss - novo.irrf - novo.vt - novo.adiantamento);
+    const liquido = r2(novo.salario - novo.faltas - novo.atrasos - novo.inss - novo.irrf - novo.vt - novo.adiantamento - (novo.compras || 0));
     const patch = {
       salario_bruto: novo.salario,
       desconto_inss: novo.inss, desconto_irrf: novo.irrf, desconto_vale_transporte: novo.vt,
@@ -4967,6 +5054,84 @@ function AppInterno() {
     const nomeC = usuarios.find(u => u.id === a.userId)?.nome || a.userId;
     try { await auditar("adiantamento_cancelado", `${user.nome} cancelou adiantamento de ${brl(a.valor)} de ${nomeC} (competência ${a.competenciaDesconto.slice(0, 7)})`); }
     catch (e) { console.warn("[auditoria adiantamento]", e.message); }
+  };
+
+  /* ---------- compras do colaborador (desconto em folha em ate 3x) ---------- */
+  const folhaDoMesFechada = (userId, comp) => folhasPg.some(f => f.userId === userId && f.competencia.slice(0, 7) === comp.slice(0, 7) && f.status === "fechada");
+
+  const registrarCompra = async (dados) => {
+    const alvoId = dados.userId || user.id;
+    const proprio = alvoId === user.id;
+    if (!proprio && user.papel !== "gestor") throw new Error("Só o gestor lança compra no nome de outra pessoa.");
+    if (!demo && !comprasNoBanco) throw new Error("As compras ainda não foram ligadas no sistema. Fale com o gestor.");
+    const primeiraComp = dados.primeiraComp || primeiraCompDaCompra(dados.data);
+    const erro = validarCompra({ ...dados, primeiraComp });
+    if (erro) throw new Error(erro);
+    if (proprio && !dados.autorizo) throw new Error("Marque a caixinha: você autoriza descontar na folha.");
+    const parcelas = Number(dados.parcelas);
+    if (parcelasDaCompra({ valor: dados.valor, parcelas, primeiraComp, data: dados.data }).some(p => folhaDoMesFechada(alvoId, p.comp)))
+      throw new Error("A folha de um desses meses já foi fechada. Escolha um mês mais à frente para o primeiro desconto.");
+    const agora = iso(new Date());
+    const aprovada = user.papel === "gestor" && !!dados.aprovar;
+    const linha = {
+      usuario_id: alvoId, lancado_por: user.id, descricao: limparTexto(dados.descricao, 120),
+      valor_total: numeroValido(dados.valor, { min: 0.01, max: 100000 }), data_compra: dados.data, parcelas,
+      primeira_competencia: primeiraComp, status: aprovada ? "aprovada" : "pendente",
+      aceite_colaborador_em: proprio ? agora : null,
+    };
+    let salvo = { ...linha, id: "local-" + Date.now(), criado_em: agora, decidido_em: aprovada ? agora : null };
+    if (!demo) { const r = await sbInsert(sessao.token, "compras_colaborador", [linha]); if (Array.isArray(r) && r[0]) salvo = r[0]; }
+    const nova = mapCompra(salvo);
+    setCompras(cs => [nova, ...cs]);
+    const nomeCol = usuarios.find(u => u.id === alvoId)?.nome || "colaborador";
+    try { await auditar("compra_registrada", `${user.nome} registrou compra de ${nomeCol}: ${nova.descricao} · ${brl(nova.valor)} em ${nova.parcelas}x · 1º desconto ${nova.primeiraComp.slice(0, 7)} · ${proprio ? "autorizada pelo próprio colaborador" : "lançada pelo gestor, aguardando o aceite do colaborador"}${aprovada ? " · já aprovada" : ""}`); }
+    catch (e) { console.warn("[auditoria compra]", e.message); }
+    return nova;
+  };
+
+  const decidirCompra = async (id, aprovar, resposta, novaComp) => {
+    if (user.papel !== "gestor") throw new Error("Só o gestor aprova compras.");
+    const c = compras.find(x => x.id === id);
+    if (!c || c.status !== "pendente") throw new Error("Essa compra não está mais esperando. Atualize a página.");
+    const texto = limparTexto(resposta || "", LIMITES.obs).trim();
+    if (!aprovar && texto.length < 5) throw new Error("Escreva em uma linha por que está recusando — a pessoa precisa saber.");
+    const comp = novaComp || c.primeiraComp;
+    if (aprovar) {
+      const erro = validarCompra({ descricao: c.descricao, valor: c.valor, data: c.data, parcelas: c.parcelas, primeiraComp: comp });
+      if (erro) throw new Error(erro);
+      if (parcelasDaCompra({ ...c, primeiraComp: comp }).some(p => folhaDoMesFechada(c.userId, p.comp)))
+        throw new Error("A folha de um desses meses já foi fechada. Escolha um mês mais à frente para o primeiro desconto.");
+    }
+    const status = aprovar ? "aprovada" : "recusada";
+    const patch = { status, resposta: texto || null, ...(aprovar && comp !== c.primeiraComp ? { primeira_competencia: comp } : {}) };
+    if (!demo) await sbUpdate(sessao.token, "compras_colaborador", "id=eq." + id, patch);
+    const agora = iso(new Date());
+    setCompras(cs => cs.map(x => x.id === id ? { ...x, status, resposta: texto, decididoEm: agora, primeiraComp: aprovar ? comp : x.primeiraComp } : x));
+    const nomeCol = usuarios.find(u => u.id === c.userId)?.nome || "colaborador";
+    try { await auditar(aprovar ? "compra_aprovada" : "compra_recusada", `${user.nome} ${aprovar ? "APROVOU" : "RECUSOU"} a compra de ${nomeCol}: ${c.descricao} · ${brl(c.valor)} em ${c.parcelas}x${aprovar ? ` · 1º desconto ${comp.slice(0, 7)}${c.aceiteEm ? "" : " · só desconta depois do aceite do colaborador"}` : ` — ${texto}`}`); }
+    catch (e) { console.warn("[auditoria compra]", e.message); }
+  };
+
+  const aceitarCompra = async (id) => {
+    const c = compras.find(x => x.id === id);
+    if (!c || c.userId !== user.id || c.aceiteEm) throw new Error("Não achei essa compra para confirmar.");
+    const agora = iso(new Date());
+    if (!demo) await sbUpdate(sessao.token, "compras_colaborador", "id=eq." + id, { aceite_colaborador_em: agora });
+    setCompras(cs => cs.map(x => x.id === id ? { ...x, aceiteEm: agora } : x));
+    try { await auditar("compra_aceite", `${user.nome} autorizou descontar na folha a compra: ${c.descricao} · ${brl(c.valor)} em ${c.parcelas}x`); }
+    catch (e) { console.warn("[auditoria compra]", e.message); }
+  };
+
+  const cancelarCompra = async (id) => {
+    const c = compras.find(x => x.id === id);
+    if (!c || !["pendente", "aprovada"].includes(c.status)) throw new Error("Essa compra já está encerrada.");
+    const gestor = user.papel === "gestor";
+    if (!gestor && !(c.userId === user.id && c.status === "pendente")) throw new Error("Depois de aprovada, só o gestor cancela.");
+    if (!demo) await sbUpdate(sessao.token, "compras_colaborador", "id=eq." + id, { status: "cancelada" });
+    setCompras(cs => cs.map(x => x.id === id ? { ...x, status: "cancelada" } : x));
+    const nomeCol = usuarios.find(u => u.id === c.userId)?.nome || "colaborador";
+    try { await auditar("compra_cancelada", `${user.nome} cancelou a compra de ${nomeCol}: ${c.descricao} · ${brl(c.valor)} (parcelas de meses já fechados continuam descontadas)`); }
+    catch (e) { console.warn("[auditoria compra]", e.message); }
   };
 
   /* ---------- rescisao e exames ocupacionais (gestor) ---------- */
@@ -5316,8 +5481,8 @@ function AppInterno() {
   if (user.papel !== "gestor" && !user.consentimentoLGPD) return <GateConsentimentoLGPD user={user} onAceitar={() => consentir(true)} onSair={sair} />;
 
   const menu = [
-    ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Espelho de ponto"], ["justificar", "✍️ Justificativas"],
-    ["atestados", "🩺 Atestados"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["premio", "🏆 Prêmio"], ["game", "🎮 Gamificação"], ["time", "🤝 Nosso time"],
+    ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meus horários"], ["justificar", "✍️ Explicar uma falta"],
+    ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"],
             ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
@@ -5524,7 +5689,8 @@ function AppInterno() {
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
-          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} onAssinarFolha={assinarContrachequeGovBr} />}
+          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} compras={compras.filter(c => c.userId === user.id)} onAssinarFolha={assinarContrachequeGovBr} />}
+          {tela === "compras" && <TelaCompras {...{ user, compras, noBanco: comprasNoBanco, demo, onRegistrar: registrarCompra, onAceitar: aceitarCompra, onCancelar: cancelarCompra }} folhasPg={folhasPg.filter(f => f.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
           {tela === "time" && <TelaTime user={user} usuarios={usuarios} acoes={acoes} onCriar={criarCombinado} onAlternar={alternarCombinado} acoesNoBanco={acoesNoBanco} salas={salas} onSalvarSalas={salvarSalas} semente={semente} registros={registros} faltas={faltas} onGerarAta={gerarAta} rit={rit} onConquista={publicarConquista} onElogio={registrarElogio} onMotivadores={salvarMotivadores} onSortearAnjo={sortearAnjoRodada} onResponder={responderPerguntas} />}
@@ -5532,7 +5698,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ acoes, respostas: rit.respostas || [], atas: rit.atas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, ajustes, onDecidirAjuste: decidirAjuste, demo }} />
+            <TelaGestor {...{ acoes, respostas: rit.respostas || [], atas: rit.atas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, compras, comprasNoBanco, onRegistrarCompra: registrarCompra, onDecidirCompra: decidirCompra, onCancelarCompra: cancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, ajustes, onDecidirAjuste: decidirAjuste, demo }} />
           )}
         </main>
       </div>
@@ -8419,11 +8585,11 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
   // Planilha de conferencia: uma linha por colaborador, com as bases que o contador lanca.
   const csvFolha = () => {
     const num = (v) => String(r2(+v || 0)).replace(".", ",");
-    const cab = ["Competencia", "Matricula", "Colaborador", "CPF", "Admissao", "Bruto", "Faltas", "Atrasos", "INSS", "IRRF", "VT", "Adiantamento", "Liquido", "BaseFGTS", "FGTS8", "DiasFaltas", "HorasAtraso", "Status"];
+    const cab = ["Competencia", "Matricula", "Colaborador", "CPF", "Admissao", "Bruto", "Faltas", "Atrasos", "INSS", "IRRF", "VT", "Adiantamento", "ComprasEmpresa", "Liquido", "BaseFGTS", "FGTS8", "DiasFaltas", "HorasAtraso", "Status"];
     const linhas = doMes.map((f) => {
       const u = usuarios.find((x) => x.id === f.userId) || {};
       const base = r2(f.salario - f.faltas - f.atrasos);
-      return [comp, u.matricula || "", nome(f.userId), u.cpf || "", u.admissao || "", num(f.salario), num(f.faltas), num(f.atrasos), num(f.inss), num(f.irrf), num(f.vt), num(f.adiantamento), num(f.liquido), num(base), num(base * TABELAS_2026.fgtsPatronal), f.diasFaltas || 0, num(f.horasAtraso), f.status].join(";");
+      return [comp, u.matricula || "", nome(f.userId), u.cpf || "", u.admissao || "", num(f.salario), num(f.faltas), num(f.atrasos), num(f.inss), num(f.irrf), num(f.vt), num(f.adiantamento), num(f.compras || 0), num(f.liquido), num(base), num(base * TABELAS_2026.fgtsPatronal), f.diasFaltas || 0, num(f.horasAtraso), f.status].join(";");
     });
     baixarArquivo([cab.join(";"), ...linhas].join("\r\n"), `folha-${comp}.csv`);
   };
@@ -8471,7 +8637,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
         <div className="rolagem-x" style={{ marginTop: 10 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ color: C.cinza, textAlign: "right" }}>
-              <th style={{ textAlign: "left", padding: 6 }}>Colaborador</th><th>Bruto</th><th>Faltas</th><th>Atrasos</th><th>INSS</th><th>IRRF</th><th>VT</th><th>Adiant.</th><th>Líquido</th><th style={{ textAlign: "center" }}>Assinatura gov.br</th><th></th>
+              <th style={{ textAlign: "left", padding: 6 }}>Colaborador</th><th>Bruto</th><th>Faltas</th><th>Atrasos</th><th>INSS</th><th>IRRF</th><th>VT</th><th>Adiant.</th><th>Compras</th><th>Líquido</th><th style={{ textAlign: "center" }}>Assinatura gov.br</th><th></th>
             </tr></thead>
             <tbody>
               {doMes.map(f => (
@@ -8482,7 +8648,8 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                       {["salario", "faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].map(k => (
                         <td key={k}><input type="number" step="0.01" style={{ ...S.input, width: 84, padding: 6, fontSize: 12 }} value={editRow[k]} onChange={e => setEditRow({ ...editRow, [k]: e.target.value })} /></td>
                       ))}
-                      <td style={{ fontWeight: 700 }}>{brl((+editRow.salario || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
+                      <td title="As compras vêm da tela de compras">{brl(f.compras || 0)}</td>
+                      <td style={{ fontWeight: 700 }}>{brl((+editRow.salario || 0) - (f.compras || 0) - ["faltas", "atrasos", "inss", "irrf", "vt", "adiantamento"].reduce((s, k) => s + (+editRow[k] || 0), 0))}</td>
                       <td></td>
                       <td style={{ whiteSpace: "nowrap" }}><button style={{ ...S.btn, padding: "4px 10px", fontSize: 11 }} onClick={salvarEdit}>Salvar</button> <button style={{ ...S.btnGhost, padding: "4px 8px", fontSize: 11 }} onClick={() => setEditRow(null)}>✕</button></td>
                     </>
@@ -8491,7 +8658,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                       <td>{brl(f.salario)}</td>
                       <td title={`${f.diasFaltas} dia(s) + DSR`}>{brl(f.faltas)}</td>
                       <td title={`${f.horasAtraso}h além da tolerância`}>{brl(f.atrasos)}</td>
-                      <td>{brl(f.inss)}</td><td>{brl(f.irrf)}</td><td>{brl(f.vt)}</td><td>{brl(f.adiantamento)}</td>
+                      <td>{brl(f.inss)}</td><td>{brl(f.irrf)}</td><td>{brl(f.vt)}</td><td>{brl(f.adiantamento)}</td><td>{brl(f.compras || 0)}</td>
                       <td style={{ fontWeight: 700, color: C.verde }}>{brl(f.liquido)}</td>
                       <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
                         {f.assinadoEm ? (
@@ -8525,6 +8692,7 @@ function SecaoFolha({ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, on
                 <td>{brl(doMes.reduce((s, f) => s + f.irrf, 0))}</td>
                 <td>{brl(doMes.reduce((s, f) => s + f.vt, 0))}</td>
                 <td>{brl(doMes.reduce((s, f) => s + f.adiantamento, 0))}</td>
+                <td>{brl(doMes.reduce((s, f) => s + (f.compras || 0), 0))}</td>
                 <td style={{ color: C.verde }}>{brl(doMes.reduce((s, f) => s + f.liquido, 0))}</td><td></td><td></td>
               </tr>
             </tbody>
@@ -9005,7 +9173,8 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
     </div>
   );
 }
-function CardHoleriteItem({ f, user, onAssinarFolha }) {
+function CardHoleriteItem({ f, user, onAssinarFolha, compras = [] }) {
+  const detalheCompras = f.compras > 0 ? comprasDoMes(compras, f.userId, f.competencia) : [];
   const [etapaAssinatura, setEtapaAssinatura] = useState(null); // null | "aguardando_arquivo"
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState(null);
@@ -9088,7 +9257,8 @@ function CardHoleriteItem({ f, user, onAssinarFolha }) {
           {[["Salário bruto", f.salario, C.branco],
             [`Desconto faltas (${f.diasFaltas} dia(s) + DSR)`, -f.faltas],
             [`Desconto atrasos (${f.horasAtraso}h)`, -f.atrasos],
-            ["INSS", -f.inss], ["IRRF", -f.irrf], ["Vale-transporte", -f.vt], ["Adiantamento", -f.adiantamento]]
+            ["INSS", -f.inss], ["IRRF", -f.irrf], ["Vale-transporte", -f.vt], ["Adiantamento", -f.adiantamento],
+            ["Compras na empresa", -(f.compras || 0)]]
             .filter(([, v]) => v !== 0)
             .map(([l, v, cor]) => (
               <tr key={l} style={{ borderTop: "1px solid #1A2F4A" }}>
@@ -9102,6 +9272,11 @@ function CardHoleriteItem({ f, user, onAssinarFolha }) {
           </tr>
         </tbody>
       </table>
+      {detalheCompras.length > 0 && (
+        <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>
+          Compras descontadas neste mês: {detalheCompras.map((d) => `${d.compra.descricao} (parcela ${d.n}/${d.de}, ${brl(d.valor)})`).join(" · ")}
+        </p>
+      )}
 
       {f.assinadoEm ? (
         <div style={{ marginTop: 14, background: "#10281E", border: "1px solid #1E5035", borderRadius: 12, padding: 14, textAlign: "left" }}>
@@ -9162,21 +9337,228 @@ function CardHoleriteItem({ f, user, onAssinarFolha }) {
   );
 }
 
-function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha }) {
+function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha, compras = [] }) {
   const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
+  const proximas = compras.filter(compraDescontavel).flatMap((c) => parcelasDaCompra(c).filter((p) => !folhasPg.some((f) => f.status === "fechada" && f.competencia.slice(0, 7) === p.comp.slice(0, 7))).map((p) => ({ c, p })));
   return (
     <div>
       <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Holerite</h1>
       <p style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{AVISO_FOLHA}</p>
       {minhas.length === 0 && <div style={{ ...S.card, marginTop: 14, fontSize: 13, color: C.cinza }}>Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada mês.</div>}
       {minhas.map(f => (
-        <CardHoleriteItem key={f.id} f={f} user={user} onAssinarFolha={onAssinarFolha} />
+        <CardHoleriteItem key={f.id} f={f} user={user} onAssinarFolha={onAssinarFolha} compras={compras} />
       ))}
       {adiantamentos.some(a => a.status === "pendente") && (
         <div style={{ ...S.card, marginTop: 14, fontSize: 13 }}>
           <b>Adiantamentos pendentes:</b> {adiantamentos.filter(a => a.status === "pendente").map(a => `${brl(a.valor)} (desconto em ${a.competenciaDesconto.slice(0, 7)})`).join(" · ")}
         </div>
       )}
+      {proximas.length > 0 && (
+        <div style={{ ...S.card, marginTop: 14, fontSize: 13, lineHeight: 1.7 }}>
+          <b>Compras que ainda vão descontar:</b>
+          {proximas.map(({ c, p }) => <div key={c.id + p.n}>{rotuloComp(p.comp)} · {c.descricao} · parcela {p.n}/{p.de} · {brl(p.valor)}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMPRAS NA EMPRESA — o colaborador anota o que comprou, escolhe 1x, 2x ou 3x
+   e o desconto aparece no holerite dos meses seguintes. Texto curto e botoes
+   grandes de proposito: e uma tela que se usa em pe, no balcao, pelo celular.
+   ═══════════════════════════════════════════════════════════════ */
+const parcelaJaDescontada = (folhasPg, userId, comp) => folhasPg.some((f) => f.userId === userId && f.status === "fechada" && f.competencia.slice(0, 7) === comp.slice(0, 7));
+
+function ListaParcelasCompra({ c, folhasPg }) {
+  return (
+    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.8 }}>
+      {parcelasDaCompra(c).map((p) => {
+        const feita = parcelaJaDescontada(folhasPg, c.userId, p.comp);
+        const vale = compraDescontavel(c);
+        return (
+          <div key={p.n} style={{ display: "flex", justifyContent: "space-between", gap: 10, borderTop: "1px solid #1A2F4A", padding: "4px 0", opacity: c.status === "recusada" || c.status === "cancelada" ? 0.55 : 1 }}>
+            <span>{p.n}ª parcela · {rotuloComp(p.comp)}</span>
+            <span><b>{brl(p.valor)}</b> {feita && vale ? <span style={{ color: C.verde }}>✓ descontada</span> : <span style={{ color: C.cinza }}>{vale ? "vai descontar" : ""}</span>}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FormCompra({ usuarios, gestor, meuId, onRegistrar }) {
+  const vazio = { userId: "", descricao: "", valor: "", data: hojeStr(), parcelas: 1, primeiraComp: "", autorizo: false, aprovar: true };
+  const [f, setF] = useState(vazio);
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const valor = numeroValido(f.valor, { min: 0.01, max: 100000 });
+  const primeira = f.primeiraComp ? f.primeiraComp + "-01" : (dataValida(f.data) ? primeiraCompDaCompra(f.data) : "");
+  const paraOutro = !!(gestor && f.userId && f.userId !== meuId);
+  const enviar = async () => {
+    if (ocupado) return;
+    setOcupado(true); setMsg(null);
+    try {
+      if (gestor && !f.userId) throw new Error("Escolha quem comprou.");
+      await onRegistrar({ ...f, primeiraComp: f.primeiraComp ? f.primeiraComp + "-01" : "", parcelas: Number(f.parcelas) });
+      setF({ ...vazio, userId: f.userId });
+      setMsg({ ok: true, txt: gestor ? "Compra anotada." : "Pronto! Mandamos para o gestor aprovar." });
+    } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
+    finally { setOcupado(false); }
+  };
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 16, color: C.amarelo }}>Anotar uma compra</div>
+      {gestor && (
+        <label style={{ display: "block", marginTop: 12, fontSize: 13 }}>Quem comprou?
+          <select style={{ ...S.input, marginTop: 4 }} value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>
+            <option value="">Escolha…</option>
+            {usuarios.filter((u) => u.ativo !== false).map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+          </select>
+        </label>
+      )}
+      <label style={{ display: "block", marginTop: 12, fontSize: 13 }}>O que comprou?
+        <input style={{ ...S.input, marginTop: 4 }} maxLength={120} placeholder="Ex.: caixa de som JBL" value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })} />
+      </label>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+        <label style={{ flex: "1 1 140px", fontSize: 13 }}>Valor total (R$)
+          <input type="number" inputMode="decimal" min="0" step="0.01" style={{ ...S.input, marginTop: 4 }} value={f.valor} onChange={(e) => setF({ ...f, valor: e.target.value })} />
+        </label>
+        <label style={{ flex: "1 1 140px", fontSize: 13 }}>Dia da compra
+          <input type="date" style={{ ...S.input, marginTop: 4 }} value={f.data} onChange={(e) => setF({ ...f, data: e.target.value })} />
+        </label>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 13 }}>Em quantas vezes?</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        {[1, 2, 3].map((n) => (
+          <button key={n} type="button" aria-pressed={+f.parcelas === n} onClick={() => setF({ ...f, parcelas: n })}
+            style={{ ...(+f.parcelas === n ? S.btn : S.btnGhost), flex: 1, minHeight: 58, fontSize: 16, padding: "8px 4px" }}>
+            {n}x{valor ? <div style={{ fontSize: 12, fontWeight: 600 }}>{brl(parcelasDaCompra({ valor, parcelas: n, primeiraComp: primeira || "2000-01-01" })[0].valor)}</div> : null}
+          </button>
+        ))}
+      </div>
+      <p style={{ fontSize: 12.5, color: C.cinza, margin: "10px 0 0" }}>
+        {primeira ? <>O primeiro desconto vem no holerite de <b style={{ color: C.branco }}>{rotuloComp(primeira)}</b>.</> : "Escolha o dia da compra."}
+      </p>
+      {gestor && (
+        <label style={{ display: "block", marginTop: 10, fontSize: 13 }}>Mês do primeiro desconto (opcional)
+          <input type="month" style={{ ...S.input, marginTop: 4 }} value={f.primeiraComp} onChange={(e) => setF({ ...f, primeiraComp: e.target.value })} />
+        </label>
+      )}
+      {!paraOutro && (
+        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 14, fontSize: 13.5, lineHeight: 1.5 }}>
+          <input type="checkbox" checked={f.autorizo} onChange={(e) => setF({ ...f, autorizo: e.target.checked })} style={{ marginTop: 2, flexShrink: 0 }} />
+          <span>Eu autorizo descontar essa compra no meu holerite, nas parcelas acima.</span>
+        </label>
+      )}
+      {paraOutro && <p style={{ fontSize: 12.5, color: C.cinza, margin: "10px 0 0" }}>A pessoa vai precisar confirmar no app que autoriza. Só depois disso o desconto entra na folha.</p>}
+      {gestor && (
+        <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, fontSize: 13.5 }}>
+          <input type="checkbox" checked={f.aprovar} onChange={(e) => setF({ ...f, aprovar: e.target.checked })} />
+          <span>Já aprovar</span>
+        </label>
+      )}
+      <button style={{ ...S.btn, width: "100%", marginTop: 16, minHeight: 56, fontSize: 17, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado} onClick={enviar}>
+        {ocupado ? "Enviando…" : gestor ? "Anotar compra" : "Enviar para o gestor"}
+      </button>
+      {msg && <p style={{ fontSize: 13.5, color: msg.ok ? C.verde : C.vermelho, margin: "10px 0 0" }}>{msg.txt}</p>}
+    </div>
+  );
+}
+
+function CartaoCompra({ c, nome, folhasPg, podeCancelar, onCancelar, onAceitar, children }) {
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const rodar = async (fn) => { if (ocupado) return; setOcupado(true); setMsg(null); try { await fn(); } catch (e) { setMsg(mensagemAmigavel(e)); } finally { setOcupado(false); } };
+  const cor = { pendente: [C.amarelo, "#111"], aprovada: [C.verde, C.preto], recusada: [C.vermelho, C.preto], cancelada: [C.cinza, C.preto] }[c.status] || [C.cinza, C.preto];
+  const faltaAceite = (c.status === "pendente" || c.status === "aprovada") && !c.aceiteEm;
+  return (
+    <div style={{ ...S.card, marginTop: 12, padding: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <b style={{ fontSize: 15 }}>{c.descricao}</b>
+        <span style={S.tag(cor[0], cor[1])}>{COMPRA_STATUS[c.status] || c.status}</span>
+      </div>
+      <div style={{ fontSize: 13, color: C.cinza, marginTop: 4 }}>
+        {nome ? nome + " · " : ""}{fmtData(c.data + "T12:00:00")} · {brl(c.valor)} · {textoParcelas(c)}
+      </div>
+      <ListaParcelasCompra c={c} folhasPg={folhasPg} />
+      {c.status === "recusada" && c.resposta && <p style={{ fontSize: 13, color: C.vermelho, margin: "8px 0 0" }}>Motivo: {c.resposta}</p>}
+      {faltaAceite && onAceitar && (
+        <div style={{ marginTop: 10, background: "#3A2A08", border: "1px solid " + C.amarelo, borderRadius: 12, padding: 12, fontSize: 13.5, lineHeight: 1.5 }}>
+          O gestor anotou essa compra no seu nome. Você autoriza descontar no holerite?
+          <button style={{ ...S.btn, width: "100%", marginTop: 10, minHeight: 52 }} disabled={ocupado} onClick={() => rodar(() => onAceitar(c.id))}>Sim, autorizo o desconto</button>
+        </div>
+      )}
+      {faltaAceite && !onAceitar && c.status === "aprovada" && <p style={{ fontSize: 12.5, color: C.amarelo, margin: "8px 0 0" }}>Só desconta depois que {nome || "a pessoa"} confirmar no app que autoriza.</p>}
+      {children}
+      {podeCancelar && onCancelar && (
+        <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, marginTop: 10, width: "100%" }} disabled={ocupado} onClick={() => rodar(() => onCancelar(c.id))}>Cancelar compra</button>
+      )}
+      {msg && <p style={{ fontSize: 13, color: C.vermelho, margin: "8px 0 0" }}>{msg}</p>}
+    </div>
+  );
+}
+
+function TelaCompras({ user, compras, folhasPg, noBanco, demo, onRegistrar, onAceitar, onCancelar }) {
+  const minhas = compras.filter((c) => c.userId === user.id);
+  const ligado = noBanco || demo;
+  return (
+    <div>
+      <h1 style={{ ...S.display, fontSize: 26, margin: 0 }}>Minhas compras</h1>
+      <p style={{ fontSize: 14, color: C.cinza, marginTop: 6, lineHeight: 1.6 }}>Comprou algo na loja? Anote aqui e escolha em até 3 vezes. O desconto vem no holerite dos meses seguintes.</p>
+      {!ligado ? (
+        <div style={{ ...S.card, marginTop: 14, fontSize: 14, color: C.amarelo }}>Essa tela ainda não foi ligada. Peça para o gestor ativar.</div>
+      ) : (
+        <FormCompra usuarios={[]} gestor={false} onRegistrar={(d) => onRegistrar({ ...d, userId: user.id })} />
+      )}
+      {minhas.length === 0 && ligado && <p style={{ fontSize: 13.5, color: C.cinza, marginTop: 16 }}>Você ainda não anotou nenhuma compra.</p>}
+      {minhas.map((c) => (
+        <CartaoCompra key={c.id} c={c} folhasPg={folhasPg} podeCancelar={c.status === "pendente"} onCancelar={onCancelar} onAceitar={onAceitar} />
+      ))}
+    </div>
+  );
+}
+
+/* Painel do gestor: pedidos esperando e todas as compras. */
+function SecaoCompras({ usuarios, compras, folhasPg, noBanco, demo, meuId, onRegistrar, onDecidir, onCancelar }) {
+  const nome = (id) => usuarios.find((u) => u.id === id)?.nome || "colaborador";
+  const [recusando, setRecusando] = useState(null);
+  const [motivo, setMotivo] = useState("");
+  const [meses, setMeses] = useState({});
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const pendentes = compras.filter((c) => c.status === "pendente");
+  const outras = compras.filter((c) => c.status !== "pendente");
+  const rodar = async (fn, ok) => { if (ocupado) return; setOcupado(true); setMsg(null); try { await fn(); setMsg({ ok: true, txt: ok }); } catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); } finally { setOcupado(false); } };
+  const ligado = noBanco || demo;
+  return (
+    <div style={{ ...S.card, marginTop: 14 }}>
+      <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>🛍 Compras dos colaboradores{pendentes.length ? ` · ${pendentes.length} esperando` : ""}</div>
+      <p style={{ fontSize: 13, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>Cada parcela entra sozinha na folha do mês certo. Só desconta se você aprovou e a pessoa autorizou.</p>
+      {!ligado && <p style={{ fontSize: 13.5, color: C.amarelo, marginTop: 10 }}>Ainda não está ligado: rode o SQL das compras (Diagnóstico do sistema → Copiar SQL).</p>}
+      {msg && <p style={{ fontSize: 13.5, color: msg.ok ? C.verde : C.vermelho, marginTop: 8 }}>{msg.txt}</p>}
+      {pendentes.map((c) => (
+        <CartaoCompra key={c.id} c={c} nome={nome(c.userId)} folhasPg={folhasPg} podeCancelar onCancelar={onCancelar}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginTop: 12 }}>
+            <label style={{ flex: "1 1 150px", fontSize: 12.5 }}>1º desconto em
+              <input type="month" style={{ ...S.input, marginTop: 4 }} value={meses[c.id] ?? c.primeiraComp.slice(0, 7)} onChange={(e) => setMeses({ ...meses, [c.id]: e.target.value })} />
+            </label>
+            <button style={{ ...S.btn, flex: "1 1 120px", minHeight: 52 }} disabled={ocupado} onClick={() => rodar(() => onDecidir(c.id, true, "", (meses[c.id] ?? c.primeiraComp.slice(0, 7)) + "-01"), "Compra aprovada.")}>Aprovar</button>
+            <button style={{ ...S.btnGhost, flex: "1 1 120px", minHeight: 52 }} disabled={ocupado} onClick={() => { setRecusando(recusando === c.id ? null : c.id); setMotivo(""); }}>Recusar</button>
+          </div>
+          {recusando === c.id && (
+            <div style={{ marginTop: 10 }}>
+              <input style={S.input} placeholder="Por que está recusando? (uma linha)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+              <button style={{ ...S.btn, width: "100%", marginTop: 8 }} disabled={ocupado} onClick={() => rodar(async () => { await onDecidir(c.id, false, motivo); setRecusando(null); }, "Compra recusada.")}>Confirmar recusa</button>
+            </div>
+          )}
+        </CartaoCompra>
+      ))}
+      <FormCompra usuarios={usuarios} gestor meuId={meuId} onRegistrar={onRegistrar} />
+      {outras.length > 0 && <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 18 }}>Compras anotadas</div>}
+      {outras.slice(0, 20).map((c) => (
+        <CartaoCompra key={c.id} c={c} nome={nome(c.userId)} folhasPg={folhasPg} podeCancelar={c.status === "aprovada"} onCancelar={onCancelar} />
+      ))}
     </div>
   );
 }
@@ -9337,6 +9719,7 @@ const TABELAS_OPCIONAIS = [
   { nome: "respostas", para: "as tres perguntas do planejamento" },
   { nome: "presenca_chamada", para: "quem esta na sala da reuniao agora" },
   { nome: "ajustes_ponto", para: "pedidos de correcao de marcacao" },
+  { nome: "compras_colaborador", para: "compras do colaborador (desconto em folha)" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -9757,6 +10140,147 @@ create policy "ajustes: cada um pede o seu" on public.ajustes_ponto
 drop policy if exists "ajustes: so o gestor decide" on public.ajustes_ponto;
 create policy "ajustes: so o gestor decide" on public.ajustes_ponto
   for update to authenticated using (is_gestor()) with check (is_gestor());
+
+-- Compras do colaborador (desconto em folha em ate 3x). Desconto so vale com a compra APROVADA
+-- e com o aceite do colaborador (CLT art. 462). Copie as linhas da folha antes: veja a migracao.
+create table if not exists public.compras_colaborador (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  lancado_por uuid not null references public.usuarios (id),
+  descricao text not null check (char_length(btrim(descricao)) between 3 and 120),
+  valor_total numeric(12, 2) not null check (valor_total > 0 and valor_total <= 100000),
+  data_compra date not null,
+  parcelas smallint not null default 1 check (parcelas between 1 and 3),
+  primeira_competencia date not null check (extract(day from primeira_competencia) = 1),
+  status text not null default 'pendente' check (status in ('pendente', 'aprovada', 'recusada', 'cancelada')),
+  aceite_colaborador_em timestamptz,
+  resposta text,
+  decidido_por uuid references public.usuarios (id),
+  decidido_em timestamptz,
+  criado_em timestamptz not null default now()
+);
+create index if not exists compras_colaborador_usuario on public.compras_colaborador (usuario_id, primeira_competencia);
+alter table public.compras_colaborador enable row level security;
+
+alter table public.folha_pagamento add column if not exists desconto_compras numeric(12, 2) not null default 0;
+
+-- ---------- politicas ----------
+drop policy if exists "compras: cada um ve as suas" on public.compras_colaborador;
+create policy "compras: cada um ve as suas" on public.compras_colaborador
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "compras: registrar" on public.compras_colaborador;
+create policy "compras: registrar" on public.compras_colaborador
+  for insert to authenticated
+  with check (lancado_por = auth.uid() and (usuario_id = auth.uid() or is_gestor()));
+
+drop policy if exists "compras: atualizar" on public.compras_colaborador;
+create policy "compras: atualizar" on public.compras_colaborador
+  for update to authenticated
+  using (usuario_id = auth.uid() or is_gestor())
+  with check (usuario_id = auth.uid() or is_gestor());
+
+-- Sem policy de DELETE: compra nunca e apagada, so cancelada (fica a prova).
+
+-- ---------- gatilho: o que cada papel pode gravar ----------
+create or replace function public.compras_colaborador_regras()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_gestor boolean := coalesce(is_gestor(), false);
+begin
+  if tg_op = 'INSERT' then
+    new.lancado_por := auth.uid();
+    new.criado_em := now();
+    new.decidido_por := null;
+    new.decidido_em := null;
+    new.resposta := null;
+    if v_gestor then
+      if new.status not in ('pendente', 'aprovada') then
+        raise exception 'compra nova so pode nascer pendente ou aprovada';
+      end if;
+      -- gestor nunca grava o aceite de outra pessoa
+      if new.usuario_id <> auth.uid() then
+        new.aceite_colaborador_em := null;
+      elsif new.aceite_colaborador_em is null then
+        new.aceite_colaborador_em := now();
+      end if;
+      if new.status = 'aprovada' then
+        new.decidido_por := auth.uid();
+        new.decidido_em := now();
+      end if;
+    else
+      if new.usuario_id <> auth.uid() or new.status <> 'pendente' then
+        raise exception 'colaborador so registra compra propria, esperando o gestor';
+      end if;
+      -- registrar a propria compra = autorizar o desconto
+      new.aceite_colaborador_em := now();
+    end if;
+    return new;
+  end if;
+
+  -- UPDATE
+  if v_gestor then
+    if new.aceite_colaborador_em is distinct from old.aceite_colaborador_em then
+      if new.usuario_id = auth.uid() and old.aceite_colaborador_em is null then
+        new.aceite_colaborador_em := now();
+      else
+        raise exception 'so o proprio colaborador confirma o aceite do desconto';
+      end if;
+    end if;
+    if new.status is distinct from old.status then
+      if old.status in ('recusada', 'cancelada') then
+        raise exception 'compra % nao pode mais mudar', old.status;
+      end if;
+      new.decidido_por := auth.uid();
+      new.decidido_em := now();
+    end if;
+    -- identidade da compra nunca muda depois de lancada
+    if new.usuario_id <> old.usuario_id or new.lancado_por <> old.lancado_por
+       or new.valor_total <> old.valor_total or new.parcelas <> old.parcelas
+       or new.data_compra <> old.data_compra or new.descricao <> old.descricao then
+      raise exception 'valor, parcelas, data e descricao nao mudam; cancele e lance de novo';
+    end if;
+    -- mudar o mes do primeiro desconto so antes de aprovar
+    if new.primeira_competencia <> old.primeira_competencia and old.status <> 'pendente' then
+      raise exception 'o mes do primeiro desconto so muda enquanto a compra esta pendente';
+    end if;
+    return new;
+  end if;
+
+  -- colaborador: so confirma o proprio aceite OU cancela compra ainda pendente
+  if old.usuario_id <> auth.uid() then
+    raise exception 'compra de outra pessoa';
+  end if;
+  if (to_jsonb(new) - array['aceite_colaborador_em', 'status', 'decidido_por', 'decidido_em'])
+     <> (to_jsonb(old) - array['aceite_colaborador_em', 'status', 'decidido_por', 'decidido_em']) then
+    raise exception 'colaborador nao altera os dados da compra';
+  end if;
+  if new.aceite_colaborador_em is distinct from old.aceite_colaborador_em then
+    if old.aceite_colaborador_em is null and old.status in ('pendente', 'aprovada') then
+      new.aceite_colaborador_em := now();
+    else
+      raise exception 'o aceite ja foi dado ou a compra nao esta mais aberta';
+    end if;
+  end if;
+  if new.status is distinct from old.status then
+    if old.status = 'pendente' and new.status = 'cancelada' then
+      new.decidido_por := auth.uid();
+      new.decidido_em := now();
+    else
+      raise exception 'colaborador so cancela compra que ainda esta pendente';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_compras_regras on public.compras_colaborador;
+create trigger trg_compras_regras
+  before insert or update on public.compras_colaborador
+  for each row execute function public.compras_colaborador_regras();
 `;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
@@ -10063,7 +10587,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, ajustes = [], onDecidirAjuste, demo }) {
+function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, compras = [], comprasNoBanco = false, onRegistrarCompra, onDecidirCompra, onCancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, ajustes = [], onDecidirAjuste, demo }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -10258,6 +10782,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
       <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} />
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
       <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
+      <SecaoCompras {...{ usuarios, compras, folhasPg, demo, meuId: gestorId, noBanco: comprasNoBanco, onRegistrar: onRegistrarCompra, onDecidir: onDecidirCompra, onCancelar: onCancelarCompra }} />
        <SecaoRescisao usuarios={usuarios} rescisoes={rescisoes} onCriarRescisao={onCriarRescisao} onConfirmarRescisao={onConfirmarRescisao} />
         <CartaoDespedida usuarios={usuarios} rescisoes={rescisoes} />
        <SecaoExames usuarios={usuarios} exames={examesOcupacionais} rescisoes={rescisoes} onCriarExame={onCriarExame} onAgendar={onAgendarExame} onConcluir={onConcluirExame} onAbrir={onAbrirArquivo} />
