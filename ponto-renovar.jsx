@@ -1008,8 +1008,9 @@ const mesmaComp = (dataStr, comp) => (dataStr || "").slice(0, 7) === comp.slice(
 // Chave da semana (segunda-feira) pra apurar o DSR perdido: 1 falta injustificada = perde o DSR daquela semana
 const chaveSemana = (dt) => { const d = new Date(dt); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dataISO(d); };
 
-function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, compras) {
-  const salContratual = +u.salario || 0;
+function calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, compras, historicoSalario) {
+  // Com historico de salario (tabela salario_historico), vale o salario vigente em cada dia do mes. Sem historico, nada muda.
+  const salContratual = Array.isArray(historicoSalario) ? salarioDoMes(historicoSalario, u.id, comp, +u.salario || 0) : (+u.salario || 0);
   // Admissão no meio da competência: o mês é proporcional aos dias de vínculo (salário/30 × dias),
   // prática padrão da folha brasileira. Sem isso, quem entrou no dia 16 recebia mês cheio.
   const [anoC, mesC] = comp.split("-").map(Number);
@@ -3476,6 +3477,7 @@ const agruparLinhaDigitavel = (v) => {
 
 const EVENTOS_ESOCIAL = {
   S2200: { codigo: "S-2200", nome: "Admissao do trabalhador", base: "enviar ate o dia imediatamente anterior ao inicio das atividades - e o evento que assina a carteira digital" },
+  S2206: { codigo: "S-2206", nome: "Alteracao de contrato (salario)", base: "enviar ate o dia 15 do mes seguinte a alteracao e antes da folha da competencia" },
   S2299: { codigo: "S-2299", nome: "Desligamento", base: "enviar ate 10 dias corridos do desligamento - e o evento que da baixa na carteira" },
   S2230: { codigo: "S-2230", nome: "Afastamento temporario", base: "atestado acima de 3 dias: ate o dia 15 do mes seguinte (acidente de trabalho e imediato)" },
   S1200: { codigo: "S-1200 / S-1210", nome: "Remuneracao e pagamentos", base: "fechamento mensal: ate o dia 15 do mes seguinte a competencia" },
@@ -3530,6 +3532,227 @@ function MedidorPremio({ m }) {
       </div>
     </div>
   );
+}
+
+/* ============================================================
+   CADASTRO COMPLETO DO COLABORADOR (ficha, salario com historico, vale-transporte,
+   dependentes, carteira digital/eSocial e desligamento)
+   So funcoes puras aqui: testadas em testes.mjs, sem rede e sem tela.
+   Fontes: CF art. 7o VI e CLT art. 468 (salario nao reduz sem acordo/convencao coletiva);
+   Lei 7.418/85 e Decreto 95.247/87 (VT: desconto de ate 6% do salario basico);
+   eSocial S-2200/S-2206/S-2299 (gov.br/esocial, Manual de Orientacao e Manual Web Geral).
+   ============================================================ */
+const VT_LIMITE_PCT = 0.06;
+const VT_DIAS_PADRAO = 22;
+const ESTADO_CIVIL = { solteiro: "Solteiro(a)", casado: "Casado(a)", uniao_estavel: "União estável", separado: "Separado(a)", divorciado: "Divorciado(a)", viuvo: "Viúvo(a)" };
+const GRAU_INSTRUCAO = { fundamental: "Ensino fundamental", medio: "Ensino médio", superior: "Ensino superior", pos: "Pós-graduação", outro: "Outro" };
+const RACA_COR = { branca: "Branca", preta: "Preta", parda: "Parda", amarela: "Amarela", indigena: "Indígena", nao_informada: "Prefiro não informar" };
+const PIX_TIPOS = { cpf: "CPF", celular: "Celular", email: "E-mail", aleatoria: "Chave aleatória" };
+const PARENTESCO_DEP = { filho: "Filho(a)", conjuge: "Cônjuge", outro: "Outro" };
+const MOTIVOS_DESLIGAMENTO = { ...Object.fromEntries(Object.entries(MOTIVOS_RESCISAO).map(([k, v]) => [k, v.label])), outro: "Outro motivo (descreva)" };
+const GUARDA_DOCUMENTOS_TXT = "Nada é apagado: a lei manda guardar ponto, folha e documentos do colaborador por anos depois que ele sai (a prescrição trabalhista é de 2 anos após o desligamento, limitada a 5 anos para trás — CLT art. 11; o FGTS e a Previdência também prescrevem em 5 anos — Lei 8.036/90 art. 23 e Decreto 3.048/99 art. 225 §5º, que manda guardar até a prescrição). Por segurança o sistema guarda tudo e só esconde o desligado das listas.";
+
+const cpfValido = (v) => {
+  const c = soDigitos(v);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = (base, peso) => { let s = 0; for (let i = 0; i < base.length; i++) s += +base[i] * (peso - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(c.slice(0, 9), 10) === +c[9] && dv(c.slice(0, 10), 11) === +c[10];
+};
+const fmtCPF = (v) => { const c = soDigitos(v).slice(0, 11); return c.length === 11 ? `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}` : c; };
+const pisValido = (v) => {
+  const c = soDigitos(v);
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const pesos = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const s = pesos.reduce((a, p, i) => a + p * +c[i], 0);
+  const r = 11 - (s % 11);
+  return (r >= 10 ? 0 : r) === +c[10];
+};
+const cepValido = (v) => soDigitos(v).length === 8;
+const fmtCEP = (v) => { const c = soDigitos(v).slice(0, 8); return c.length > 5 ? `${c.slice(0, 5)}-${c.slice(5)}` : c; };
+
+/* Resposta do ViaCEP -> campos da ficha. Devolve null se o CEP nao existe. */
+function enderecoDoViaCEP(j) {
+  if (!j || typeof j !== "object" || j.erro) return null;
+  return {
+    logradouro: limparTexto(j.logradouro || "", 120), bairro: limparTexto(j.bairro || "", 80),
+    cidade: limparTexto(j.localidade || "", 80), uf: String(j.uf || "").toUpperCase().slice(0, 2),
+    codigoIbge: soDigitos(j.ibge || "").slice(0, 7),
+  };
+}
+
+const salHistOrdenado = (hist, userId) => (hist || []).filter((h) => h.userId === userId)
+  .sort((a, b) => (a.vigencia < b.vigencia ? 1 : a.vigencia > b.vigencia ? -1 : String(b.criadoEm || "") > String(a.criadoEm || "") ? 1 : -1));
+
+/* Salario vigente numa data (a ultima alteracao com vigencia <= data). Sem historico: devolve o plano B. */
+function salarioVigenteEm(hist, userId, dataIso, fallback = 0) {
+  const h = salHistOrdenado(hist, userId).find((x) => String(x.vigencia).slice(0, 10) <= dataIso);
+  return h ? +h.valor : fallback;
+}
+
+/* Salario do mes para a folha. Se o salario mudou no meio do mes, vale cada valor pelos dias em que
+   esteve vigente (mes comercial de 30 dias, igual ao resto da folha). Sem historico, nada muda. */
+function salarioDoMes(hist, userId, comp, fallback = 0) {
+  if (!salHistOrdenado(hist, userId).length) return fallback;
+  const [a, m] = String(comp).split("-").map(Number);
+  const ultimo = new Date(a, m, 0).getDate();
+  const dd = (n) => `${String(comp).slice(0, 7)}-${String(Math.min(n, ultimo)).padStart(2, "0")}`;
+  let soma = 0;
+  for (let dia = 1; dia <= 30; dia++) soma += salarioVigenteEm(hist, userId, dd(dia), fallback);
+  return r2(soma / 30);
+}
+
+/* Regras de uma alteracao de salario. Reducao sem acordo/convencao coletiva = bloqueado (CF art. 7o VI, CLT art. 468). */
+function validarAlteracaoSalario({ hist = [], userId, valor, vigencia, motivo, acordo = false, salarioAtual = 0 }) {
+  const v = +valor;
+  if (!(v > 0) || v > LIMITES.valorMax) return { ok: false, erro: "Informe o novo salário (maior que zero)." };
+  if (!dataValida(vigencia)) return { ok: false, erro: "Informe a data em que o novo salário começa a valer." };
+  if (String(motivo || "").trim().length < 3) return { ok: false, erro: "Diga o motivo (ex.: reajuste anual, promoção)." };
+  const anterior = salarioVigenteEm(hist, userId, vigencia, +salarioAtual || 0);
+  const reducao = anterior > 0 && v < anterior;
+  if (reducao && !acordo) {
+    return { ok: false, reducao: true, anterior, erro: `Não pode reduzir o salário (de ${brl(anterior)} para ${brl(v)}). A lei proíbe, salvo acordo ou convenção coletiva com o sindicato (CF art. 7º, VI · CLT art. 468). Se existe esse acordo, marque a caixinha e guarde o documento.` };
+  }
+  const aviso = reducao ? "Redução com acordo/convenção coletiva: guarde o documento assinado junto da pasta do colaborador." : (v === anterior ? "O valor é igual ao salário que já valia nessa data." : null);
+  return { ok: true, reducao, anterior, aviso };
+}
+
+/* Vale-transporte: linhas de ida e volta x dias do mes. O colaborador paga ate 6% do salario base;
+   o que passar disso e custo da empresa. */
+function custoVT(linhas = [], dias = VT_DIAS_PADRAO) {
+  const ativas = (linhas || []).filter((l) => l && l.ativo !== false);
+  const porDia = r2(ativas.reduce((s, l) => s + (+l.valor || 0), 0));
+  const d = Math.max(0, Math.min(31, Math.floor(+dias || 0)));
+  return { linhas: ativas.length, porDia, dias: d, custoMensal: r2(porDia * d) };
+}
+function dividirVT({ salarioBase = 0, custoMensal = 0 }) {
+  const limite = r2(VT_LIMITE_PCT * (+salarioBase || 0));
+  const descontoColaborador = r2(Math.min(limite, +custoMensal || 0));
+  return { limite, descontoColaborador, custoEmpresa: r2((+custoMensal || 0) - descontoColaborador) };
+}
+
+const dependentesIRRF = (deps = []) => (deps || []).filter((d) => d && d.ativo !== false && d.irrf).length;
+
+/* Prazo de envio ao eSocial (manuais oficiais): S-2200 ate o dia anterior ao inicio; S-2206 ate o dia 15 do mes seguinte;
+   S-2299 ate 10 dias corridos depois do desligamento. Se cair em fim de semana, antecipa para sexta. */
+function prazoESocial(evento, dataFato) {
+  const b = dataLocal(String(dataFato).slice(0, 10));
+  let p;
+  if (evento === "S-2200") p = new Date(b.getFullYear(), b.getMonth(), b.getDate() - 1);
+  else if (evento === "S-2206") p = new Date(b.getFullYear(), b.getMonth() + 1, 15);
+  else if (evento === "S-2299") p = new Date(b.getFullYear(), b.getMonth(), b.getDate() + 10);
+  else return null;
+  while (p.getDay() === 0 || p.getDay() === 6) p = new Date(p.getFullYear(), p.getMonth(), p.getDate() - 1);
+  return dataISO(p);
+}
+
+const mapCadastro = (r) => ({
+  userId: r.usuario_id, nascimento: r.data_nascimento || "", sexo: r.sexo || "", racaCor: r.raca_cor || "", estadoCivil: r.estado_civil || "", grauInstrucao: r.grau_instrucao || "",
+  pis: r.pis_nis || "", cbo: r.cbo || "", jornadaHoras: r.jornada_horas_semana == null ? "" : +r.jornada_horas_semana, jornadaTexto: r.jornada_descricao || "",
+  cep: r.cep || "", logradouro: r.logradouro || "", numero: r.numero || "", complemento: r.complemento || "", bairro: r.bairro || "", cidade: r.cidade || "", uf: r.uf || "", codigoIbge: r.codigo_ibge || "",
+  banco: r.banco || "", agencia: r.agencia || "", conta: r.conta || "", pixTipo: r.pix_tipo || "", pixChave: r.pix_chave || "",
+  emergNome: r.emergencia_nome || "", emergParentesco: r.emergencia_parentesco || "", emergTelefone: r.emergencia_telefone || "",
+  vtDias: r.vt_dias_mes == null ? VT_DIAS_PADRAO : +r.vt_dias_mes, desligadoEm: r.desligado_em || "", motivoDesligamento: r.motivo_desligamento || "",
+});
+const mapSalHist = (r) => ({ id: r.id, userId: r.usuario_id, valor: +r.valor, vigencia: String(r.vigencia || "").slice(0, 10), motivo: r.motivo || "", acordo: !!r.acordo_coletivo, por: r.alterado_por, criadoEm: r.criado_em });
+const mapVtLinha = (r) => ({ id: r.id, userId: r.usuario_id, sentido: r.sentido, linha: r.linha, valor: +r.valor_passagem, ativo: r.ativo !== false });
+const mapDependente = (r) => ({ id: r.id, userId: r.usuario_id, nome: r.nome, parentesco: r.parentesco, nascimento: String(r.data_nascimento || "").slice(0, 10), cpf: r.cpf || "", irrf: !!r.irrf, salarioFamilia: !!r.salario_familia, ativo: r.ativo !== false });
+const mapEsocialReg = (r) => ({ id: r.id, userId: r.usuario_id, evento: r.evento, dataFato: String(r.data_fato || "").slice(0, 10), descricao: r.descricao || "", status: r.status, recibo: r.recibo || "", enviadoEm: r.enviado_em || "" });
+
+/* Colaborador cuja ficha diz que saiu: some das listas normais (mas o cadastro e o historico ficam guardados). */
+const estaDesligado = (u, cad) => !!(cad && cad.desligadoEm) || u?.ativo === false;
+
+/* O que ainda falta no cadastro (so o essencial). Devolve lista de textos simples. */
+function faltaNoCadastro(u, cad, deps = []) {
+  const f = [];
+  const c = cad || {};
+  if (!cpfValido(u?.cpf)) f.push("CPF");
+  if (!c.nascimento) f.push("data de nascimento");
+  if (!c.sexo) f.push("sexo");
+  if (!c.estadoCivil) f.push("estado civil");
+  if (!c.grauInstrucao) f.push("escolaridade");
+  if (!cepValido(c.cep) || !c.logradouro || !c.numero) f.push("endereço completo");
+  if (!c.cbo) f.push("CBO (código da função)");
+  if (!c.jornadaHoras) f.push("jornada semanal");
+  if (!(c.pixChave || (c.banco && c.conta))) f.push("Pix ou conta para pagamento");
+  if (!c.emergNome || !c.emergTelefone) f.push("contato de emergência");
+  (deps || []).filter((d) => d.ativo !== false && d.irrf && !cpfValido(d.cpf)).forEach((d) => f.push(`CPF do dependente ${d.nome}`));
+  return f;
+}
+
+const dataDiaAntes = (iso) => { const b = dataLocal(String(iso).slice(0, 10)); return dataISO(new Date(b.getFullYear(), b.getMonth(), b.getDate() - 1)); };
+
+/* "Registrar na carteira": monta o resumo pronto para copiar no eSocial ou mandar ao contador.
+   O app NAO envia nada sozinho (envio direto exige certificado digital A1 do CNPJ: fica documentado e desligado). */
+function resumoESocial(evento, { u, cad, deps = [], hist = [], dataFato, novoSalario, motivo, empresaCnpj = "" } = {}) {
+  const c = cad || {};
+  const linhas = [];
+  const add = (rotulo, valor, obrigatorio = true) => linhas.push({ rotulo, valor: valor == null || valor === "" ? "" : String(valor), falta: obrigatorio && (valor == null || valor === "") });
+  const cpf = cpfValido(u?.cpf) ? fmtCPF(u?.cpf) : "";
+  const endereco = [c.logradouro, c.numero, c.complemento, c.bairro].filter(Boolean).join(", ");
+  const sal = novoSalario != null ? +novoSalario : salarioVigenteEm(hist, u?.id, dataFato || hojeStr(), +u?.salario || 0);
+  const nomeEv = { "S-2200": "Admissão do trabalhador (assina a carteira digital)", "S-2206": "Alteração de contrato de trabalho (muda o salário na carteira)", "S-2299": "Desligamento (dá baixa na carteira)" }[evento] || evento;
+  add("CPF", cpf); add("Nome completo", u?.nome || "");
+  if (evento === "S-2200") {
+    const fato = dataFato || (u?.admissao || "").slice(0, 10);
+    add("Data de nascimento", c.nascimento ? fmtData(c.nascimento) : ""); add("Sexo", c.sexo === "F" ? "Feminino" : c.sexo === "M" ? "Masculino" : "");
+    add("Raça/cor", RACA_COR[c.racaCor] || ""); add("Estado civil", ESTADO_CIVIL[c.estadoCivil] || ""); add("Grau de instrução", GRAU_INSTRUCAO[c.grauInstrucao] || "");
+    add("Nacionalidade", "Brasileira (confirme se for outra)", false);
+    add("CEP", cepValido(c.cep) ? fmtCEP(c.cep) : ""); add("Endereço", endereco); add("Município", c.cidade ? `${c.cidade}/${c.uf}${c.codigoIbge ? ` (IBGE ${c.codigoIbge})` : ""}` : "");
+    add("PIS/NIS (se tiver)", c.pis ? soDigitos(c.pis) : "", false);
+    add("Matrícula", u?.matricula || "", false); add("Regime", "CLT · Previdência: Regime Geral (INSS)"); add("Tipo de contrato", "Prazo indeterminado (ou experiência, se for o caso)");
+    add("Data de admissão", fato ? fmtData(fato) : ""); add("Cargo/função", u?.cargo || ""); add("CBO", c.cbo || "");
+    add("Salário mensal", sal > 0 ? brl(sal) : ""); add("Jornada semanal (horas)", c.jornadaHoras || ""); add("Descrição da jornada", c.jornadaTexto || "", false);
+    (deps || []).filter((d) => d.ativo !== false).forEach((d) => add(`Dependente: ${d.nome}`, `${PARENTESCO_DEP[d.parentesco] || d.parentesco} · nasc. ${fmtData(d.nascimento)} · CPF ${fmtCPF(d.cpf) || "(falta)"} · IRRF: ${d.irrf ? "sim" : "não"} · salário-família: ${d.salarioFamilia ? "sim" : "não"}`, false));
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  if (evento === "S-2206") {
+    const fato = dataFato || hojeStr();
+    const antes = salarioVigenteEm(hist, u?.id, dataDiaAntes(fato), 0);
+    add("Matrícula", u?.matricula || "", false); add("Data da alteração (vale a partir de)", fato ? fmtData(fato) : "");
+    add("Novo salário mensal", sal > 0 ? brl(sal) : ""); add("Salário anterior", antes > 0 ? brl(antes) : "", false); add("Motivo", motivo || "", false);
+    add("Importante", "No eSocial, a alteração repete os demais dados do contrato (cargo, jornada, CBO) — confira se continuam iguais.", false);
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  if (evento === "S-2299") {
+    const fato = dataFato || c.desligadoEm;
+    add("Matrícula", u?.matricula || "", false); add("Data do desligamento", fato ? fmtData(fato) : "");
+    add("Motivo", c.motivoDesligamento || motivo || ""); add("Aviso", "Se houve aviso prévio, informe o tipo e as datas.", false);
+    add("Verbas", "Valores da rescisão: use o cálculo da seção Rescisão (conferir com o contador).", false);
+    return montarResumo(evento, nomeEv, fato, linhas, empresaCnpj);
+  }
+  return null;
+}
+function montarResumo(evento, titulo, dataFato, linhas, empresaCnpj) {
+  const prazo = dataFato ? prazoESocial(evento, dataFato) : null;
+  const faltando = linhas.filter((l) => l.falta).map((l) => l.rotulo);
+  const texto = [
+    `RESUMO PARA O eSOCIAL — evento ${evento}: ${titulo}`,
+    empresaCnpj ? `Empresa: ${empresaCnpj}` : null,
+    prazo ? `Prazo de envio: até ${fmtData(prazo)}` : null,
+    "",
+    ...linhas.map((l) => `${l.rotulo}: ${l.valor || "(FALTA PREENCHER)"}`),
+    "",
+    "Gerado pelo Ponto Renovar. Confira com o contador antes de enviar.",
+  ].filter((x) => x !== null).join("\n");
+  return { evento, titulo, dataFato, prazo, linhas, faltando, completo: faltando.length === 0, texto };
+}
+
+/* ASO (atestado de saúde ocupacional): validade a partir do último exame realizado.
+   Regra geral do exame periódico: 12 meses (NR-7); o médico do trabalho pode definir 24 meses
+   em casos específicos — por isso o aviso é sempre "confirme com o médico". */
+const ASO_VALIDADE_MESES = 12;
+const ASO_AVISO_DIAS = 30;
+function asoDoColaborador(exames = [], userId, hoje = new Date()) {
+  const feitos = (exames || []).filter((e) => e.userId === userId && e.status !== "agendado" && e.data && e.tipo !== "demissional")
+    .sort((a, b) => (a.data < b.data ? 1 : -1));
+  const agendado = (exames || []).filter((e) => e.userId === userId && e.status === "agendado" && e.dataPrevista).sort((a, b) => (a.dataPrevista > b.dataPrevista ? 1 : -1))[0] || null;
+  if (!feitos.length) return { ultimo: null, validade: null, dias: null, situacao: "sem_exame", agendado };
+  const ultimo = feitos[0];
+  const v = addMeses(dataLocal(ultimo.data), ASO_VALIDADE_MESES);
+  const validade = dataISO(v);
+  const ref = dataLocal(dataISO(hoje));
+  const dias = Math.round((v - ref) / 86400000);
+  return { ultimo, validade, dias, situacao: dias < 0 ? "vencido" : dias <= ASO_AVISO_DIAS ? "vencendo" : "em_dia", agendado };
 }
 
 /* ================= UI base ================= */
@@ -3768,6 +3991,13 @@ function AppInterno() {
   // Compras do colaborador: tabela opcional (compras_colaborador). comprasNoBanco = a tabela existe.
   const [compras, setCompras] = useState([]);
   const [comprasNoBanco, setComprasNoBanco] = useState(false);
+  // Cadastro completo do colaborador: tabelas opcionais. cadastroNoBanco = a migração foi aplicada.
+  const [cadastros, setCadastros] = useState([]);
+  const [salHist, setSalHist] = useState([]);
+  const [vtLinhas, setVtLinhas] = useState([]);
+  const [dependentes, setDependentes] = useState([]);
+  const [esocialRegs, setEsocialRegs] = useState([]);
+  const [cadastroNoBanco, setCadastroNoBanco] = useState(false);
   const [guias, setGuias] = useState([]);
    const [rescisoes, setRescisoes] = useState([]);
    const [examesOcupacionais, setExamesOcupacionais] = useState([]);
@@ -4006,6 +4236,21 @@ function AppInterno() {
           setComprasNoBanco(true);
         } catch (e) { console.warn("[compras]", e.message); setComprasNoBanco(false); }
       })();
+      // Cadastro completo (colaborador_cadastro e tabelas irmas). Cada colaborador so recebe as
+      // proprias linhas (RLS); o gestor recebe todas. Sem a migracao o app segue como sempre.
+      (async () => {
+        try {
+          const rows = await sbSelect(token, "colaborador_cadastro", "select=*");
+          setCadastros(rows.map(mapCadastro));
+          setCadastroNoBanco(true);
+        } catch (e) { console.warn("[cadastro]", e.message); setCadastroNoBanco(false); return; }
+        const outras = [["salario_historico", setSalHist, mapSalHist, "&order=vigencia.desc"], ["vale_transporte_linhas", setVtLinhas, mapVtLinha, ""],
+          ["dependentes", setDependentes, mapDependente, ""], ["esocial_registros", setEsocialRegs, mapEsocialReg, "&order=data_fato.desc"]];
+        for (const [tab, setar, mapa, ordem] of outras) {
+          try { const rows = await sbSelect(token, tab, "select=*" + ordem); setar(rows.map(mapa)); }
+          catch (e) { console.warn("[cadastro/" + tab + "]", e.message); }
+        }
+      })();
       // Combinados das reunioes: tabela opcional (combinados). Sem ela o app
       // volta pro caderno local do aparelho, que foi como a primeira versao saiu.
       (async () => {
@@ -4214,7 +4459,7 @@ function AppInterno() {
     setFaltas(FALTAS_SEED.map((f, i) => ({ id: `fd${i}`, ...f, justificada: false })));
     setJustificativas([{ id: 1, userId: "u3", data: iso(d(-2)), texto: "Trânsito parado na Av. Cristiano Machado por acidente.", anexo: null, status: "pendente" }]);
     setAtestados([]); setFerias([]); setLocais([]); setFolgas([]); setSaidasPend([]);
-    setFolhasPg(FOLHAS_PG_SEED); setAdiantamentos([]); setCompras([]); setComprasNoBanco(false); setGuias([]); setCredenciais([]);
+    setFolhasPg(FOLHAS_PG_SEED); setAdiantamentos([]); setCompras([]); setComprasNoBanco(false); setCadastros([]); setSalHist([]); setVtLinhas([]); setDependentes([]); setEsocialRegs([]); setCadastroNoBanco(false); setGuias([]); setCredenciais([]);
     setConsImagem(CONS_IMAGEM_SEED); setAceites(ACEITES_SEED);
     setRankingUsuarios(USUARIOS_SEED.map(u => { const gg = calcularGamificacao(u.id, REGISTROS_SEED, FALTAS_SEED.map((f, i) => ({ id: i, ...f, justificada: false }))); return { id: u.id, nome: u.nome, papel: u.papel, pontos: gg.total, streak: gg.streak }; }));
     const fdsDemo = [{ data: "2026-01-01", nome: "Confraternização Universal" }, { data: "2026-09-07", nome: "Independência do Brasil" }, { data: "2026-12-25", nome: "Natal" }];
@@ -4963,7 +5208,7 @@ function AppInterno() {
     if (!alvo.length) throw new Error("Nenhum colaborador ativo com salário cadastrado — preencha os salários na seção Equipe.");
     const jaFechadas = folhasPg.filter(f => f.competencia === comp && f.status === "fechada").map(f => f.userId);
     const linhas = alvo.filter(u => !jaFechadas.includes(u.id)).map(u => {
-      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, (comprasNoBanco || demo) ? compras : undefined);
+      const r = calcularFolhaColaborador(u, comp, registros, faltas, adiantamentos, (comprasNoBanco || demo) ? compras : undefined, (cadastroNoBanco || demo) ? salHist : undefined);
       if (r.proporcional) log("folha", `${u.nome}: salário proporcional à admissão (${r.diasProporcionais}/30 dias) — ${brl(r.row.salario_bruto)} de ${brl(r.salarioContratual)}`);
       return { usuario_id: u.id, competencia: comp, ...r.row };
     });
@@ -5054,6 +5299,204 @@ function AppInterno() {
     const nomeC = usuarios.find(u => u.id === a.userId)?.nome || a.userId;
     try { await auditar("adiantamento_cancelado", `${user.nome} cancelou adiantamento de ${brl(a.valor)} de ${nomeC} (competência ${a.competenciaDesconto.slice(0, 7)})`); }
     catch (e) { console.warn("[auditoria adiantamento]", e.message); }
+  };
+
+  /* ---------- cadastro completo do colaborador ---------- */
+  // Tabelas opcionais (colaborador_cadastro, salario_historico, vale_transporte_linhas, dependentes,
+  // esocial_registros). Sem a migração o app roda como sempre rodou; as telas novas só avisam.
+  const CAMPOS_CADASTRO = { nascimento: "data_nascimento", sexo: "sexo", racaCor: "raca_cor", estadoCivil: "estado_civil", grauInstrucao: "grau_instrucao",
+    pis: "pis_nis", cbo: "cbo", jornadaHoras: "jornada_horas_semana", jornadaTexto: "jornada_descricao", cep: "cep", logradouro: "logradouro", numero: "numero",
+    complemento: "complemento", bairro: "bairro", cidade: "cidade", uf: "uf", codigoIbge: "codigo_ibge", banco: "banco", agencia: "agencia", conta: "conta",
+    pixTipo: "pix_tipo", pixChave: "pix_chave", emergNome: "emergencia_nome", emergParentesco: "emergencia_parentesco", emergTelefone: "emergencia_telefone", vtDias: "vt_dias_mes" };
+  const CAMPOS_DO_PROPRIO = ["cep", "logradouro", "numero", "complemento", "bairro", "cidade", "uf", "codigoIbge", "banco", "agencia", "conta", "pixTipo", "pixChave", "emergNome", "emergParentesco", "emergTelefone"];
+  const exigeCadastro = () => { if (!demo && !cadastroNoBanco) throw new Error("O cadastro completo ainda não foi ligado no banco. Peça ao gestor para aplicar a atualização (cadastro do colaborador)."); };
+  const soGestor = () => { if (user.papel !== "gestor") throw new Error("Só o gestor faz essa alteração."); };
+
+  const salvarCadastro = async (userId, campos) => {
+    const proprio = userId === user.id;
+    if (!proprio && user.papel !== "gestor") throw new Error("Você só altera o seu próprio cadastro.");
+    exigeCadastro();
+    const patch = {};
+    for (const [k, v] of Object.entries(campos)) {
+      if (!(k in CAMPOS_CADASTRO)) continue;
+      if (user.papel !== "gestor" && !CAMPOS_DO_PROPRIO.includes(k)) continue;
+      patch[k] = v;
+    }
+    if (patch.pis && !pisValido(patch.pis)) throw new Error("PIS/NIS inválido. Confira os 11 números.");
+    if (patch.cep && !cepValido(patch.cep)) throw new Error("CEP inválido. São 8 números.");
+    if (patch.uf && !/^[A-Za-z]{2}$/.test(patch.uf)) throw new Error("Estado inválido (use a sigla, ex.: MG).");
+    if (patch.cbo && soDigitos(patch.cbo).length !== 6) throw new Error("O CBO tem 6 números.");
+    if (patch.nascimento && !dataValida(patch.nascimento)) throw new Error("Data de nascimento inválida.");
+    if (patch.jornadaHoras !== undefined && patch.jornadaHoras !== "" && !(+patch.jornadaHoras > 0 && +patch.jornadaHoras <= 44)) throw new Error("Jornada semanal deve ficar entre 1 e 44 horas.");
+    if (patch.pixTipo === "cpf" && patch.pixChave && !cpfValido(patch.pixChave)) throw new Error("A chave Pix (CPF) não é um CPF válido.");
+    const linha = { usuario_id: userId, atualizado_em: iso(new Date()) };
+    for (const [k, v] of Object.entries(patch)) {
+      const col = CAMPOS_CADASTRO[k];
+      let x = v;
+      if (["pis", "cep", "cbo", "codigoIbge"].includes(k)) x = soDigitos(v) || null;
+      else if (k === "uf") x = String(v || "").toUpperCase() || null;
+      else if (k === "jornadaHoras" || k === "vtDias") x = v === "" || v == null ? null : +v;
+      else if (k === "pixChave" && patch.pixTipo === "cpf") x = soDigitos(v) || null;
+      else if (typeof v === "string") x = limparTexto(v, 200) || null;
+      linha[col] = x === "" ? null : x;
+    }
+    const existe = cadastros.some(c => c.userId === userId);
+    let salvo = { ...linha };
+    if (!demo) {
+      if (existe) { const r = await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, linha); if (Array.isArray(r) && r[0]) salvo = r[0]; }
+      else { const r = await sbInsert(sessao.token, "colaborador_cadastro", [linha]); if (Array.isArray(r) && r[0]) salvo = r[0]; }
+    }
+    setCadastros(cs => existe ? cs.map(c => c.userId === userId ? { ...c, ...mapCadastro({ ...CAMPOS_REVERSOS(c), ...salvo }) } : c) : [...cs, mapCadastro(salvo)]);
+    // Auditoria só com os NOMES dos campos: CPF, Pix, endereço e telefones nunca vão para o log.
+    log("cadastro_ficha", `Ficha de ${usuarios.find(u => u.id === userId)?.nome || "colaborador"} atualizada por ${user.nome} (campos: ${Object.keys(patch).join(", ") || "nenhum"})`);
+  };
+  const CAMPOS_REVERSOS = (c) => ({ usuario_id: c.userId, data_nascimento: c.nascimento || null, sexo: c.sexo || null, raca_cor: c.racaCor || null, estado_civil: c.estadoCivil || null,
+    grau_instrucao: c.grauInstrucao || null, pis_nis: c.pis || null, cbo: c.cbo || null, jornada_horas_semana: c.jornadaHoras === "" ? null : c.jornadaHoras, jornada_descricao: c.jornadaTexto || null,
+    cep: c.cep || null, logradouro: c.logradouro || null, numero: c.numero || null, complemento: c.complemento || null, bairro: c.bairro || null, cidade: c.cidade || null, uf: c.uf || null,
+    codigo_ibge: c.codigoIbge || null, banco: c.banco || null, agencia: c.agencia || null, conta: c.conta || null, pix_tipo: c.pixTipo || null, pix_chave: c.pixChave || null,
+    emergencia_nome: c.emergNome || null, emergencia_parentesco: c.emergParentesco || null, emergencia_telefone: c.emergTelefone || null, vt_dias_mes: c.vtDias,
+    desligado_em: c.desligadoEm || null, motivo_desligamento: c.motivoDesligamento || null });
+
+  // CPF mora na tabela de usuários (já existia): só o gestor altera, com validação.
+  const salvarCpf = async (userId, cpf) => {
+    soGestor();
+    const c = soDigitos(cpf);
+    if (!cpfValido(c)) throw new Error("CPF inválido. Confira os 11 números.");
+    if (!demo) await sbUpdate(sessao.token, "usuarios", `id=eq.${userId}`, { cpf: c });
+    setUsuarios(us => us.map(u => u.id === userId ? { ...u, cpf: c } : u));
+    log("cadastro_cpf", `CPF de ${usuarios.find(x => x.id === userId)?.nome || "colaborador"} atualizado por ${user.nome}`);
+  };
+
+  // Pendência de carteira (eSocial): fica "pendente" até o gestor confirmar que enviou.
+  const criarPendenciaESocial = async (userId, evento, dataFato, descricao) => {
+    if (!demo && !cadastroNoBanco) return null;
+    const ja = esocialRegs.find(r => r.userId === userId && r.evento === evento && r.dataFato === dataFato);
+    if (ja) return ja;
+    const linha = { usuario_id: userId, evento, data_fato: dataFato, descricao: limparTexto(descricao || "", 200) || null, status: "pendente" };
+    let salvo = { ...linha, id: "local-" + Date.now() };
+    if (!demo) { try { const r = await sbInsert(sessao.token, "esocial_registros", [linha]); if (Array.isArray(r) && r[0]) salvo = r[0]; } catch (e) { console.warn("[esocial]", e.message); return null; } }
+    const novo = mapEsocialReg(salvo);
+    setEsocialRegs(rs => [novo, ...rs]);
+    return novo;
+  };
+  const confirmarESocial = async (id, recibo) => {
+    soGestor(); exigeCadastro();
+    const agora = iso(new Date());
+    const patch = { status: "enviado", recibo: limparTexto(recibo || "", 60) || null, enviado_em: agora, enviado_por: user.id };
+    if (!demo) await sbUpdate(sessao.token, "esocial_registros", `id=eq.${id}`, patch);
+    setEsocialRegs(rs => rs.map(r => r.id === id ? { ...r, status: "enviado", recibo: patch.recibo || "", enviadoEm: agora } : r));
+    const r = esocialRegs.find(x => x.id === id);
+    log("esocial_enviado", `${r?.evento || "eSocial"} de ${usuarios.find(u => u.id === r?.userId)?.nome || "colaborador"} marcado como enviado por ${user.nome}`);
+  };
+  const registrarNaCarteira = async (userId, evento, dataFato, descricao) => { soGestor(); exigeCadastro(); return criarPendenciaESocial(userId, evento, dataFato, descricao); };
+
+  // Salário com histórico. Reduzir é bloqueado (CF art. 7º VI / CLT art. 468) salvo acordo/convenção coletiva marcado.
+  const lancarSalario = async (userId, { valor, vigencia, motivo, acordo }) => {
+    soGestor(); exigeCadastro();
+    const u = usuarios.find(x => x.id === userId);
+    if (!u) throw new Error("Colaborador não encontrado.");
+    const v = validarAlteracaoSalario({ hist: salHist, userId, valor, vigencia, motivo, acordo: !!acordo, salarioAtual: u.salario });
+    if (!v.ok) throw new Error(v.erro);
+    if (folhaDoMesFechada(userId, vigencia.slice(0, 7) + "-01") && vigencia.slice(0, 7) <= hojeStr().slice(0, 7)) throw new Error("A folha desse mês já foi fechada. Escolha uma data de início em um mês ainda aberto.");
+    const agora = iso(new Date());
+    const novasLinhas = [];
+    // Primeira vez: guarda o salário que já valia como ponto de partida, para a folha antiga não mudar.
+    if (!salHist.some(h => h.userId === userId) && +u.salario > 0) novasLinhas.push({ usuario_id: userId, valor: +u.salario, vigencia: (u.admissao || "2020-01-01").slice(0, 10), motivo: "Salário que já valia antes deste histórico", acordo_coletivo: false, alterado_por: user.id });
+    novasLinhas.push({ usuario_id: userId, valor: numeroValido(valor, { min: 0.01, max: 1000000 }), vigencia, motivo: limparTexto(motivo, 200), acordo_coletivo: !!acordo, alterado_por: user.id });
+    let salvas = novasLinhas.map((l, i) => ({ ...l, id: "local-" + Date.now() + i, criado_em: agora }));
+    if (!demo) { const r = await sbInsert(sessao.token, "salario_historico", novasLinhas); if (Array.isArray(r) && r.length) salvas = r; }
+    const novasH = salvas.map(mapSalHist);
+    const histNovo = [...novasH, ...salHist];
+    setSalHist(histNovo);
+    // O salário "de hoje" também vai para o cadastro de sempre (usuarios.salario_bruto), que a folha e os relatórios já usam.
+    const vigente = salarioVigenteEm(histNovo, userId, hojeStr(), +u.salario || 0);
+    if (vigente !== +u.salario) await salvarUsuario(userId, { salario_bruto: vigente });
+    await auditar("salario_historico", `Salário de ${u.nome}: ${brl(+u.salario || 0)} → ${brl(+valor)} a partir de ${fmtData(vigencia)} (${limparTexto(motivo, 80)})${v.reducao ? " · redução com acordo/convenção coletiva" : ""} · por ${user.nome}`);
+    if (+valor !== +u.salario) await criarPendenciaESocial(userId, "S-2206", vigencia, `Alteração salarial a partir de ${fmtData(vigencia)}`);
+  };
+
+  // Vale-transporte: linhas de ônibus (ida/volta) + dias por mês. O custo mensal sincroniza com o cadastro de sempre.
+  const sincronizarVT = async (userId, linhas, dias) => {
+    const c = custoVT(linhas, dias);
+    await salvarUsuario(userId, { vale_transporte_ativo: c.linhas > 0, vale_transporte_valor_mensal: c.custoMensal });
+  };
+  const adicionarLinhaVT = async (userId, { sentido, linha, valor }) => {
+    soGestor(); exigeCadastro();
+    const nome = limparTexto(linha, 60);
+    const v = numeroValido(valor, { min: 0.01, max: 200 });
+    if (!["ida", "volta"].includes(sentido) || !nome || v === null) throw new Error("Informe a linha (nome ou número) e o valor da passagem.");
+    const l = { usuario_id: userId, sentido, linha: nome, valor_passagem: v, ativo: true };
+    let salvo = { ...l, id: "local-" + Date.now() };
+    if (!demo) { const r = await sbInsert(sessao.token, "vale_transporte_linhas", [l]); if (Array.isArray(r) && r[0]) salvo = r[0]; }
+    const todas = [...vtLinhas, mapVtLinha(salvo)];
+    setVtLinhas(todas);
+    const dias = cadastros.find(c => c.userId === userId)?.vtDias ?? VT_DIAS_PADRAO;
+    await sincronizarVT(userId, todas.filter(x => x.userId === userId), dias);
+  };
+  const removerLinhaVT = async (id) => {
+    soGestor(); exigeCadastro();
+    const alvo = vtLinhas.find(x => x.id === id); if (!alvo) return;
+    if (!demo) await sbUpdate(sessao.token, "vale_transporte_linhas", `id=eq.${id}`, { ativo: false });
+    const todas = vtLinhas.map(x => x.id === id ? { ...x, ativo: false } : x);
+    setVtLinhas(todas);
+    const dias = cadastros.find(c => c.userId === alvo.userId)?.vtDias ?? VT_DIAS_PADRAO;
+    await sincronizarVT(alvo.userId, todas.filter(x => x.userId === alvo.userId), dias);
+  };
+  const mudarDiasVT = async (userId, dias) => {
+    soGestor();
+    const n = numeroValido(dias, { min: 0, max: 31 });
+    if (n === null) throw new Error("Dias por mês: número de 0 a 31.");
+    await salvarCadastro(userId, { vtDias: Math.floor(n) });
+    await sincronizarVT(userId, vtLinhas.filter(x => x.userId === userId), Math.floor(n));
+  };
+
+  // Dependentes (salário-família e IRRF). O número de dependentes do IRRF sincroniza com o cadastro de sempre.
+  const salvarDependente = async (userId, d) => {
+    soGestor(); exigeCadastro();
+    const nome = limparTexto(d.nome, 100);
+    if (nome.length < 2) throw new Error("Informe o nome do dependente.");
+    if (!PARENTESCO_DEP[d.parentesco]) throw new Error("Escolha o parentesco.");
+    if (!dataValida(d.nascimento)) throw new Error("Informe a data de nascimento do dependente.");
+    if (d.cpf && !cpfValido(d.cpf)) throw new Error("CPF do dependente inválido.");
+    const linha = { usuario_id: userId, nome, parentesco: d.parentesco, data_nascimento: d.nascimento, cpf: soDigitos(d.cpf) || null, irrf: !!d.irrf, salario_familia: !!d.salarioFamilia, ativo: true };
+    let salvo = { ...linha, id: "local-" + Date.now() };
+    if (!demo) { const r = await sbInsert(sessao.token, "dependentes", [linha]); if (Array.isArray(r) && r[0]) salvo = r[0]; }
+    const todos = [...dependentes, mapDependente(salvo)];
+    setDependentes(todos);
+    await salvarUsuario(userId, { dependentes_irrf: dependentesIRRF(todos.filter(x => x.userId === userId)) });
+  };
+  const removerDependente = async (id) => {
+    soGestor(); exigeCadastro();
+    const alvo = dependentes.find(x => x.id === id); if (!alvo) return;
+    if (!demo) await sbUpdate(sessao.token, "dependentes", `id=eq.${id}`, { ativo: false });
+    const todos = dependentes.map(x => x.id === id ? { ...x, ativo: false } : x);
+    setDependentes(todos);
+    await salvarUsuario(alvo.userId, { dependentes_irrf: dependentesIRRF(todos.filter(x => x.userId === alvo.userId)) });
+  };
+
+  // Desligar: marca data e motivo, esconde das listas. NADA é apagado (cadastro, ponto, folha e histórico ficam guardados).
+  const desligarColaborador = async (userId, { data, motivo, detalhe }) => {
+    soGestor(); exigeCadastro();
+    if (userId === user.id) throw new Error("Você não pode desligar a si mesmo.");
+    if (!dataValida(data)) throw new Error("Informe a data do desligamento.");
+    if (!MOTIVOS_DESLIGAMENTO[motivo]) throw new Error("Escolha o motivo do desligamento.");
+    const texto = motivo === "outro" ? limparTexto(detalhe || "", 150) : MOTIVOS_DESLIGAMENTO[motivo];
+    if (!texto || texto.length < 3) throw new Error("Descreva o motivo.");
+    await salvarCadastro(userId, {});
+    const patch = { desligado_em: data, motivo_desligamento: texto, atualizado_em: iso(new Date()) };
+    if (!demo) await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, patch);
+    setCadastros(cs => cs.map(c => c.userId === userId ? { ...c, desligadoEm: data, motivoDesligamento: texto } : c));
+    await salvarUsuario(userId, { ativo: false });
+    await auditar("colaborador_desligado", `${usuarios.find(u => u.id === userId)?.nome || "Colaborador"} desligado em ${fmtData(data)} (${texto}) por ${user.nome}. Nada foi apagado.`);
+    await criarPendenciaESocial(userId, "S-2299", data, `Desligamento em ${fmtData(data)}`);
+  };
+  const reativarColaborador = async (userId) => {
+    soGestor(); exigeCadastro();
+    const patch = { desligado_em: null, motivo_desligamento: null, atualizado_em: iso(new Date()) };
+    if (!demo) await sbUpdate(sessao.token, "colaborador_cadastro", `usuario_id=eq.${userId}`, patch);
+    setCadastros(cs => cs.map(c => c.userId === userId ? { ...c, desligadoEm: "", motivoDesligamento: "" } : c));
+    await salvarUsuario(userId, { ativo: true });
+    await auditar("colaborador_reativado", `${usuarios.find(u => u.id === userId)?.nome || "Colaborador"} reativado por ${user.nome}.`);
   };
 
   /* ---------- compras do colaborador (desconto em folha em ate 3x) ---------- */
@@ -5482,7 +5925,7 @@ function AppInterno() {
 
   const menu = [
     ["ponto", "⏱ Bater ponto"], ["espelho", "📋 Meus horários"], ["justificar", "✍️ Explicar uma falta"],
-    ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"],
+    ["atestados", "🩺 Enviar atestado"], ["ferias", "🏖 Férias"], ["banco", "⏳ Banco de horas"], ["holerite", "💰 Holerite"], ["cadastro", "📇 Meu cadastro"], ["compras", "🛍 Minhas compras"], ["premio", "🏆 Prêmio"], ["game", "🎮 Meus pontos"], ["time", "🤝 Nosso time"],
             ["feedback", "💬 Meu feedback"], ["lgpd", "🔐 LGPD"],
     ...(user.papel === "gestor" ? [["gestor", "👑 Painel do gestor"]] : []),
   ];
@@ -5689,7 +6132,8 @@ function AppInterno() {
           {tela === "atestados" && <TelaAtestados {...{ user, atestados, onEnviar: enviarAtestado }} />}
           {tela === "ferias" && <TelaFerias {...{ user, ferias, agendarFerias }} />}
           {tela === "banco" && <TelaBanco {...{ user, registros, faltas, folgas, onSolicitar: solicitarFolga }} />}
-          {tela === "holerite" && <TelaHolerite user={user} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} compras={compras.filter(c => c.userId === user.id)} onAssinarFolha={assinarContrachequeGovBr} />}
+          {tela === "cadastro" && <TelaMeuCadastro user={user} cadastro={cadastros.find(c => c.userId === user.id) || null} noBanco={cadastroNoBanco} demo={demo} onSalvar={salvarCadastro} />}
+          {tela === "holerite" && <TelaHolerite user={user} vtCustoMensal={custoVT(vtLinhas.filter(l => l.userId === user.id), cadastros.find(c => c.userId === user.id)?.vtDias ?? VT_DIAS_PADRAO).custoMensal} folhasPg={folhasPg.filter(f => f.userId === user.id)} adiantamentos={adiantamentos.filter(a => a.userId === user.id)} compras={compras.filter(c => c.userId === user.id)} onAssinarFolha={assinarContrachequeGovBr} />}
           {tela === "compras" && <TelaCompras {...{ user, compras, noBanco: comprasNoBanco, demo, onRegistrar: registrarCompra, onAceitar: aceitarCompra, onCancelar: cancelarCompra }} folhasPg={folhasPg.filter(f => f.userId === user.id)} />}
           {tela === "premio" && <TelaPremio user={user} registros={registros} faltas={faltas} />}
           {tela === "game" && <TelaGame user={user} registros={registros} faltas={faltas} rankingUsuarios={rankingUsuarios} />}
@@ -5698,7 +6142,7 @@ function AppInterno() {
           {tela === "lgpd" && <TelaLGPD user={user} onConsentir={consentir} credenciais={credenciais.filter(c => c.userId === user.id)} onCadastrarBio={cadastrarBiometria} onRemoverBio={removerBiometria} imagem={consImagem.find((c) => c.userId === user.id)} onSalvarImagem={salvarConsImagem} aceiteConduta={aceites.find((a) => a.userId === user.id && a.tipo === "conduta")} onAceitar={salvarAceite} />}
           {tela === "gestor" && user.papel === "gestor" && (
             /* acesso pelo papel real do usuário autenticado (tipo=gestor no banco, garantido por RLS) — sem senha extra */
-            <TelaGestor {...{ acoes, respostas: rit.respostas || [], atas: rit.atas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, compras, comprasNoBanco, onRegistrarCompra: registrarCompra, onDecidirCompra: decidirCompra, onCancelarCompra: cancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, ajustes, onDecidirAjuste: decidirAjuste, demo }} />
+            <TelaGestor {...{ acoes, respostas: rit.respostas || [], atas: rit.atas || [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal: criarLocal, onDesativarLocal: desativarLocal, convites, onCriarConvite: criarConvite, onSalvarUsuario: salvarUsuario, gestorId: user.id, folgas, onDecidirFolga: decidirFolga, folhasPg, adiantamentos, guias, onGerarFolha: gerarFolha, onEditarFolha: editarFolha, onFecharFolha: fecharFolha, onCriarAdiant: criarAdiantamento, onCancelarAdiant: cancelarAdiantamento, compras, comprasNoBanco, onRegistrarCompra: registrarCompra, onDecidirCompra: decidirCompra, onCancelarCompra: cancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao: criarRescisao, onConfirmarRescisao: confirmarRescisao, onCriarExame: criarExame, onAgendarExame: agendarExame, onConcluirExame: concluirExame, candidatos, documentosRH, onCriarCandidato: criarCandidato, onMudarStatusCandidato: mudarStatusCandidato, onContratarCandidato: contratarCandidato, onAnexarDocumento: registrarDocumento, onAbrirArquivo: abrirDocumento, onRegistrarPagamentoGuia: registrarPagamentoGuia, onSalvarLinhaGuia: salvarLinhaGuia, consImagem, aceites, ajustes, onDecidirAjuste: decidirAjuste, demo, cadastrosPack: { cadastros, salHist, vtLinhas, dependentes, esocialRegs, cadastroNoBanco: cadastroNoBanco || demo, cadHandlers: { salvarCadastro, salvarCpf, lancarSalario, adicionarLinhaVT, removerLinhaVT, mudarDiasVT, salvarDependente, removerDependente, desligarColaborador, reativarColaborador, registrarNaCarteira, confirmarESocial } } }} />
           )}
         </main>
       </div>
@@ -8380,7 +8824,302 @@ function TelaLGPD({ user, onConsentir, credenciais = [], onCadastrarBio, onRemov
   );
 }
 
-function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gestorId }) {
+/* ================= Cadastro completo do colaborador (telas) ================= */
+function CampoFicha({ rot, children, largura = 190 }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.cinza, width: largura, maxWidth: "100%" }}>
+      {rot}
+      {children}
+    </label>
+  );
+}
+const inputFicha = { ...S.input, padding: "9px 11px", fontSize: 14 };
+
+/* Endereço: digitou o CEP, o resto vem sozinho (ViaCEP, serviço dos Correios/gratuito). Se falhar, preenche à mão. */
+function BlocoEndereco({ d, set, soLeitura = false }) {
+  const [buscando, setBuscando] = useState(false);
+  const [aviso, setAviso] = useState(null);
+  const buscar = async (valor) => {
+    const c = soDigitos(valor);
+    if (c.length !== 8) return;
+    setBuscando(true); setAviso(null);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${c}/json/`);
+      const e = enderecoDoViaCEP(await r.json());
+      if (!e) setAviso("CEP não encontrado. Preencha o endereço à mão.");
+      else set({ logradouro: e.logradouro || d.logradouro, bairro: e.bairro || d.bairro, cidade: e.cidade, uf: e.uf, codigoIbge: e.codigoIbge });
+    } catch { setAviso("Não consegui buscar o CEP agora. Preencha o endereço à mão."); }
+    finally { setBuscando(false); }
+  };
+  const alt = (k) => (e) => set({ [k]: e.target.value });
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+      <CampoFicha rot="CEP" largura={130}><input style={inputFicha} disabled={soLeitura} inputMode="numeric" maxLength={9} value={fmtCEP(d.cep || "")} onChange={(e) => { set({ cep: soDigitos(e.target.value) }); if (soDigitos(e.target.value).length === 8) buscar(e.target.value); }} placeholder="00000-000" /></CampoFicha>
+      <CampoFicha rot="Rua / avenida" largura={260}><input style={inputFicha} disabled={soLeitura} value={d.logradouro || ""} onChange={alt("logradouro")} /></CampoFicha>
+      <CampoFicha rot="Número" largura={90}><input style={inputFicha} disabled={soLeitura} value={d.numero || ""} onChange={alt("numero")} /></CampoFicha>
+      <CampoFicha rot="Complemento" largura={150}><input style={inputFicha} disabled={soLeitura} value={d.complemento || ""} onChange={alt("complemento")} /></CampoFicha>
+      <CampoFicha rot="Bairro" largura={170}><input style={inputFicha} disabled={soLeitura} value={d.bairro || ""} onChange={alt("bairro")} /></CampoFicha>
+      <CampoFicha rot="Cidade" largura={170}><input style={inputFicha} disabled={soLeitura} value={d.cidade || ""} onChange={alt("cidade")} /></CampoFicha>
+      <CampoFicha rot="UF" largura={70}><input style={inputFicha} disabled={soLeitura} maxLength={2} value={d.uf || ""} onChange={(e) => set({ uf: e.target.value.toUpperCase() })} /></CampoFicha>
+      {buscando && <span style={{ fontSize: 12, color: C.cinza, alignSelf: "end" }}>Buscando CEP…</span>}
+      {aviso && <span style={{ fontSize: 12, color: C.dourado, alignSelf: "end" }}>{aviso}</span>}
+    </div>
+  );
+}
+
+function BlocoPagamentoEmergencia({ d, set }) {
+  const alt = (k) => (e) => set({ [k]: e.target.value });
+  return (
+    <>
+      <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 14 }}>💳 Como receber (conta e Pix)</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+        <CampoFicha rot="Banco" largura={170}><input style={inputFicha} value={d.banco || ""} onChange={alt("banco")} /></CampoFicha>
+        <CampoFicha rot="Agência" largura={100}><input style={inputFicha} value={d.agencia || ""} onChange={alt("agencia")} /></CampoFicha>
+        <CampoFicha rot="Conta" largura={130}><input style={inputFicha} value={d.conta || ""} onChange={alt("conta")} /></CampoFicha>
+        <CampoFicha rot="Tipo da chave Pix" largura={160}>
+          <select style={inputFicha} value={d.pixTipo || ""} onChange={alt("pixTipo")}><option value="">—</option>{Object.entries(PIX_TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        </CampoFicha>
+        <CampoFicha rot="Chave Pix" largura={230}><input style={inputFicha} value={d.pixChave || ""} onChange={alt("pixChave")} /></CampoFicha>
+      </div>
+      <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 14 }}>🚑 Contato de emergência</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+        <CampoFicha rot="Nome" largura={200}><input style={inputFicha} value={d.emergNome || ""} onChange={alt("emergNome")} /></CampoFicha>
+        <CampoFicha rot="Parentesco" largura={140}><input style={inputFicha} value={d.emergParentesco || ""} onChange={alt("emergParentesco")} /></CampoFicha>
+        <CampoFicha rot="Telefone" largura={170}><input style={inputFicha} value={d.emergTelefone || ""} onChange={alt("emergTelefone")} /></CampoFicha>
+      </div>
+    </>
+  );
+}
+
+/* Colaborador: só endereço, pagamento e contato de emergência (o restante é do gestor). */
+function TelaMeuCadastro({ user, cadastro, noBanco, demo, onSalvar }) {
+  const [d, setD] = useState(() => ({ ...(cadastro || {}) }));
+  const [msg, setMsg] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+  const set = (p) => setD((x) => ({ ...x, ...p }));
+  const salvar = async () => {
+    setSalvando(true); setMsg(null);
+    try { await onSalvar(user.id, d); setMsg({ ok: true, txt: "Pronto! Seu cadastro foi salvo." }); }
+    catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
+    finally { setSalvando(false); }
+  };
+  return (
+    <div style={S.card}>
+      <div style={{ ...S.display, fontSize: 16 }}>📇 Meu cadastro</div>
+      <p style={{ fontSize: 13, color: C.cinza, margin: "6px 0 0", lineHeight: 1.6 }}>Mantenha seu endereço, sua conta e seu contato de emergência em dia. Só você e o gestor veem estes dados.</p>
+      {!noBanco && !demo && <p style={{ fontSize: 13, color: C.dourado }}>O cadastro completo ainda não foi ligado no sistema. Fale com o gestor.</p>}
+      <div style={{ ...S.display, fontSize: 13, color: C.amarelo, marginTop: 14 }}>🏠 Endereço</div>
+      <BlocoEndereco d={d} set={set} />
+      <BlocoPagamentoEmergencia d={d} set={set} />
+      <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <button style={{ ...S.btn, opacity: salvando ? 0.6 : 1 }} disabled={salvando} onClick={salvar}>{salvando ? "Salvando…" : "Salvar meu cadastro"}</button>
+        {msg && <span style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho }}>{msg.txt}</span>}
+      </div>
+    </div>
+  );
+}
+
+const ABAS_FICHA = [["dados", "👤 Dados"], ["endereco", "🏠 Endereço"], ["contrato", "📄 Contrato"], ["salario", "💰 Salário"], ["vt", "🚌 Transporte"], ["familia", "👨‍👩‍👧 Dependentes"], ["saude", "🩺 Saúde"], ["carteira", "🪪 Carteira"], ["desligar", "🚪 Desligar"]];
+
+function FichaColaborador({ u, cad, deps, hist, vtLinhasDoUser, regsESocial, exames, gestorId, noBanco, handlers, onFechar }) {
+  const [aba, setAba] = useState("dados");
+  const [d, setD] = useState(() => ({ ...(cad || {}) }));
+  const [cpf, setCpf] = useState(() => fmtCPF(u.cpf || ""));
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const set = (p) => setD((x) => ({ ...x, ...p }));
+  const alt = (k) => (e) => set({ [k]: e.target.value });
+  const roda = async (fn, ok) => {
+    setOcupado(true); setMsg(null);
+    try { await fn(); setMsg({ ok: true, txt: ok }); }
+    catch (e) { setMsg({ ok: false, txt: mensagemAmigavel(e) }); }
+    finally { setOcupado(false); }
+  };
+  const salvarFicha = () => roda(async () => { if (cpf && soDigitos(cpf) !== soDigitos(u.cpf || "")) await handlers.salvarCpf(u.id, cpf); await handlers.salvarCadastro(u.id, d); }, "Salvo!");
+  const BotaoSalvar = () => <div style={{ marginTop: 14 }}><button style={{ ...S.btn, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado || !noBanco} onClick={salvarFicha}>{ocupado ? "Salvando…" : "Salvar"}</button></div>;
+
+  // salário
+  const [sal, setSal] = useState({ valor: "", vigencia: hojeStr(), motivo: "", acordo: false });
+  const histU = salHistOrdenado(hist, u.id);
+  const testeSal = sal.valor && sal.vigencia ? validarAlteracaoSalario({ hist, userId: u.id, valor: sal.valor, vigencia: sal.vigencia, motivo: sal.motivo || "xxx", acordo: sal.acordo, salarioAtual: u.salario }) : null;
+  // vale-transporte
+  const [lin, setLin] = useState({ sentido: "ida", linha: "", valor: "" });
+  const vt = custoVT(vtLinhasDoUser, d.vtDias ?? VT_DIAS_PADRAO);
+  const divVT = dividirVT({ salarioBase: +u.salario || 0, custoMensal: vt.custoMensal });
+  // dependentes
+  const [dep, setDep] = useState({ nome: "", parentesco: "filho", nascimento: "", cpf: "", irrf: true, salarioFamilia: false });
+  const depsAtivos = (deps || []).filter((x) => x.ativo !== false);
+  // desligar
+  const [desl, setDesl] = useState({ data: hojeStr(), motivo: "", detalhe: "" });
+  // carteira
+  const [resumo, setResumo] = useState(null);
+  const falta = faltaNoCadastro(u, cad, depsAtivos);
+  const aso = asoDoColaborador(exames, u.id);
+  const copiar = async (txt) => { try { await navigator.clipboard.writeText(txt); setMsg({ ok: true, txt: "Resumo copiado! Cole no eSocial ou mande ao contador." }); } catch { setMsg({ ok: false, txt: "Não deu para copiar automático. Selecione o texto e copie." }); } };
+  const gerarResumo = (evento) => {
+    const fato = evento === "S-2200" ? (u.admissao || "").slice(0, 10) : evento === "S-2299" ? (cad?.desligadoEm || "") : hojeStr();
+    const r = resumoESocial(evento, { u, cad, deps: depsAtivos, hist, dataFato: fato, empresaCnpj: EMPRESA.cnpj });
+    setResumo(r);
+  };
+  const registrar = (evento) => roda(async () => {
+    const fato = evento === "S-2200" ? (u.admissao || "").slice(0, 10) : evento === "S-2299" ? (cad?.desligadoEm || hojeStr()) : hojeStr();
+    await handlers.registrarNaCarteira(u.id, evento, fato, EVENTOS_ESOCIAL[evento.replace("-", "")]?.nome || evento);
+  }, "Registrado! Ficou como pendente até você confirmar o envio.");
+  const desligado = estaDesligado(u, cad);
+
+  return (
+    <div style={{ background: C.grafite, border: "1px solid " + C.bordaForte, borderRadius: 14, padding: 14, marginTop: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ ...S.display, fontSize: 15 }}>📋 Ficha de {u.nome} {desligado && <span style={S.tag(C.vermelho, C.preto)}>DESLIGADO</span>}</div>
+        <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={onFechar}>Fechar</button>
+      </div>
+      {!noBanco && <p style={{ fontSize: 13, color: C.dourado, margin: "8px 0 0" }}>O cadastro completo ainda não foi ligado no banco. Aplique a atualização "cadastro do colaborador" (veja Diagnóstico) para salvar estas informações.</p>}
+      {falta.length > 0 && <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0" }}>Falta preencher: {falta.join(", ")}.</p>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+        {ABAS_FICHA.map(([k, r]) => <button key={k} style={{ ...(aba === k ? S.btn : S.btnGhost), padding: "6px 11px", fontSize: 12 }} onClick={() => { setAba(k); setMsg(null); }}>{r}</button>)}
+      </div>
+
+      {aba === "dados" && <>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+          <CampoFicha rot="CPF"><input style={inputFicha} inputMode="numeric" value={cpf} onChange={(e) => setCpf(fmtCPF(e.target.value))} placeholder="000.000.000-00" /></CampoFicha>
+          <CampoFicha rot="PIS/NIS (se tiver)"><input style={inputFicha} inputMode="numeric" maxLength={11} value={d.pis || ""} onChange={(e) => set({ pis: soDigitos(e.target.value) })} /></CampoFicha>
+          <CampoFicha rot="Data de nascimento"><input type="date" style={inputFicha} value={d.nascimento || ""} onChange={alt("nascimento")} /></CampoFicha>
+          <CampoFicha rot="Sexo" largura={130}><select style={inputFicha} value={d.sexo || ""} onChange={alt("sexo")}><option value="">—</option><option value="F">Feminino</option><option value="M">Masculino</option></select></CampoFicha>
+          <CampoFicha rot="Raça/cor (exigido pelo eSocial)" largura={200}><select style={inputFicha} value={d.racaCor || ""} onChange={alt("racaCor")}><option value="">—</option>{Object.entries(RACA_COR).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></CampoFicha>
+          <CampoFicha rot="Estado civil"><select style={inputFicha} value={d.estadoCivil || ""} onChange={alt("estadoCivil")}><option value="">—</option>{Object.entries(ESTADO_CIVIL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></CampoFicha>
+          <CampoFicha rot="Escolaridade"><select style={inputFicha} value={d.grauInstrucao || ""} onChange={alt("grauInstrucao")}><option value="">—</option>{Object.entries(GRAU_INSTRUCAO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></CampoFicha>
+        </div>
+        <BlocoPagamentoEmergencia d={d} set={set} />
+        <BotaoSalvar />
+      </>}
+
+      {aba === "endereco" && <><BlocoEndereco d={d} set={set} /><BotaoSalvar /></>}
+
+      {aba === "contrato" && <>
+        <p style={{ fontSize: 13, color: C.cinza, margin: "10px 0 0" }}>Admissão: <b>{fmtData((u.admissao || "").slice(0, 10)) || "—"}</b> · Cargo/função: <b>{u.cargo || "—"}</b> (mude em "Editar" na lista da equipe).</p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+          <CampoFicha rot="CBO (6 números)" largura={150}><input style={inputFicha} inputMode="numeric" maxLength={6} value={d.cbo || ""} onChange={(e) => set({ cbo: soDigitos(e.target.value) })} /></CampoFicha>
+          <CampoFicha rot="Jornada (horas por semana)" largura={190}><input type="number" min="1" max="44" step="0.5" style={inputFicha} value={d.jornadaHoras ?? ""} onChange={alt("jornadaHoras")} /></CampoFicha>
+          <CampoFicha rot="Descrição da jornada" largura={300}><input style={inputFicha} value={d.jornadaTexto || ""} onChange={alt("jornadaTexto")} placeholder="Ex.: seg a sex, 8h30 às 18h" /></CampoFicha>
+        </div>
+        <BotaoSalvar />
+      </>}
+
+      {aba === "salario" && <>
+        <p style={{ fontSize: 14, margin: "10px 0 0" }}>Salário de hoje: <b>{brl(salarioVigenteEm(hist, u.id, hojeStr(), +u.salario || 0))}</b></p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, alignItems: "end" }}>
+          <CampoFicha rot="Novo salário R$" largura={130}><input type="number" min="0" step="0.01" style={inputFicha} value={sal.valor} onChange={(e) => setSal({ ...sal, valor: e.target.value })} /></CampoFicha>
+          <CampoFicha rot="Vale a partir de" largura={160}><input type="date" style={inputFicha} value={sal.vigencia} onChange={(e) => setSal({ ...sal, vigencia: e.target.value })} /></CampoFicha>
+          <CampoFicha rot="Motivo (ex.: reajuste, promoção)" largura={250}><input style={inputFicha} value={sal.motivo} onChange={(e) => setSal({ ...sal, motivo: e.target.value })} /></CampoFicha>
+        </div>
+        {testeSal && testeSal.reducao && <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid " + C.vermelho, borderRadius: 10, padding: 10, marginTop: 8, fontSize: 13 }}>
+          ⚠️ Isso reduz o salário (de {brl(testeSal.anterior)}). A lei não permite, salvo acordo ou convenção coletiva com o sindicato (Constituição art. 7º, VI · CLT art. 468).
+          <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}><input type="checkbox" checked={sal.acordo} onChange={(e) => setSal({ ...sal, acordo: e.target.checked })} /> Existe acordo ou convenção coletiva (guardei o documento)</label>
+        </div>}
+        <div style={{ marginTop: 10 }}><button style={{ ...S.btn, opacity: ocupado ? 0.6 : 1 }} disabled={ocupado || !noBanco} onClick={() => roda(async () => { await handlers.lancarSalario(u.id, sal); setSal({ valor: "", vigencia: hojeStr(), motivo: "", acordo: false }); }, "Salário registrado. A folha usa o valor certo de cada mês.")}>Registrar novo salário</button></div>
+        {histU.length > 0 && <>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 14 }}>Histórico de salário</div>
+          {histU.map((h) => <div key={h.id} style={{ borderTop: "1px solid " + C.borda, padding: "6px 0", fontSize: 13 }}><b>{brl(h.valor)}</b> desde {fmtData(h.vigencia)} · {h.motivo}{h.acordo ? " · com acordo coletivo" : ""} <span style={{ color: C.cinza }}>· por {h.por === gestorId ? "você" : "gestor"}</span></div>)}
+        </>}
+      </>}
+
+      {aba === "vt" && <>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>Cadastre as linhas de ônibus de ida e de volta. O colaborador paga no máximo 6% do salário base; o resto é custo da empresa (Lei 7.418/85).</p>
+        {vtLinhasDoUser.filter((l) => l.ativo !== false).map((l) => <div key={l.id} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid " + C.borda, padding: "6px 0", fontSize: 13 }}><span>{l.sentido === "ida" ? "➡️ Ida" : "⬅️ Volta"} · {l.linha} · {brl(l.valor)}</span><button style={{ ...S.btnGhost, padding: "3px 9px", fontSize: 11 }} onClick={() => roda(() => handlers.removerLinhaVT(l.id), "Linha removida.")}>Remover</button></div>)}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, alignItems: "end" }}>
+          <CampoFicha rot="Sentido" largura={110}><select style={inputFicha} value={lin.sentido} onChange={(e) => setLin({ ...lin, sentido: e.target.value })}><option value="ida">Ida</option><option value="volta">Volta</option></select></CampoFicha>
+          <CampoFicha rot="Linha (nome ou número)" largura={200}><input style={inputFicha} value={lin.linha} onChange={(e) => setLin({ ...lin, linha: e.target.value })} /></CampoFicha>
+          <CampoFicha rot="Passagem R$" largura={110}><input type="number" min="0" step="0.01" style={inputFicha} value={lin.valor} onChange={(e) => setLin({ ...lin, valor: e.target.value })} /></CampoFicha>
+          <button style={{ ...S.btn, padding: "9px 14px", fontSize: 13 }} disabled={ocupado || !noBanco} onClick={() => roda(async () => { await handlers.adicionarLinhaVT(u.id, lin); setLin({ ...lin, linha: "", valor: "" }); }, "Linha adicionada.")}>Adicionar linha</button>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "end", marginTop: 10, flexWrap: "wrap" }}>
+          <CampoFicha rot="Dias de trabalho por mês" largura={170}><input type="number" min="0" max="31" style={inputFicha} value={d.vtDias ?? VT_DIAS_PADRAO} onChange={alt("vtDias")} /></CampoFicha>
+          <button style={{ ...S.btnGhost, padding: "9px 14px", fontSize: 13 }} disabled={ocupado || !noBanco} onClick={() => roda(() => handlers.mudarDiasVT(u.id, d.vtDias ?? VT_DIAS_PADRAO), "Dias salvos.")}>Salvar dias</button>
+        </div>
+        <div style={{ background: C.carvao, borderRadius: 10, padding: 10, marginTop: 10, fontSize: 13, lineHeight: 1.7 }}>
+          Por dia: <b>{brl(vt.porDia)}</b> × {vt.dias} dias = custo do mês <b>{brl(vt.custoMensal)}</b><br />
+          Desconto do colaborador (até 6% de {brl(+u.salario || 0)} = {brl(divVT.limite)}): <b>{brl(divVT.descontoColaborador)}</b><br />
+          Custo da empresa: <b>{brl(divVT.custoEmpresa)}</b>
+        </div>
+      </>}
+
+      {aba === "familia" && <>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0" }}>Dependentes que valem para o salário-família e para o desconto do imposto de renda (IRRF).</p>
+        {depsAtivos.map((x) => <div key={x.id} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid " + C.borda, padding: "6px 0", fontSize: 13, gap: 8 }}><span><b>{x.nome}</b> · {PARENTESCO_DEP[x.parentesco]} · nasc. {fmtData(x.nascimento)}{x.irrf ? " · IRRF" : ""}{x.salarioFamilia ? " · salário-família" : ""}</span><button style={{ ...S.btnGhost, padding: "3px 9px", fontSize: 11 }} onClick={() => roda(() => handlers.removerDependente(x.id), "Dependente removido.")}>Remover</button></div>)}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, alignItems: "end" }}>
+          <CampoFicha rot="Nome" largura={200}><input style={inputFicha} value={dep.nome} onChange={(e) => setDep({ ...dep, nome: e.target.value })} /></CampoFicha>
+          <CampoFicha rot="Parentesco" largura={130}><select style={inputFicha} value={dep.parentesco} onChange={(e) => setDep({ ...dep, parentesco: e.target.value })}>{Object.entries(PARENTESCO_DEP).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></CampoFicha>
+          <CampoFicha rot="Nascimento" largura={150}><input type="date" style={inputFicha} value={dep.nascimento} onChange={(e) => setDep({ ...dep, nascimento: e.target.value })} /></CampoFicha>
+          <CampoFicha rot="CPF" largura={150}><input style={inputFicha} value={dep.cpf} onChange={(e) => setDep({ ...dep, cpf: fmtCPF(e.target.value) })} /></CampoFicha>
+          <label style={{ fontSize: 12, color: C.cinza, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={dep.irrf} onChange={(e) => setDep({ ...dep, irrf: e.target.checked })} /> IRRF</label>
+          <label style={{ fontSize: 12, color: C.cinza, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={dep.salarioFamilia} onChange={(e) => setDep({ ...dep, salarioFamilia: e.target.checked })} /> Salário-família</label>
+          <button style={{ ...S.btn, padding: "9px 14px", fontSize: 13 }} disabled={ocupado || !noBanco} onClick={() => roda(async () => { await handlers.salvarDependente(u.id, dep); setDep({ nome: "", parentesco: "filho", nascimento: "", cpf: "", irrf: true, salarioFamilia: false }); }, "Dependente salvo.")}>Adicionar</button>
+        </div>
+      </>}
+
+      {aba === "saude" && <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7 }}>
+        {aso.situacao === "sem_exame" && <p style={{ margin: 0 }}>🩺 Nenhum exame de saúde (ASO) registrado ainda. Registre em <b>Exames ocupacionais</b>.</p>}
+        {aso.ultimo && <p style={{ margin: 0 }}>Último ASO: <b>{aso.ultimo.tipoLabel}</b> em {fmtData(aso.ultimo.data)} · vale até <b>{fmtData(aso.validade)}</b>{" "}
+          {aso.situacao === "vencido" && <span style={S.tag(C.vermelho, C.preto)}>VENCIDO há {Math.abs(aso.dias)} dias</span>}
+          {aso.situacao === "vencendo" && <span style={S.tag(C.dourado, "#111")}>vence em {aso.dias} dias</span>}
+          {aso.situacao === "em_dia" && <span style={S.tag(C.verde, C.preto)}>EM DIA</span>}</p>}
+        {aso.agendado && <p style={{ margin: "6px 0 0" }}>Agendado: {aso.agendado.tipoLabel} em {fmtData(aso.agendado.dataPrevista)}.</p>}
+        <p style={{ fontSize: 12, color: C.cinza, marginTop: 8 }}>Regra geral: o exame periódico vale 12 meses (NR-7). O médico do trabalho pode definir 24 meses em alguns casos — confirme com ele.</p>
+      </div>}
+
+      {aba === "carteira" && <>
+        <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>A carteira de trabalho digital é atualizada pelo <b>eSocial</b>. Este botão monta o resumo pronto para você copiar (ou mandar ao contador) e deixa a tarefa como <b>pendente</b> até você confirmar que enviou. O app não envia nada sozinho.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <button style={{ ...S.btn, padding: "8px 13px", fontSize: 13 }} onClick={() => gerarResumo("S-2200")}>Admissão (S-2200)</button>
+          <button style={{ ...S.btnGhost, padding: "8px 13px", fontSize: 13 }} onClick={() => gerarResumo("S-2206")}>Mudança de salário (S-2206)</button>
+          <button style={{ ...S.btnGhost, padding: "8px 13px", fontSize: 13 }} onClick={() => gerarResumo("S-2299")} disabled={!cad?.desligadoEm}>Desligamento (S-2299)</button>
+        </div>
+        {resumo && <div style={{ background: C.carvao, borderRadius: 10, padding: 10, marginTop: 10 }}>
+          {resumo.faltando.length > 0 && <p style={{ fontSize: 12, color: C.dourado, margin: "0 0 6px" }}>Falta: {resumo.faltando.join(", ")}.</p>}
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, margin: 0, color: C.branco }}>{resumo.texto}</pre>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => copiar(resumo.texto)}>📋 Copiar resumo</button>
+            <a style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12, textDecoration: "none" }} href={"mailto:?subject=" + encodeURIComponent("eSocial " + resumo.evento + " - " + u.nome) + "&body=" + encodeURIComponent(resumo.texto)}>✉️ Mandar ao contador</a>
+            <button style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }} disabled={ocupado || !noBanco} onClick={() => registrar(resumo.evento)}>Registrar na carteira</button>
+          </div>
+        </div>}
+        {regsESocial.length > 0 && <>
+          <div style={{ ...S.display, fontSize: 13, color: C.cinza, marginTop: 14 }}>Pendências e envios</div>
+          {regsESocial.map((r) => <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid " + C.borda, padding: "6px 0", fontSize: 13, gap: 8, flexWrap: "wrap" }}>
+            <span><b>{r.evento}</b> · {fmtData(r.dataFato)} · prazo {fmtData(prazoESocial(r.evento, r.dataFato))}{r.recibo ? ` · recibo ${r.recibo}` : ""}</span>
+            {r.status === "enviado" ? <span style={S.tag(C.verde, C.preto)}>ENVIADO</span> : <ConfirmarEnvio onConfirmar={(rec) => roda(() => handlers.confirmarESocial(r.id, rec), "Marcado como enviado.")} />}
+          </div>)}
+        </>}
+        <Detalhes titulo="Como a empresa envia ao eSocial (fonte oficial)"><p style={{ margin: 0, lineHeight: 1.6 }}>Pelo portal do eSocial (Web Geral) é preciso certificado digital da empresa (e-CNPJ). A entrada só com conta gov.br vale para MEI, segurado especial e empresas do Simples com até 1 empregado. Com mais empregados, o envio é pelo contador (com procuração) ou com o certificado. Prazos: admissão até o dia anterior ao início; mudança de salário até o dia 15 do mês seguinte; desligamento em até 10 dias corridos. O envio direto pelo app (API) fica desligado: exige certificado digital da empresa.</p></Detalhes>
+      </>}
+
+      {aba === "desligar" && <>
+        {desligado ? <>
+          <p style={{ fontSize: 14, margin: "10px 0 0" }}>Desligado em <b>{fmtData(cad?.desligadoEm) || "—"}</b>{cad?.motivoDesligamento ? ` · ${cad.motivoDesligamento}` : ""}.</p>
+          <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, marginTop: 8 }} disabled={ocupado} onClick={() => roda(() => handlers.reativarColaborador(u.id), "Colaborador reativado.")}>Reativar colaborador</button>
+        </> : <>
+          <p style={{ fontSize: 12, color: C.cinza, margin: "10px 0 0", lineHeight: 1.6 }}>O colaborador some das listas e perde o acesso, mas <b>nada é apagado</b>. {GUARDA_DOCUMENTOS_TXT}</p>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, alignItems: "end" }}>
+            <CampoFicha rot="Data do desligamento" largura={170}><input type="date" style={inputFicha} value={desl.data} onChange={(e) => setDesl({ ...desl, data: e.target.value })} /></CampoFicha>
+            <CampoFicha rot="Motivo" largura={260}><select style={inputFicha} value={desl.motivo} onChange={(e) => setDesl({ ...desl, motivo: e.target.value })}><option value="">Escolha…</option>{Object.entries(MOTIVOS_DESLIGAMENTO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></CampoFicha>
+            {desl.motivo === "outro" && <CampoFicha rot="Descreva" largura={260}><input style={inputFicha} value={desl.detalhe} onChange={(e) => setDesl({ ...desl, detalhe: e.target.value })} /></CampoFicha>}
+          </div>
+          <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, marginTop: 10 }} disabled={ocupado || !noBanco || u.id === gestorId} onClick={() => { if (window.confirm(`Desligar ${u.nome}? Nada é apagado e dá para reativar depois.`)) roda(() => handlers.desligarColaborador(u.id, desl), "Colaborador desligado. A pendência do eSocial (S-2299) foi criada."); }}>Desligar colaborador</button>
+        </>}
+      </>}
+      {msg && <p style={{ fontSize: 13, color: msg.ok ? C.verde : C.vermelho, margin: "10px 0 0" }}>{msg.txt}</p>}
+    </div>
+  );
+}
+
+function ConfirmarEnvio({ onConfirmar }) {
+  const [aberto, setAberto] = useState(false);
+  const [rec, setRec] = useState("");
+  if (!aberto) return <button style={{ ...S.btn, padding: "5px 10px", fontSize: 12 }} onClick={() => setAberto(true)}>Confirmar envio</button>;
+  return <span style={{ display: "flex", gap: 6, alignItems: "center" }}><input style={{ ...inputFicha, width: 150, padding: "5px 8px", fontSize: 12 }} placeholder="Nº do recibo (opcional)" value={rec} onChange={(e) => setRec(e.target.value)} /><button style={{ ...S.btn, padding: "5px 10px", fontSize: 12 }} onClick={() => { onConfirmar(rec); setAberto(false); }}>Já enviei</button></span>;
+}
+
+function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gestorId, cadastros = [], salHist = [], vtLinhas = [], dependentes = [], esocialRegs = [], examesOcupacionais = [], cadastroNoBanco = false, cadHandlers = null }) {
   const [form, setForm] = useState({ nome: "", email: "", cargo: "", telefone: "", tipo: "colaborador", dataAdmissao: "" });
   const [linkGerado, setLinkGerado] = useState(null);
   const [geradoNome, setGeradoNome] = useState("");
@@ -8388,6 +9127,10 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
   const [msg, setMsg] = useState(null);
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState(null); // { id, nome, cargo, tipo }
+  const [fichaId, setFichaId] = useState(null);
+  const [mostrarDesligados, setMostrarDesligados] = useState(false);
+  const cadDe = (id) => cadastros.find(c => c.userId === id) || null;
+  const desligadosQtd = usuarios.filter(u => estaDesligado(u, cadDe(u.id))).length;
   const linkDe = (tk) => `${window.location.origin}${window.location.pathname}?convite=${tk}`;
   const msgConvite = (nome, link) =>
     "Oi" + (nome ? " " + String(nome).trim().split(" ")[0] : "") + "! Seu acesso ao Ponto Renovar já está criado.\n\n" +
@@ -8412,7 +9155,8 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
     <div style={{ ...S.card, marginTop: 14 }}>
       <div style={{ ...S.display, fontSize: 15, color: C.cinza }}>👥 Equipe — colaboradores e convites</div>
 
-      {usuarios.map(u => (
+      {desligadosQtd > 0 && <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, color: C.cinza, marginTop: 8 }}><input type="checkbox" checked={mostrarDesligados} onChange={e => setMostrarDesligados(e.target.checked)} /> Mostrar desligados ({desligadosQtd})</label>}
+      {usuarios.filter(u => mostrarDesligados || !estaDesligado(u, cadDe(u.id))).map(u => (
         <div key={u.id} style={{ borderTop: "1px solid #1E3450", padding: "9px 0" }}>
           {editando?.id === u.id ? (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -8445,14 +9189,16 @@ function SecaoEquipe({ usuarios, convites, onCriarConvite, onSalvarUsuario, gest
                 <b>{u.nome}</b> <span style={{ color: C.cinza, fontSize: 12 }}>· {u.email}{u.cargo ? ` · ${u.cargo}` : ""} · {u.papel === "gestor" ? "Gestor" : "Colaborador"} · admissão {fmtData((u.admissao || "").slice(0, 10)) || "—"}</span>
               </div>
               <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-                {u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, C.preto)}>ATIVO</span>}
+                {estaDesligado(u, cadDe(u.id)) ? <span style={S.tag(C.vermelho, C.preto)}>DESLIGADO</span> : u.ativo === false ? <span style={S.tag("#1A2F4A", "#C7D2E4")}>INATIVO</span> : <span style={S.tag(C.verde, C.preto)}>ATIVO</span>}
+                {cadHandlers && <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setFichaId(fichaId === u.id ? null : u.id)}>📋 Ficha</button>}
                 <button style={{ ...S.btnGhost, padding: "6px 12px", fontSize: 12 }} onClick={() => setEditando({ id: u.id, nome: u.nome, cargo: u.cargo, tipo: u.papel, admissao: (u.admissao || "").slice(0, 10), salario: u.salario || 0, vtAtivo: !!u.vtAtivo, vtValor: u.vtValor || 0, dependentes: u.dependentes || 0 })}>Editar</button>
-                {u.id !== gestorId && (u.ativo === false
+                {u.id !== gestorId && !estaDesligado(u, cadDe(u.id)) && (u.ativo === false
                   ? <button style={{ ...S.btnGhost, borderColor: C.verde, color: C.verde, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: true })}>Reativar</button>
                   : <button style={{ ...S.btnGhost, borderColor: C.vermelho, color: C.vermelho, padding: "6px 12px", fontSize: 12 }} onClick={() => onSalvarUsuario(u.id, { ativo: false })}>Desativar</button>)}
               </span>
             </div>
           )}
+          {fichaId === u.id && cadHandlers && <FichaColaborador key={u.id} u={u} cad={cadDe(u.id)} deps={dependentes.filter(x => x.userId === u.id)} hist={salHist} vtLinhasDoUser={vtLinhas.filter(x => x.userId === u.id)} regsESocial={esocialRegs.filter(x => x.userId === u.id)} exames={examesOcupacionais} gestorId={gestorId} noBanco={cadastroNoBanco} handlers={cadHandlers} onFechar={() => setFichaId(null)} />}
         </div>
       ))}
 
@@ -9173,7 +9919,7 @@ function SecaoContabilidade({ usuarios = [], folhasPg = [], guias = [], onRegist
     </div>
   );
 }
-function CardHoleriteItem({ f, user, onAssinarFolha, compras = [] }) {
+function CardHoleriteItem({ f, user, onAssinarFolha, compras = [], vtCustoMensal = 0 }) {
   const detalheCompras = f.compras > 0 ? comprasDoMes(compras, f.userId, f.competencia) : [];
   const [etapaAssinatura, setEtapaAssinatura] = useState(null); // null | "aguardando_arquivo"
   const [carregando, setCarregando] = useState(false);
@@ -9272,6 +10018,10 @@ function CardHoleriteItem({ f, user, onAssinarFolha, compras = [] }) {
           </tr>
         </tbody>
       </table>
+      {f.vt > 0 && (() => {
+        const dv = dividirVT({ salarioBase: f.salario, custoMensal: Math.max(vtCustoMensal, f.vt) });
+        return <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>🚌 Vale-transporte: você paga até 6% do salário ({brl(f.vt)} neste mês){dv.custoEmpresa > 0 ? `; a empresa paga o restante (${brl(dv.custoEmpresa)}).` : "."}</p>;
+      })()}
       {detalheCompras.length > 0 && (
         <p style={{ fontSize: 12, color: C.cinza, margin: "8px 0 0", lineHeight: 1.6 }}>
           Compras descontadas neste mês: {detalheCompras.map((d) => `${d.compra.descricao} (parcela ${d.n}/${d.de}, ${brl(d.valor)})`).join(" · ")}
@@ -9337,7 +10087,7 @@ function CardHoleriteItem({ f, user, onAssinarFolha, compras = [] }) {
   );
 }
 
-function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha, compras = [] }) {
+function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha, compras = [], vtCustoMensal = 0 }) {
   const minhas = [...folhasPg].sort((a, b) => b.competencia.localeCompare(a.competencia));
   const proximas = compras.filter(compraDescontavel).flatMap((c) => parcelasDaCompra(c).filter((p) => !folhasPg.some((f) => f.status === "fechada" && f.competencia.slice(0, 7) === p.comp.slice(0, 7))).map((p) => ({ c, p })));
   return (
@@ -9346,7 +10096,7 @@ function TelaHolerite({ user, folhasPg, adiantamentos, onAssinarFolha, compras =
       <p style={{ fontSize: 11, color: C.cinza, marginTop: 6 }}>{AVISO_FOLHA}</p>
       {minhas.length === 0 && <div style={{ ...S.card, marginTop: 14, fontSize: 13, color: C.cinza }}>Nenhuma folha gerada ainda. O gestor gera a folha no fim de cada mês.</div>}
       {minhas.map(f => (
-        <CardHoleriteItem key={f.id} f={f} user={user} onAssinarFolha={onAssinarFolha} compras={compras} />
+        <CardHoleriteItem key={f.id} f={f} user={user} onAssinarFolha={onAssinarFolha} compras={compras} vtCustoMensal={vtCustoMensal} />
       ))}
       {adiantamentos.some(a => a.status === "pendente") && (
         <div style={{ ...S.card, marginTop: 14, fontSize: 13 }}>
@@ -9720,6 +10470,11 @@ const TABELAS_OPCIONAIS = [
   { nome: "presenca_chamada", para: "quem esta na sala da reuniao agora" },
   { nome: "ajustes_ponto", para: "pedidos de correcao de marcacao" },
   { nome: "compras_colaborador", para: "compras do colaborador (desconto em folha)" },
+  { nome: "colaborador_cadastro", para: "cadastro completo do colaborador (ficha, desligamento)" },
+  { nome: "salario_historico", para: "historico de salario" },
+  { nome: "vale_transporte_linhas", para: "linhas de onibus do vale-transporte" },
+  { nome: "dependentes", para: "dependentes (salario-familia e IRRF)" },
+  { nome: "esocial_registros", para: "pendencias da carteira digital (eSocial)" },
 ];
 
 /* SQL das tabelas opcionais. O gestor copia daqui e roda no SQL Editor do
@@ -10281,6 +11036,277 @@ drop trigger if exists trg_compras_regras on public.compras_colaborador;
 create trigger trg_compras_regras
   before insert or update on public.compras_colaborador
   for each row execute function public.compras_colaborador_regras();
+
+-- 2026-11-12 - Cadastro completo do colaborador (ficha, salario com historico, vale-transporte,
+-- dependentes, pendencias da carteira digital/eSocial, desligamento sem apagar nada)
+--
+-- NAO rode em producao sem o dono/Claude revisar. So cria tabelas NOVAS (nao mexe em usuarios,
+-- folha_pagamento nem em nenhuma politica existente). Pode rodar de novo sem estragar nada.
+--
+-- Quem ve o que (RLS): colaborador ve so as linhas dele; gestor (is_gestor()) ve todas.
+-- Nada e apagado: nao existe policy de DELETE em nenhuma tabela. Desligar = marcar data e motivo.
+--
+-- Tabelas:
+--  1) colaborador_cadastro   ficha (1 linha por pessoa): dados pessoais, endereco, pagamento,
+--                            contato de emergencia, jornada e desligamento
+--  2) salario_historico      cada alteracao de salario (valor, vigencia, motivo, quem alterou)
+--                            + trava contra REDUCAO (CF art. 7o VI / CLT art. 468)
+--  3) vale_transporte_linhas linhas de onibus de ida e volta
+--  4) dependentes            dependentes (IRRF / salario-familia)
+--  5) esocial_registros      pendencias de S-2200 / S-2206 / S-2299 ate o gestor confirmar o envio
+--
+-- Como voltar atras: bloco "DESFAZER" no fim do arquivo.
+
+-- ============================================================
+-- 1) FICHA
+-- ============================================================
+create table if not exists public.colaborador_cadastro (
+  usuario_id uuid primary key references public.usuarios (id) on delete cascade,
+  -- dados pessoais (carteira/eSocial)
+  data_nascimento date,
+  sexo text check (sexo in ('F', 'M')),
+  raca_cor text check (raca_cor in ('branca', 'preta', 'parda', 'amarela', 'indigena', 'nao_informada')),
+  estado_civil text check (estado_civil in ('solteiro', 'casado', 'uniao_estavel', 'separado', 'divorciado', 'viuvo')),
+  grau_instrucao text check (grau_instrucao in ('fundamental', 'medio', 'superior', 'pos', 'outro')),
+  pis_nis text check (pis_nis is null or pis_nis ~ '^[0-9]{11}$'),
+  cbo text check (cbo is null or cbo ~ '^[0-9]{6}$'),
+  -- jornada
+  jornada_horas_semana numeric(4, 1) check (jornada_horas_semana is null or (jornada_horas_semana > 0 and jornada_horas_semana <= 44)),
+  jornada_descricao text check (char_length(jornada_descricao) <= 200),
+  -- endereco
+  cep text check (cep is null or cep ~ '^[0-9]{8}$'),
+  logradouro text check (char_length(logradouro) <= 120),
+  numero text check (char_length(numero) <= 12),
+  complemento text check (char_length(complemento) <= 60),
+  bairro text check (char_length(bairro) <= 80),
+  cidade text check (char_length(cidade) <= 80),
+  uf text check (uf is null or uf ~ '^[A-Z]{2}$'),
+  codigo_ibge text check (codigo_ibge is null or codigo_ibge ~ '^[0-9]{7}$'),
+  -- pagamento
+  banco text check (char_length(banco) <= 60),
+  agencia text check (char_length(agencia) <= 12),
+  conta text check (char_length(conta) <= 20),
+  pix_tipo text check (pix_tipo in ('cpf', 'celular', 'email', 'aleatoria')),
+  pix_chave text check (char_length(pix_chave) <= 80),
+  -- emergencia
+  emergencia_nome text check (char_length(emergencia_nome) <= 80),
+  emergencia_parentesco text check (char_length(emergencia_parentesco) <= 40),
+  emergencia_telefone text check (char_length(emergencia_telefone) <= 20),
+  -- vale-transporte: dias de uso por mes
+  vt_dias_mes smallint check (vt_dias_mes is null or vt_dias_mes between 0 and 31),
+  -- desligamento (nada e apagado: so marca)
+  desligado_em date,
+  motivo_desligamento text check (char_length(motivo_desligamento) <= 200),
+  atualizado_em timestamptz not null default now(),
+  check (desligado_em is null or motivo_desligamento is not null)
+);
+alter table public.colaborador_cadastro enable row level security;
+
+drop policy if exists "cadastro: ver o proprio ou todos (gestor)" on public.colaborador_cadastro;
+create policy "cadastro: ver o proprio ou todos (gestor)" on public.colaborador_cadastro
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "cadastro: criar" on public.colaborador_cadastro;
+create policy "cadastro: criar" on public.colaborador_cadastro
+  for insert to authenticated with check (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "cadastro: atualizar" on public.colaborador_cadastro;
+create policy "cadastro: atualizar" on public.colaborador_cadastro
+  for update to authenticated
+  using (usuario_id = auth.uid() or is_gestor())
+  with check (usuario_id = auth.uid() or is_gestor());
+-- Sem policy de DELETE.
+
+-- Colaborador so mexe nos dados pessoais de contato (endereco, pagamento, emergencia).
+-- Data de nascimento, PIS, CBO, jornada, VT e desligamento: so o gestor.
+create or replace function public.colaborador_cadastro_regras()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_gestor boolean := coalesce(is_gestor(), false);
+  v_livres text[] := array['cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf', 'codigo_ibge',
+    'banco', 'agencia', 'conta', 'pix_tipo', 'pix_chave',
+    'emergencia_nome', 'emergencia_parentesco', 'emergencia_telefone', 'atualizado_em'];
+begin
+  new.atualizado_em := now();
+  if v_gestor then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.usuario_id <> auth.uid() then
+      raise exception 'so o gestor cria a ficha de outra pessoa';
+    end if;
+    if new.data_nascimento is not null or new.sexo is not null or new.raca_cor is not null
+       or new.estado_civil is not null or new.grau_instrucao is not null or new.pis_nis is not null
+       or new.cbo is not null or new.jornada_horas_semana is not null or new.jornada_descricao is not null
+       or new.vt_dias_mes is not null or new.desligado_em is not null or new.motivo_desligamento is not null then
+      raise exception 'colaborador so preenche endereco, pagamento e contato de emergencia';
+    end if;
+    return new;
+  end if;
+  if new.usuario_id <> old.usuario_id then
+    raise exception 'a ficha nao muda de dono';
+  end if;
+  if (to_jsonb(new) - v_livres) <> (to_jsonb(old) - v_livres) then
+    raise exception 'colaborador so altera endereco, pagamento e contato de emergencia';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_cadastro_regras on public.colaborador_cadastro;
+create trigger trg_cadastro_regras
+  before insert or update on public.colaborador_cadastro
+  for each row execute function public.colaborador_cadastro_regras();
+
+-- ============================================================
+-- 2) SALARIO COM HISTORICO
+-- ============================================================
+create table if not exists public.salario_historico (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  valor numeric(12, 2) not null check (valor > 0 and valor <= 1000000),
+  vigencia date not null,
+  motivo text not null check (char_length(btrim(motivo)) between 3 and 200),
+  acordo_coletivo boolean not null default false,
+  alterado_por uuid not null references public.usuarios (id),
+  criado_em timestamptz not null default now()
+);
+create index if not exists salario_historico_usuario on public.salario_historico (usuario_id, vigencia desc, criado_em desc);
+alter table public.salario_historico enable row level security;
+
+drop policy if exists "salario: ver o proprio ou todos (gestor)" on public.salario_historico;
+create policy "salario: ver o proprio ou todos (gestor)" on public.salario_historico
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+
+drop policy if exists "salario: so o gestor lanca" on public.salario_historico;
+create policy "salario: so o gestor lanca" on public.salario_historico
+  for insert to authenticated with check (is_gestor() and alterado_por = auth.uid());
+-- Sem UPDATE e sem DELETE: historico de salario nunca e reescrito (corrige-se lancando outra linha).
+
+create or replace function public.salario_historico_regras()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_anterior numeric(12, 2);
+begin
+  new.alterado_por := auth.uid();
+  new.criado_em := now();
+  -- salario vigente na data da nova vigencia (ultima linha com vigencia <= nova)
+  select valor into v_anterior
+    from public.salario_historico
+   where usuario_id = new.usuario_id and vigencia <= new.vigencia
+   order by vigencia desc, criado_em desc
+   limit 1;
+  if v_anterior is not null and new.valor < v_anterior and not new.acordo_coletivo then
+    raise exception 'reducao de salario nao e permitida (CF art. 7o VI, CLT art. 468) sem acordo ou convencao coletiva';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_salario_regras on public.salario_historico;
+create trigger trg_salario_regras
+  before insert on public.salario_historico
+  for each row execute function public.salario_historico_regras();
+
+-- ============================================================
+-- 3) VALE-TRANSPORTE
+-- ============================================================
+create table if not exists public.vale_transporte_linhas (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  sentido text not null check (sentido in ('ida', 'volta')),
+  linha text not null check (char_length(btrim(linha)) between 1 and 60),
+  valor_passagem numeric(8, 2) not null check (valor_passagem > 0 and valor_passagem <= 200),
+  ativo boolean not null default true,
+  criado_em timestamptz not null default now()
+);
+create index if not exists vt_linhas_usuario on public.vale_transporte_linhas (usuario_id);
+alter table public.vale_transporte_linhas enable row level security;
+
+drop policy if exists "vt: ver o proprio ou todos (gestor)" on public.vale_transporte_linhas;
+create policy "vt: ver o proprio ou todos (gestor)" on public.vale_transporte_linhas
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "vt: so o gestor cria" on public.vale_transporte_linhas;
+create policy "vt: so o gestor cria" on public.vale_transporte_linhas
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "vt: so o gestor altera" on public.vale_transporte_linhas;
+create policy "vt: so o gestor altera" on public.vale_transporte_linhas
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+-- Sem DELETE: linha que saiu de uso fica com ativo = false.
+
+-- ============================================================
+-- 4) DEPENDENTES
+-- ============================================================
+create table if not exists public.dependentes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  nome text not null check (char_length(btrim(nome)) between 2 and 100),
+  parentesco text not null check (parentesco in ('filho', 'conjuge', 'outro')),
+  data_nascimento date not null,
+  cpf text check (cpf is null or cpf ~ '^[0-9]{11}$'),
+  irrf boolean not null default true,
+  salario_familia boolean not null default false,
+  ativo boolean not null default true,
+  criado_em timestamptz not null default now()
+);
+create index if not exists dependentes_usuario on public.dependentes (usuario_id);
+alter table public.dependentes enable row level security;
+
+drop policy if exists "dependentes: ver o proprio ou todos (gestor)" on public.dependentes;
+create policy "dependentes: ver o proprio ou todos (gestor)" on public.dependentes
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "dependentes: so o gestor cria" on public.dependentes;
+create policy "dependentes: so o gestor cria" on public.dependentes
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "dependentes: so o gestor altera" on public.dependentes;
+create policy "dependentes: so o gestor altera" on public.dependentes
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+
+-- ============================================================
+-- 5) CARTEIRA DIGITAL / eSOCIAL (pendencias)
+-- ============================================================
+create table if not exists public.esocial_registros (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.usuarios (id) on delete cascade,
+  evento text not null check (evento in ('S-2200', 'S-2206', 'S-2299')),
+  data_fato date not null,
+  descricao text check (char_length(descricao) <= 200),
+  status text not null default 'pendente' check (status in ('pendente', 'enviado')),
+  recibo text check (char_length(recibo) <= 60),
+  enviado_em timestamptz,
+  enviado_por uuid references public.usuarios (id),
+  criado_em timestamptz not null default now(),
+  unique (usuario_id, evento, data_fato)
+);
+create index if not exists esocial_registros_status on public.esocial_registros (status, data_fato);
+alter table public.esocial_registros enable row level security;
+
+drop policy if exists "esocial: ver o proprio ou todos (gestor)" on public.esocial_registros;
+create policy "esocial: ver o proprio ou todos (gestor)" on public.esocial_registros
+  for select to authenticated using (usuario_id = auth.uid() or is_gestor());
+drop policy if exists "esocial: so o gestor cria" on public.esocial_registros;
+create policy "esocial: so o gestor cria" on public.esocial_registros
+  for insert to authenticated with check (is_gestor());
+drop policy if exists "esocial: so o gestor confirma" on public.esocial_registros;
+create policy "esocial: so o gestor confirma" on public.esocial_registros
+  for update to authenticated using (is_gestor()) with check (is_gestor());
+
+-- ---------- DESFAZER (so se precisar; nao rode junto) ----------
+-- drop table if exists public.esocial_registros;
+-- drop table if exists public.dependentes;
+-- drop table if exists public.vale_transporte_linhas;
+-- drop trigger if exists trg_salario_regras on public.salario_historico;
+-- drop function if exists public.salario_historico_regras();
+-- drop table if exists public.salario_historico;
+-- drop trigger if exists trg_cadastro_regras on public.colaborador_cadastro;
+-- drop function if exists public.colaborador_cadastro_regras();
+-- drop table if exists public.colaborador_cadastro;
 `;
 
 /* 404 do PostgREST = tabela não existe. Resposta vazia ou barrada por RLS já
@@ -10587,7 +11613,7 @@ function SecaoLocais({ locais, onCriar, onDesativar }) {
   );
 }
 
-function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, compras = [], comprasNoBanco = false, onRegistrarCompra, onDecidirCompra, onCancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, ajustes = [], onDecidirAjuste, demo }) {
+function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros, faltas, justificativas, atestados, ferias, logs, decidir, locais, onCriarLocal, onDesativarLocal, convites, onCriarConvite, onSalvarUsuario, gestorId, folgas, onDecidirFolga, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant, compras = [], comprasNoBanco = false, onRegistrarCompra, onDecidirCompra, onCancelarCompra, rescisoes, examesOcupacionais, onCriarRescisao, onConfirmarRescisao, onCriarExame, onAgendarExame, onConcluirExame, candidatos, documentosRH, onCriarCandidato, onMudarStatusCandidato, onContratarCandidato, onAnexarDocumento, onAbrirArquivo, onRegistrarPagamentoGuia, onSalvarLinhaGuia, consImagem, aceites, ajustes = [], onDecidirAjuste, demo, cadastrosPack = null }) {
   const equipe = usuarios.filter(u => u.papel !== "gestor").map(u => ({ u, a: analisarAssiduidade(u.id, registros, faltas) }));
   const ranking = usuarios
     .filter(u => u.papel !== "gestor")
@@ -10779,7 +11805,7 @@ function TelaGestor({ acoes = [], respostas = [], atas = [], usuarios, registros
           </tbody>
         </table>
       </div>
-      <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} />
+      <SecaoEquipe usuarios={usuarios} convites={convites} onCriarConvite={onCriarConvite} onSalvarUsuario={onSalvarUsuario} gestorId={gestorId} examesOcupacionais={examesOcupacionais} {...(cadastrosPack || {})} />
       <SecaoFolgas folgas={folgas} usuarios={usuarios} registros={registros} faltas={faltas} onDecidir={onDecidirFolga} />
       <SecaoFolha {...{ usuarios, folhasPg, adiantamentos, guias, onGerarFolha, onEditarFolha, onFecharFolha, onCriarAdiant, onCancelarAdiant }} />
       <SecaoCompras {...{ usuarios, compras, folhasPg, demo, meuId: gestorId, noBanco: comprasNoBanco, onRegistrar: onRegistrarCompra, onDecidir: onDecidirCompra, onCancelar: onCancelarCompra }} />
