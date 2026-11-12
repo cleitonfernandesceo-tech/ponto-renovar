@@ -1461,3 +1461,7 @@ Domingo e feriado nacional nao avisam. O aviso de saida procura quem ja bateu a
 saida e, a partir das 19h, vai pra todo mundo; o de chegada faz o mesmo com a
 entrada, liberando geral as 9h. Quem nao tem aparelho inscrito no push nao
 entra na lista - o cartao na tela continua valendo.
+
+## Conformidade (Portaria 671) e pacote do contador
+
+Veja `docs/conformidade-portaria-671.md`. Assinar AFD/AEJ: `node tools/assinar-afd-aej.mjs <arquivo>` (precisa do .pfx do e-CNPJ A1).
