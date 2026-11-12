@@ -54,6 +54,13 @@ const JORNADA_42H_DESDE = "2026-12-16";
 const horarioNovo = (dataIso) => String(dataIso) >= HORARIO_NOVO_DESDE;
 const horarioLanche = (dataIso) => String(dataIso) >= HORARIO_LANCHE_DESDE;
 const jornada42h = (dataIso) => String(dataIso) >= JORNADA_42H_DESDE;
+// 5) A partir de 13/11/2026 (pedido do dono, 12/11/2026, NÃO DESFAZER): o lanche de 30 min de seg-sex
+//    passa a ser PRÉ-ASSINALADO das 17h00 às 17h30 (CLT art. 74 §2º e Portaria 671/2021 permitem
+//    pré-assinalar o intervalo). O colaborador NÃO precisa bater a pausa nem o retorno; o app avisa às
+//    16h50 e 17h20. A SAÍDA NUNCA é marcada pelo sistema (Portaria 671 veda marcação automática):
+//    o app só lembra às 17h50 e de novo às 18h06; se esquecer, o gestor ajusta e o colaborador confirma.
+const LANCHE_PRE_DESDE = "2026-11-13";
+const lanchePreAssinalado = (dataIso) => String(dataIso) >= LANCHE_PRE_DESDE;
 let FERIADOS_SET = new Set();
 let FERIADOS_NOMES = {};
 const setFeriadosGlobal = (lista) => { FERIADOS_SET = new Set(lista.map(f => f.data)); FERIADOS_NOMES = Object.fromEntries(lista.map(f => [f.data, f.nome])); };
@@ -104,6 +111,12 @@ function validarJanelaLanche(dt = new Date()) {
     return { valido: false, msg: "Aos sábados a jornada é das 8h às 12h (4 horas), sem almoço e sem lanche." };
   }
   const min = d.getHours() * 60 + d.getMinutes();
+  if (lanchePreAssinalado(dataISO(d))) {
+    // Pausa pré-assinalada 17h00–17h30: bater é opcional; fora dessa faixa só avisa.
+    if (min < 17 * 60) return { valido: false, msg: "A pausa da tarde é pré-assinalada das 17h00 às 17h30 — não precisa bater. Horário atual: " + fmtHora(d) + "." };
+    if (min > 17 * 60 + 30) return { valido: false, msg: "A pausa da tarde (17h00 às 17h30) já terminou. Horário atual: " + fmtHora(d) + "." };
+    return { valido: true };
+  }
   const min15 = 15 * 60; // 15:00
   const min17 = 17 * 60; // 17:00
   if (min < min15) {
@@ -157,11 +170,15 @@ const HORARIOS_CONTRATUAIS = [
   { cod: "H0812", durMin: 240, pares: [["0800", "1200"]] },                    // sábado desde 02/10/2026: turno único de 4h
   { cod: "H083018", durMin: 480, pares: [["0830", "1200"], ["1300", "1600"], ["1630", "1800"]] }, // seg-sex desde 02/11/2026: 8h, almoço 12-13 e lanche 16-16:30
   { cod: "H073018", durMin: 540, pares: [["0730", "1200"], ["1300", "1600"], ["1630", "1800"]] }, // seg e ter desde 16/12/2026: 9h, almoço 12-13 e lanche 16-16:30
+  { cod: "H083018P", durMin: 480, pares: [["0830", "1200"], ["1300", "1700"], ["1730", "1800"]] }, // seg-sex desde 13/11/2026: lanche pré-assinalado 17-17:30
+  { cod: "H073018P", durMin: 540, pares: [["0730", "1200"], ["1300", "1700"], ["1730", "1800"]] }, // seg e ter desde 16/12/2026: lanche pré-assinalado 17-17:30
 ];
 const codHorarioDe = (dt) => {
   const d = new Date(dt), sab = d.getDay() === 6;
   const dIso = dataISO(d);
-  if (jornada42h(dIso)) { const dow = d.getDay(); return dow === 1 || dow === 2 ? "H073018" : "H083018"; }
+  const pre = lanchePreAssinalado(dIso) ? "P" : "";
+  if (jornada42h(dIso)) { const dow = d.getDay(); return (dow === 1 || dow === 2 ? "H073018" : "H083018") + pre; }
+  if (pre && !sab) return "H083018P";
   if (horarioLanche(dIso)) return sab ? "H0812" : "H083018";
   if (horarioNovo(dIso)) return sab ? "H0812" : "H0918";
   return sab ? "H0813" : "H0818";
@@ -6593,6 +6610,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
   const proxTipo = doDia.length % 2 === 0 ? "ENTRADA" : "SAÍDA";
   const expHoje = expedienteDoDia(new Date());
   const temLancheHoje = expHoje.lancheMin > 0;
+  const lanchePreHoje = temLancheHoje && lanchePreAssinalado(dataISO(new Date()));
   const [avisoLanche, setAvisoLanche] = useState(null);
 
   let rotuloBatida = `Registrar ${proxTipo}`;
@@ -6606,6 +6624,8 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       "Registrar Saída Final (18:00)"
     ];
     rotuloBatida = rotulosSequenciais[doDia.length] || `Registrar ${proxTipo}`;
+    // Pausa da tarde pré-assinalada (17h–17h30): depois do retorno do almoço a próxima batida é a saída final.
+    if (lanchePreHoje && doDia.length === 3) rotuloBatida = "Registrar Saída Final (18:00)";
   } else if (expHoje.entradaMin != null && expHoje.jornadaMin <= 240) {
     if (doDia.length === 0) rotuloBatida = "Registrar Entrada (08:00)";
     else if (doDia.length === 1) rotuloBatida = "Registrar Saída (12:00)";
@@ -6615,7 +6635,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
     setAvisoLanche(null);
     // 31/10/2026: o ponto registra SEMPRE o horario real (nunca trava a batida).
     // Fora da janela do lanche (15h-17h) so mostra um aviso.
-    if (temLancheHoje && (doDia.length === 3 || doDia.length === 4)) {
+    if (temLancheHoje && !lanchePreHoje && (doDia.length === 3 || doDia.length === 4)) {
       const v = validarJanelaLanche(new Date());
       if (!v.valido) setAvisoLanche(v.msg);
     }
@@ -6632,6 +6652,7 @@ function TelaPonto({ user, relogio, registros, faltas, fluxoPonto, setFluxoPonto
       <div style={{ ...S.card, marginTop: 12, padding: 12, borderLeft: "4px solid " + C.amarelo, textAlign: "left" }}>
         <div style={{ fontSize: 13, color: C.amarelo, fontWeight: 700 }}>⏰ Jornada de trabalho</div>
         <p style={{ fontSize: 12, color: C.branco, margin: "4px 0 0", lineHeight: 1.5 }}>
+          {lanchePreHoje && "☕ Pausa da tarde pré-assinalada das 17h00 às 17h30 — não precisa bater a pausa nem o retorno. Avisamos às 16h50 e 17h20; lembre de bater a saída às 18h (aviso às 17h50). "}
           {jornada42h(dataISO(new Date()))
             ? "Segunda e terça das 7h30 às 18h00 (9h trabalhadas); quarta a sexta das 8h30 às 18h00 (8h trabalhadas). Todos os dias com 1h de almoço e 30min de lanche da tarde entre 15h e 17h. Sem expediente aos sábados — 42h por semana."
             : horarioLanche(dataISO(new Date()))

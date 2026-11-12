@@ -44,6 +44,11 @@ const HORARIO_NOVO_DESDE = "2026-10-02";
    segunda e terca abrem as 7h30, quarta a sexta as 8h30 e sabado nao tem expediente. */
 const HORARIO_LANCHE_DESDE = "2026-11-02";
 const JORNADA_42H_DESDE = "2026-12-16";
+/* 13/11/2026 (pedido do dono): pausa da tarde PRE-ASSINALADA 17h-17h30 de seg-sex. Avisos:
+   16h50 (pausa as 17h) e 17h20 (retorno as 17h30) para quem esta na tarde (3 batidas);
+   17h50 e 18h06 (so se ainda nao bateu) para quem ainda nao registrou a saida.
+   A saida NUNCA e marcada pelo sistema (Portaria 671/2021 veda marcacao automatica). */
+const LANCHE_PRE_DESDE = "2026-11-13";
 /* Minuto do dia em que o expediente abre (null = sem expediente). */
 const aberturaMin = (dia, dow) => {
   if (dow === 0) return null;
@@ -59,6 +64,10 @@ const ETAPAS = {
   ent9: { titulo: "⏰ Entrada ainda nao registrada", corpo: (abre) => "Ja passa das " + hhmm(abre + 60) + " e sua entrada de hoje nao foi registrada.", batidas: 0 },
   alm12: { titulo: "🍽 Saida pro almoco", corpo: () => "Lembre de registrar a saida pro intervalo.", batidas: 1 },
   alm13: { titulo: "🍽 Volta do almoco", corpo: () => "Lembre de registrar o retorno do intervalo.", batidas: 2 },
+  lan1650: { titulo: "☕ Pausa as 17h", corpo: () => "Sua pausa de 30 min e pre-assinalada: das 17h00 as 17h30. Nao precisa bater.", batidas: 3 },
+  lan1720: { titulo: "☕ Retorno as 17h30", corpo: () => "Sua pausa termina as 17h30 — hora de voltar. Nao precisa bater o retorno.", batidas: 3 },
+  sai1750: { titulo: "🏁 Saida as 18h", corpo: () => "Seu expediente termina as 18h00. Lembre de registrar a saida no app.", impar: true },
+  sai1806: { titulo: "🏁 Saida ainda nao registrada", corpo: () => "Ja passa das 18h e sua saida de hoje nao foi registrada. Registre agora no app.", impar: true },
 };
 /* Qual aviso corresponde a esta hora. O cron passa aos :05 e :35; o 1o aviso sai na meia hora
    depois da abertura e o 2o uma hora depois (a trava do push_lembretes_log impede repetir). */
@@ -71,6 +80,13 @@ const etapaDaHora = (dia, dow, hora, minuto = 0) => {
   }
   if (hora === 12) return "alm12";
   if (hora === 13) return "alm13";
+  if (dia >= LANCHE_PRE_DESDE && dow >= 1 && dow <= 5) {
+    const agora = hora * 60 + minuto;
+    if (agora >= 16 * 60 + 45 && agora < 17 * 60) return "lan1650";
+    if (agora >= 17 * 60 + 15 && agora < 17 * 60 + 30) return "lan1720";
+    if (agora >= 17 * 60 + 45 && agora < 18 * 60) return "sai1750";
+    if (agora >= 18 * 60 + 5 && agora < 18 * 60 + 20) return "sai1806";
+  }
   return undefined;
 };
 
@@ -160,7 +176,14 @@ function agoraSP() {
   return { dia, hora: Number(p.hour), minuto: Number(p.minute), dow: new Date(dia + "T12:00:00Z").getUTCDay() };
 }
 
-const quantasBatidas = (r) => ["entrada", "saida_almoco", "retorno_almoco", "saida"].filter((c) => r && r[c]).length;
+/* As batidas reais ficam em "marcacoes" (REP-P). registros_ponto e legado e esta vazio. */
+async function batidasDoDia(dia) {
+  const amanha = somaDias(dia, 1);
+  const lista = await rest("marcacoes?select=usuario_id&ts=gte." + dia + "T00:00:00-03:00&ts=lt." + amanha + "T00:00:00-03:00");
+  const n = {};
+  for (const m of lista) n[m.usuario_id] = (n[m.usuario_id] || 0) + 1;
+  return n;
+}
 
 async function enviar(inscricoes, payload) {
   let ok = 0;
@@ -247,7 +270,7 @@ Deno.serve(async (req) => {
 
     const [pessoas, regs, jaAvisados, todasInsc] = await Promise.all([
       rest("usuarios?select=id,nome&ativo=is.true"),
-      rest("registros_ponto?select=usuario_id,entrada,saida&data=eq." + dia),
+      batidasDoDia(dia),
       rest("push_lembretes_log?select=usuario_id&etapa=eq." + etapa + "&dia=eq." + dia),
       rest("push_inscricoes?select=*"),
     ]);
@@ -257,14 +280,14 @@ Deno.serve(async (req) => {
 
     /* O aviso de saida procura quem ja bateu a saida; quem nunca bate recebe
        na ultima passada do dia. O de chegada segue a mesma logica na entrada. */
-    const naHora = (reg) => etapa === "reuniao_saida"
-      ? (!!(reg && reg.saida) || hora >= 19)
-      : (!!(reg && reg.entrada) || hora >= horaDeAbrir(dia, dow) + 1);
+    const naHora = (n) => etapa === "reuniao_saida"
+      ? ((n > 0 && n % 2 === 0) || hora >= 19)
+      : (n > 0 || hora >= horaDeAbrir(dia, dow) + 1);
 
     const feitos = [];
     for (const p of pessoas) {
       if (jaFoi.has(p.id)) continue;
-      if (!naHora(regs.find((r) => r.usuario_id === p.id))) continue;
+      if (!naHora(regs[p.id] || 0)) continue;
       const insc = porPessoa[p.id] || [];
       if (!insc.length) continue;
       const gravou = await rest("push_lembretes_log?on_conflict=usuario_id,dia,etapa", {
@@ -281,7 +304,7 @@ Deno.serve(async (req) => {
 
   if (!etapa || !ETAPAS[etapa]) return json({ dia, hora, ignorado: "fora das faixas de lembrete (9h e 10h em dia de semana, 8h e 9h no sabado, 12h e 13h)" });
   if (dow === 0) return json({ dia, etapa, ignorado: "domingo" });
-  if ((etapa === "alm12" || etapa === "alm13") && dow === 6) return json({ dia, etapa, ignorado: "sabado e turno unico" });
+  if ((etapa === "alm12" || etapa === "alm13" || etapa.startsWith("lan") || etapa.startsWith("sai")) && dow === 6) return json({ dia, etapa, ignorado: "sabado e turno unico" });
   if (aberturaMin(dia, dow) == null) return json({ dia, etapa, ignorado: "dia sem expediente" });
   const feriado = await rest("feriados_nacionais?select=nome&data=eq." + dia);
   if (feriado.length) return json({ dia, etapa, ignorado: "feriado: " + feriado[0].nome });
@@ -289,7 +312,7 @@ Deno.serve(async (req) => {
   const cfg = ETAPAS[etapa];
   const [usuarios, regs, jaAvisados, inscricoes] = await Promise.all([
     rest("usuarios?select=id,nome&ativo=is.true"),
-    rest("registros_ponto?select=usuario_id,entrada,saida_almoco,retorno_almoco,saida&data=eq." + dia),
+    batidasDoDia(dia),
     rest("push_lembretes_log?select=usuario_id&etapa=eq." + etapa + "&dia=eq." + dia),
     rest("push_inscricoes?select=*"),
   ]);
@@ -300,8 +323,8 @@ Deno.serve(async (req) => {
   const detalhe = [];
   for (const u of usuarios) {
     if (feito.has(u.id)) continue;
-    const reg = regs.find((r) => r.usuario_id === u.id);
-    if (quantasBatidas(reg) !== cfg.batidas) continue;
+    const n = regs[u.id] || 0;
+    if (cfg.impar ? n % 2 === 0 : n !== cfg.batidas) continue;
     const insc = porUsuario[u.id] || [];
     if (!insc.length) continue;
     /* Grava a trava ANTES de mandar: se outra execucao ja gravou, ninguem repete. */
