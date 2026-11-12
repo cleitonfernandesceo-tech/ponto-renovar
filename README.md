@@ -29,6 +29,7 @@ O app pode ficar como atalho na tela inicial e abrir sem barra de navegador.
 
 - **Android/Chrome:** aparece a faixa *Instalar* no rodape.
 - **iPhone/Safari:** botao Compartilhar -> *Adicionar a Tela de Inicio* (o app mostra o lembrete).
+- Navegadores compativeis: Google Chrome, Apple Safari e Microsoft Edge.
 
 O `sw.js` guarda somente `index.html`, o React do unpkg, o `manifest.json` e os icones.
 Chamadas ao Supabase (login, biometria, batidas, folha) **nunca** passam pelo cache.
