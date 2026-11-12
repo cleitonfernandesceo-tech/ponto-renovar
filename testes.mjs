@@ -54,7 +54,7 @@ export { EXPEDIENTE, PREMIO, expedienteDoDia, setFeriadosGlobal, entradaPontual,
   telefoneWhats, telefoneBonito, linkWhats, DDI_PADRAO,
   gravarSessaoLembrada, lerSessaoLembrada, esquecerSessao, LEMBRANCA_DIAS,
   hojeStr, horarioNovo, HORARIO_NOVO_DESDE, codHorarioDe, HORARIOS_CONTRATUAIS, jornadaContratualTxt, jornadaDiaCheioMin,
-  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo,
+  validarJanelaLanche, HORARIO_LANCHE_DESDE, horarioLanche, sha256Arquivo, LANCHE_PRE_DESDE, lanchePreAssinalado,
   COMPRA_MAX_PARCELAS, compMais, primeiraCompDaCompra, mapCompra, validarCompra, parcelasDaCompra,
   compraDescontavel, descontoComprasDoMes, comprasDoMes, textoParcelas,
   VT_LIMITE_PCT, cpfValido, fmtCPF, pisValido, cepValido, fmtCEP, enderecoDoViaCEP, salarioVigenteEm, salarioDoMes,
@@ -1431,6 +1431,37 @@ secao("Jornada de 42h desde 16/12/2026 (fim da escala 6x1, pedido do dono 06/11/
   t("CEP: CSP libera só o viacep", readFileSync("index.html", "utf8").includes("connect-src 'self' https://bdbxjdkjeeobaxulfqkb.supabase.co https://*.supabase.co https://viacep.com.br;"));
   t("ficha: desligar e mostrar desligados existem", src.includes("Mostrar desligados") && src.includes("Desligar colaborador") && src.includes("Registrar na carteira"));
   t("nenhum log leva CPF/Pix/endereço", !/log\("cadastro_[a-z]+", `[^`]*(pixChave|\.cpf|cpf\))/.test(src));
+}
+
+secao("Pausa da tarde pré-assinalada 17h-17h30 e avisos de saída (desde 13/11/2026)");
+{
+  t("marco da pausa pré-assinalada é 13/11/2026", m.LANCHE_PRE_DESDE === "2026-11-13" && !m.lanchePreAssinalado("2026-11-12") && m.lanchePreAssinalado("2026-11-13"));
+  t("antes do marco segue lanche 16-16:30 (H083018)", m.codHorarioDe("2026-11-12T10:00:00") === "H083018");
+  t("sexta 13/11: horário contratual com pausa 17-17:30 (H083018P)", m.codHorarioDe("2026-11-13T10:00:00") === "H083018P");
+  t("segunda 21/12 (42h): H073018P; quarta 23/12: H083018P", m.codHorarioDe("2026-12-21T10:00:00") === "H073018P" && m.codHorarioDe("2026-12-23T10:00:00") === "H083018P");
+  t("sábado 14/11 segue H0812 (sem pausa)", m.codHorarioDe("2026-11-14T10:00:00") === "H0812");
+  const hP = m.HORARIOS_CONTRATUAIS.find(h => h.cod === "H083018P");
+  t("H083018P: pares 8:30-12, 13-17, 17:30-18 (8h)", hP && hP.durMin === 480 && hP.pares[1][1] === "1700" && hP.pares[2][0] === "1730");
+  t("pausa batida às 17h10 é aceita", m.validarJanelaLanche(new Date(2026, 10, 13, 17, 10)).valido === true);
+  const v16 = m.validarJanelaLanche(new Date(2026, 10, 13, 16, 0));
+  t("às 16h avisa que a pausa é pré-assinalada (não trava)", !v16.valido && v16.msg.includes("pré-assinalada"));
+  const v1740 = m.validarJanelaLanche(new Date(2026, 10, 13, 17, 40));
+  t("às 17h40 avisa que a pausa já terminou", !v1740.valido && v1740.msg.includes("já terminou"));
+  t("dia com 2 pares 8:30-12 / 13-18 desconta a pausa e fecha em zero", saldoNov([
+    { userId: "u", tipo: "entrada", ts: "2026-11-13T08:30:00", nsr: 1 }, { userId: "u", tipo: "saida", ts: "2026-11-13T12:00:00", nsr: 2 },
+    { userId: "u", tipo: "entrada", ts: "2026-11-13T13:00:00", nsr: 3 }, { userId: "u", tipo: "saida", ts: "2026-11-13T18:00:00", nsr: 4 }]) === 0);
+  const fs2 = readFileSync("supabase/functions/lembretes-push/index.ts", "utf8");
+  const tr = fs2.slice(fs2.indexOf("const HORARIO_NOVO_DESDE"), fs2.indexOf("/* ---------- reunioes do time"));
+  const sv = new Function(tr.replace(/const ETAPAS = \{[\s\S]*?\n\};/, "") + "; return { etapaDaHora };")();
+  t("servidor: 16h50 e 17h20 avisam a pausa (sexta 13/11)", sv.etapaDaHora("2026-11-13", 5, 16, 50) === "lan1650" && sv.etapaDaHora("2026-11-13", 5, 17, 20) === "lan1720");
+  t("servidor: 17h50 e 18h06 avisam a saída", sv.etapaDaHora("2026-11-13", 5, 17, 50) === "sai1750" && sv.etapaDaHora("2026-11-13", 5, 18, 6) === "sai1806");
+  t("servidor: antes do marco não há aviso de pausa/saída", sv.etapaDaHora("2026-11-12", 4, 17, 50) === undefined);
+  t("servidor: sábado não tem aviso de pausa/saída", sv.etapaDaHora("2026-11-14", 6, 17, 50) === undefined);
+  t("servidor: aviso de saída só para quem está com batida ímpar (dentro)", fs2.includes("sai1806") && fs2.includes("cfg.impar ? n % 2 === 0"));
+  t("servidor: lembretes contam as batidas reais em marcacoes", fs2.includes('rest("marcacoes?select=usuario_id') && !fs2.includes('rest("registros_ponto'));
+  t("servidor: nenhuma marcação é criada pelo lembrete", !/POST[\s\S]{0,80}marcacoes/.test(fs2) && !fs2.includes('"marcacoes?on_conflict'));
+  const migP = readFileSync("supabase/migrations/20261112200000_pausa_preassinalada_avisos.sql", "utf8");
+  t("migração desliga a saída automática e agenda os avisos da tarde", migP.includes("cron.unschedule('auto-saida-diaria')") && migP.includes("'6 21 * * 1-5'") && migP.includes("'20,50 19,20 * * 1-5'"));
 }
 
 console.log(`\n${"═".repeat(62)}`);
