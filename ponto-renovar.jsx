@@ -6350,7 +6350,7 @@ function Login({ onSupabase, onDemo, onReset }) {
           </button>
           {segundosBloqueio > 0 && <p style={{ fontSize: 11.5, color: C.cinza, textAlign: "center", lineHeight: 1.5 }}>Muitas tentativas seguidas. Espere o contador zerar — se esqueceu a senha, use o link abaixo.</p>}
           {!modoReset ? (
-            <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 12, cursor: "pointer", textDecoration: "underline", marginTop: 2 }} onClick={() => { setModoReset(true); setMsgReset(null); }}>Esqueci minha senha</button>
+            <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 12, cursor: "pointer", textDecoration: "underline", marginTop: 2, minHeight: 44, padding: "10px 4px" }} onClick={() => { setModoReset(true); setMsgReset(null); }}>Esqueci minha senha</button>
           ) : (
             <div style={{ marginTop: 4, padding: 10, background: C.grafite, borderRadius: 8 }}>
               <div style={{ fontSize: 12, color: C.cinza, marginBottom: 6 }}>Digite seu e-mail no campo acima e receba por e-mail um link para criar uma nova senha.</div>
@@ -6366,7 +6366,7 @@ function Login({ onSupabase, onDemo, onReset }) {
         <p style={{ fontSize: 11, color: C.cinza, marginTop: 14 }}>🔒 Acesso protegido: autenticação no servidor e permissões por usuário.</p>
         <div style={{ marginTop: 14, borderTop: "1px solid #1E3450", paddingTop: 10 }}>
           {!mostrarDemo ? (
-            <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 11, cursor: "pointer", textDecoration: "underline" }} onClick={() => setMostrarDemo(true)}>
+            <button style={{ background: "none", border: "none", color: C.cinza, fontSize: 12, cursor: "pointer", textDecoration: "underline", minHeight: 44, padding: "10px 4px" }} onClick={() => setMostrarDemo(true)}>
               Conhecer o sistema com dados fictícios (demonstração)
             </button>
           ) : (
